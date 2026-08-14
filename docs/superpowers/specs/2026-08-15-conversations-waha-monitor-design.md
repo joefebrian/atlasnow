@@ -64,10 +64,13 @@ Unique: `(tenantId, identifier)`.
 
 Identity rules:
 
-- `…@c.us` / `…@s.whatsapp.net` → phone = digits, confidence `PHONE_VERIFIED`
-- known lid that resolves to a phone via WAHA payload fields only (no extra lookup in slice 1) → `LID_RESOLVED`
-- `@lid` without phone → `phone = null`, store lid, `OPAQUE_LID`
+- **Phone is first-class.** If WAHA sends a real number, persist `WaContact.phone` (digits only) and show it in the list + thread. Never hide a known number behind a lid.
+- `…@c.us` / `…@s.whatsapp.net` / payload `from` or `author` with a numeric user → `phone` stored, confidence `PHONE_VERIFIED`
+- payload includes both lid and a phone field → store both, show phone, confidence `LID_RESOLVED`
+- `@lid` only, no phone anywhere in the event → `phone = null`, store lid, `OPAQUE_LID`. Do not invent digits.
 - anything else → `UNKNOWN`, do not fabricate `phone`
+
+If a later event for the same contact carries a phone, update the row (`phone` + confidence). Inbox then shows the number.
 
 ### `WaConversation`
 
@@ -157,7 +160,7 @@ Replace `ModulePlaceholder` on `/conversations` for agency staff.
 - `PageHeader`: eyebrow Demand, badge `WAHA live · monitor-only`, title Conversations, unreplied chip.
 - Toolbar: search; chips All / Unreplied; location dropdown (locations that have WAHA mapping).
 - `TableShell` columns: Last, Contact, Preview, Cabang, Arah, View.
-- Contact cell: phone if present, else truncated lid; confidence badge.
+- Contact cell: **always `phone` when the DB has it**; else truncated lid; confidence badge.
 - Slide-over: contact + location + confidence; bubbles IN left / OUT right; `fromMe` footer label `Account responder` (never a staff name). No composer.
 - Empty: no WAHA mappings → “Map session di Location 360 → Sources”. Mappings but zero messages → “Menunggu webhook”.
 - Client users: keep placeholder, agency-only copy.
@@ -180,6 +183,7 @@ Replace `ModulePlaceholder` on `/conversations` for agency staff.
 1. Same `externalId` twice → one `WaMessage`.
 2. Gap ≥ 24h on same contact+session → new `WaConversation`.
 3. Peer `@lid` only → `phone` null, confidence `OPAQUE_LID`.
+3b. Same contact later arrives as `628…@c.us` → row updated, `phone` stored, UI shows number.
 4. Unknown session → no contact/conversation/message rows.
 5. Mode OFF → no rows.
 
@@ -199,4 +203,4 @@ Replace `ModulePlaceholder` on `/conversations` for agency staff.
 
 ## Success
 
-Agency admin on `/conversations` sees every inbound/outbound line from mapped branch sessions, can open a thread, and never sees a fabricated phone number.
+Agency admin on `/conversations` sees every inbound/outbound line from mapped branch sessions, can open a thread, sees the customer phone whenever WAHA provided it (stored on `WaContact.phone`), and never sees a fabricated number.
