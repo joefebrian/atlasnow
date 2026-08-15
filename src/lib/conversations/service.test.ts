@@ -120,4 +120,70 @@ describe("listConversations / getConversationThread", { concurrency: false }, ()
     assert.equal(audit!.tenantId, tenantId);
     assert.equal(audit!.objectType, "WaConversation");
   });
+
+  it("keeps inbound-after-outbound in unreplied filter; q ANDs with search", async () => {
+    const phone = "628999000111";
+    const t = Math.floor(Date.now() / 1000);
+    const r1 = await ingestWahaPayload(
+      event({
+        id: `${PREFIX}-ioi-in1`,
+        from: `${phone}@c.us`,
+        fromMe: false,
+        body: "ping",
+        timestamp: t - 2,
+      })
+    );
+    const r2 = await ingestWahaPayload(
+      event({
+        id: `${PREFIX}-ioi-out`,
+        from: `${phone}@c.us`,
+        fromMe: true,
+        body: "pong",
+        timestamp: t - 1,
+      })
+    );
+    const r3 = await ingestWahaPayload(
+      event({
+        id: `${PREFIX}-ioi-in2`,
+        from: `${phone}@c.us`,
+        fromMe: false,
+        body: "again",
+        timestamp: t,
+      })
+    );
+    assert.equal(r1.ok && r2.ok && r3.ok, true);
+    if (!("conversationId" in r1) || !("conversationId" in r3)) {
+      assert.fail("expected conversationId");
+    }
+    assert.equal(r1.conversationId, r3.conversationId);
+
+    const unreplied = await listConversations({ locationId, filter: "unreplied" });
+    const row = unreplied.conversations.find((c) => c.contact.phone === phone);
+    assert.ok(row);
+    assert.equal(row!.id, r3.conversationId);
+    assert.equal(row!.direction, "UNREPLIED");
+    assert.equal(unreplied.stats.unreplied, unreplied.conversations.length);
+    assert.ok(unreplied.stats.unreplied >= 1);
+
+    const hit = await listConversations({
+      locationId,
+      filter: "unreplied",
+      q: phone,
+    });
+    assert.equal(hit.stats.unreplied, 1);
+    assert.equal(hit.conversations.length, 1);
+    assert.equal(hit.conversations[0].id, r3.conversationId);
+    assert.equal(hit.conversations[0].contact.phone, phone);
+
+    const miss = await listConversations({
+      locationId,
+      filter: "unreplied",
+      q: "nomatch-xyz",
+    });
+    assert.equal(
+      miss.conversations.some((c) => c.id === r3.conversationId),
+      false
+    );
+    assert.equal(miss.stats.unreplied, 0);
+  });
 });

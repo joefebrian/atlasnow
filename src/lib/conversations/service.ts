@@ -86,33 +86,30 @@ const includeList = {
 function listWhere(opts: ListOpts): Prisma.WaConversationWhereInput {
   const q = opts.q?.trim() || undefined;
   const locationId = opts.locationId || undefined;
-  const unreplied =
-    opts.filter === "unreplied"
-      ? ({
-          lastInboundAt: { not: null },
-          OR: [
-            { lastOutboundAt: null },
-            // lastInboundAt > lastOutboundAt cannot be expressed as a Prisma
-            // field-to-field compare; completed in JS via isUnreplied().
-          ],
-        } satisfies Prisma.WaConversationWhereInput)
-      : {};
+  const clauses: Prisma.WaConversationWhereInput[] = [];
+
+  if (q) {
+    clauses.push({
+      OR: [
+        { lastPreview: { contains: q } },
+        { contact: { phone: { contains: q } } },
+        { contact: { lid: { contains: q } } },
+        { contact: { displayName: { contains: q } } },
+        { contact: { identifier: { contains: q } } },
+      ],
+    });
+  }
+
+  // SQL superset only — do not AND lastOutboundAt == null (would drop
+  // inbound-after-outbound). Full predicate applied in JS via isUnreplied().
+  if (opts.filter === "unreplied") {
+    clauses.push({ lastInboundAt: { not: null } });
+  }
 
   return {
     status: "OPEN",
     ...(locationId ? { locationId } : {}),
-    ...(q
-      ? {
-          OR: [
-            { lastPreview: { contains: q } },
-            { contact: { phone: { contains: q } } },
-            { contact: { lid: { contains: q } } },
-            { contact: { displayName: { contains: q } } },
-            { contact: { identifier: { contains: q } } },
-          ],
-        }
-      : {}),
-    ...unreplied,
+    ...(clauses.length ? { AND: clauses } : {}),
   };
 }
 
