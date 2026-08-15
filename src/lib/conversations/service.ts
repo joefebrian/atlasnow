@@ -115,14 +115,14 @@ function listWhere(opts: ListOpts): Prisma.WaConversationWhereInput {
 
 export async function listConversations(opts: ListOpts = {}): Promise<{
   conversations: ConversationListItem[];
-  stats: { total: number; unreplied: number; open: number };
+  stats: { total: number; unreplied: number; open: number; mappings: number };
 }> {
   const locationId = opts.locationId || undefined;
   const q = opts.q?.trim() || undefined;
   const baseWhere = listWhere({ q, locationId, filter: "all" });
   const listFilter = listWhere(opts);
 
-  const [rows, total, open, unrepliedCandidates] = await Promise.all([
+  const [rows, total, open, unrepliedCandidates, mappings] = await Promise.all([
     prisma.waConversation.findMany({
       where: listFilter,
       include: includeList,
@@ -137,6 +137,9 @@ export async function listConversations(opts: ListOpts = {}): Promise<{
       where: { ...baseWhere, lastInboundAt: { not: null } },
       select: { lastInboundAt: true, lastOutboundAt: true },
     }),
+    prisma.sourceMapping.count({
+      where: { sourceType: "WAHA", status: "ACTIVE" },
+    }),
   ]);
 
   const conversations = (
@@ -149,6 +152,7 @@ export async function listConversations(opts: ListOpts = {}): Promise<{
       total,
       unreplied: unrepliedCandidates.filter(isUnreplied).length,
       open,
+      mappings,
     },
   };
 }
