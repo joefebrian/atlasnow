@@ -4,6 +4,17 @@ import { parseWahaEvent } from "./parse";
 import { previewBody, shouldStartNewConversation } from "./window";
 import { isWahaIngestEnabled } from "./waha-config";
 
+function isPrismaP2002(err: unknown, field?: string): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: unknown; meta?: { target?: unknown } };
+  if (e.code !== "P2002") return false;
+  if (!field) return true;
+  const target = e.meta?.target;
+  if (Array.isArray(target)) return target.includes(field);
+  if (typeof target === "string") return target.includes(field);
+  return true;
+}
+
 export type IngestResult =
   | { ok: true; conversationId: string; duplicate?: boolean }
   | { ok: true; ignored: true | "unmapped_session" | "kill_switch" | "skipped_event" }
@@ -92,18 +103,45 @@ export async function ingestWahaPayload(input: unknown): Promise<IngestResult> {
       )
     : incoming;
 
-  const contact = found
-    ? await prisma.waContact.update({
+  const contactPatch = {
+    phone: merged.phone,
+    lid: merged.lid,
+    identityConfidence: merged.confidence,
+    displayName: parsed.displayName || found?.displayName || null,
+  };
+
+  let contact;
+  if (found) {
+    try {
+      contact = await prisma.waContact.update({
         where: { id: found.id },
-        data: {
-          identifier: merged.identifier,
-          phone: merged.phone,
-          lid: merged.lid,
-          identityConfidence: merged.confidence,
-          displayName: parsed.displayName || found.displayName,
-        },
-      })
-    : await prisma.waContact.create({
+        data: { identifier: merged.identifier, ...contactPatch },
+      });
+    } catch (err) {
+      if (!isPrismaP2002(err, "identifier")) throw err;
+      const existingByIdent = await prisma.waContact.findUnique({
+        where: { tenantId_identifier: { tenantId, identifier: merged.identifier } },
+      });
+      if (existingByIdent && existingByIdent.id !== found.id) {
+        contact = await prisma.waContact.update({
+          where: { id: existingByIdent.id },
+          data: {
+            phone: merged.phone ?? existingByIdent.phone,
+            lid: existingByIdent.lid ?? merged.lid,
+            identityConfidence: merged.confidence,
+            displayName: parsed.displayName || existingByIdent.displayName,
+          },
+        });
+      } else {
+        contact = await prisma.waContact.update({
+          where: { id: found.id },
+          data: contactPatch,
+        });
+      }
+    }
+  } else {
+    try {
+      contact = await prisma.waContact.create({
         data: {
           tenantId,
           identifier: merged.identifier,
@@ -113,6 +151,23 @@ export async function ingestWahaPayload(input: unknown): Promise<IngestResult> {
           displayName: parsed.displayName,
         },
       });
+    } catch (err) {
+      if (!isPrismaP2002(err, "identifier")) throw err;
+      const existingByIdent = await prisma.waContact.findUnique({
+        where: { tenantId_identifier: { tenantId, identifier: merged.identifier } },
+      });
+      if (!existingByIdent) throw err;
+      contact = await prisma.waContact.update({
+        where: { id: existingByIdent.id },
+        data: {
+          phone: merged.phone ?? existingByIdent.phone,
+          lid: existingByIdent.lid ?? merged.lid,
+          identityConfidence: merged.confidence,
+          displayName: parsed.displayName || existingByIdent.displayName,
+        },
+      });
+    }
+  }
 
   const open = await prisma.waConversation.findFirst({
     where: {
@@ -143,17 +198,29 @@ export async function ingestWahaPayload(input: unknown): Promise<IngestResult> {
 
   const direction = parsed.fromMe ? "OUT" : "IN";
   const raw = JSON.stringify(input);
-  await prisma.waMessage.create({
-    data: {
-      conversationId: conversation.id,
-      externalId: parsed.externalId,
-      direction,
-      sentAt: parsed.sentAt,
-      body: parsed.body,
-      fromMe: parsed.fromMe,
-      rawJson: raw.length > 4000 ? raw.slice(0, 4000) : raw,
-    },
-  });
+  try {
+    await prisma.waMessage.create({
+      data: {
+        conversationId: conversation.id,
+        externalId: parsed.externalId,
+        direction,
+        sentAt: parsed.sentAt,
+        body: parsed.body,
+        fromMe: parsed.fromMe,
+        rawJson: raw.length > 4000 ? raw.slice(0, 4000) : raw,
+      },
+    });
+  } catch (err) {
+    if (!isPrismaP2002(err, "externalId")) throw err;
+    const dup = await prisma.waMessage.findUnique({
+      where: { externalId: parsed.externalId },
+      select: { conversationId: true },
+    });
+    if (dup) {
+      return { ok: true, conversationId: dup.conversationId, duplicate: true };
+    }
+    throw err;
+  }
 
   const continuing = Boolean(open && !startNew);
   await prisma.waConversation.update({

@@ -79,6 +79,113 @@ describe("ingestWahaPayload", { concurrency: false }, () => {
     assert.equal(n, 1);
   });
 
+  it("returns duplicate when externalId is pre-inserted (P2002 path)", async () => {
+    const contact = await prisma.waContact.create({
+      data: {
+        tenantId,
+        identifier: `${PREFIX}-pre`,
+        identityConfidence: "UNKNOWN",
+      },
+    });
+    const conv = await prisma.waConversation.create({
+      data: {
+        tenantId,
+        locationId,
+        contactId: contact.id,
+        provider: "WAHA",
+        sessionId: `${PREFIX}-sess`,
+        status: "OPEN",
+        firstMessageAt: new Date(),
+        lastMessageAt: new Date(),
+      },
+    });
+    await prisma.waMessage.create({
+      data: {
+        conversationId: conv.id,
+        externalId: `${PREFIX}-p2002`,
+        direction: "IN",
+        sentAt: new Date(),
+        body: "pre",
+        fromMe: false,
+      },
+    });
+    const r = await ingestWahaPayload({
+      event: "message",
+      session: `${PREFIX}-sess`,
+      payload: {
+        id: `${PREFIX}-p2002`,
+        from: "628123456789@c.us",
+        fromMe: false,
+        body: "halo",
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal("duplicate" in r && r.duplicate, true);
+    if ("conversationId" in r) {
+      assert.equal(r.conversationId, conv.id);
+    }
+    const n = await prisma.waMessage.count({ where: { externalId: `${PREFIX}-p2002` } });
+    assert.equal(n, 1);
+  });
+
+  it("does not throw when identifier update hits unique (P2002)", async () => {
+    await prisma.waContact.create({
+      data: {
+        tenantId,
+        identifier: "9991@lid",
+        lid: "9991",
+        identityConfidence: "OPAQUE_LID",
+      },
+    });
+    await prisma.waContact.create({
+      data: {
+        tenantId,
+        identifier: "628333444555",
+        phone: "628333444555",
+        identityConfidence: "PHONE_VERIFIED",
+      },
+    });
+    const r = await ingestWahaPayload({
+      event: "message",
+      session: `${PREFIX}-sess`,
+      payload: {
+        id: `${PREFIX}-ident-p2002`,
+        from: "628333444555@c.us",
+        fromMe: false,
+        body: "collide",
+        timestamp: Math.floor(Date.now() / 1000),
+        _data: { id: { remote: "9991@lid" } },
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.ok("conversationId" in r);
+    const n = await prisma.waMessage.count({
+      where: { externalId: `${PREFIX}-ident-p2002` },
+    });
+    assert.equal(n, 1);
+  });
+
+  it("does not invent a phone from @g.us", async () => {
+    await ingestWahaPayload({
+      event: "message",
+      session: `${PREFIX}-sess`,
+      payload: {
+        id: `${PREFIX}-group`,
+        from: "120363042000000111@g.us",
+        fromMe: false,
+        body: "group",
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+    const c = await prisma.waContact.findFirst({
+      where: { tenantId, identifier: "120363042000000111@g.us" },
+    });
+    assert.ok(c);
+    assert.equal(c!.phone, null);
+    assert.equal(c!.identityConfidence, "UNKNOWN");
+  });
+
   it("opens a new conversation after 24h", async () => {
     const old = await ingestWahaPayload({
       event: "message",

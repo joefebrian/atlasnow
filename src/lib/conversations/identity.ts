@@ -15,6 +15,17 @@ function digitsOnly(value: string): string {
   return value.replace(/\D/g, "");
 }
 
+/** Strip WhatsApp `:device` suffix (`62812…:12` → `62812…`). */
+function userWithoutDevice(user: string): string {
+  const colon = user.indexOf(":");
+  return colon >= 0 ? user.slice(0, colon) : user;
+}
+
+function phoneFromUser(user: string): string | null {
+  const phone = digitsOnly(userWithoutDevice(user));
+  return phone.length >= 8 ? phone : null;
+}
+
 export function resolveIdentity(
   peerRaw: string,
   extraPhone?: string | null
@@ -23,9 +34,12 @@ export function resolveIdentity(
   const extra = extraPhone ? digitsOnly(extraPhone) : "";
   const extraOk = extra.length >= 8;
 
-  const lidMatch = raw.match(/^([^@]+)@lid$/i);
-  if (lidMatch) {
-    const lid = lidMatch[1];
+  const at = raw.lastIndexOf("@");
+  const user = at >= 0 ? raw.slice(0, at) : raw;
+  const host = at >= 0 ? raw.slice(at + 1).toLowerCase() : "";
+
+  if (host === "lid") {
+    const lid = user;
     if (extraOk) {
       return {
         identifier: extra,
@@ -42,24 +56,17 @@ export function resolveIdentity(
     };
   }
 
-  const user = raw.includes("@") ? raw.slice(0, raw.indexOf("@")) : raw;
-  const phone = digitsOnly(user);
-  if (phone.length >= 8) {
-    return {
-      identifier: phone,
-      phone,
-      lid: null,
-      confidence: "PHONE_VERIFIED",
-    };
-  }
-
-  if (extraOk) {
-    return {
-      identifier: extra,
-      phone: extra,
-      lid: null,
-      confidence: "PHONE_VERIFIED",
-    };
+  const isPhoneJid = host === "c.us" || host === "s.whatsapp.net";
+  if (isPhoneJid || host === "") {
+    const phone = phoneFromUser(user);
+    if (phone) {
+      return {
+        identifier: phone,
+        phone,
+        lid: null,
+        confidence: "PHONE_VERIFIED",
+      };
+    }
   }
 
   if (!raw) {

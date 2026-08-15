@@ -39,6 +39,41 @@ describe("resolveIdentity", () => {
     assert.equal(r.confidence, "PHONE_VERIFIED");
   });
 
+  it("strips :device suffix before digits on @c.us", () => {
+    const r = resolveIdentity("628123456789:12@c.us");
+    assert.equal(r.phone, "628123456789");
+    assert.equal(r.identifier, "628123456789");
+    assert.equal(r.confidence, "PHONE_VERIFIED");
+    assert.equal(r.lid, null);
+  });
+
+  it("strips :device suffix on @s.whatsapp.net", () => {
+    const r = resolveIdentity("628123456789:55@s.whatsapp.net");
+    assert.equal(r.phone, "628123456789");
+    assert.equal(r.confidence, "PHONE_VERIFIED");
+  });
+
+  it("does not treat @g.us as a phone", () => {
+    const r = resolveIdentity("120363042000000000@g.us");
+    assert.equal(r.phone, null);
+    assert.equal(r.confidence, "UNKNOWN");
+    assert.equal(r.identifier, "120363042000000000@g.us");
+    assert.equal(r.lid, null);
+  });
+
+  it("does not treat @newsletter as a phone", () => {
+    const r = resolveIdentity("120363040000000000@newsletter");
+    assert.equal(r.phone, null);
+    assert.equal(r.confidence, "UNKNOWN");
+    assert.equal(r.identifier, "120363040000000000@newsletter");
+  });
+
+  it("does not invent a phone from extraPhone on @g.us", () => {
+    const r = resolveIdentity("120363042000000000@g.us", "628111222333");
+    assert.equal(r.phone, null);
+    assert.equal(r.confidence, "UNKNOWN");
+  });
+
   it("returns UNKNOWN for empty peer", () => {
     const r = resolveIdentity("");
     assert.equal(r.phone, null);
