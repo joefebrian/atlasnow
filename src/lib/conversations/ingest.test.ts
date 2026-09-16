@@ -42,7 +42,9 @@ describe("ingestWahaPayload", { concurrency: false }, () => {
     await prisma.waMessage.deleteMany({
       where: { conversation: { sessionId: `${PREFIX}-sess` } },
     });
-    await prisma.waConversation.deleteMany({ where: { sessionId: `${PREFIX}-sess` } });
+    await prisma.waConversation.deleteMany({
+      where: { sessionId: { in: [`${PREFIX}-sess`, `atl_${PREFIX}`] } },
+    });
     await prisma.waContact.deleteMany({ where: { tenantId } });
     await prisma.sourceMapping.deleteMany({ where: { locationId } });
     await prisma.location.delete({ where: { id: locationId } }).catch(() => {});
@@ -273,6 +275,49 @@ describe("ingestWahaPayload", { concurrency: false }, () => {
     assert.equal(byLid!.identityConfidence, "PHONE_VERIFIED");
   });
 
+  it("binds session name to Location.atlasLocationId without SourceMapping", async () => {
+    const r = await ingestWahaPayload({
+      event: "message",
+      session: `atl_${PREFIX}`,
+      payload: {
+        id: `${PREFIX}-atlas-id`,
+        from: "628555666777@c.us",
+        fromMe: false,
+        body: "via atlas id",
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.ok("conversationId" in r);
+    const conv = await prisma.waConversation.findFirst({
+      where: { sessionId: `atl_${PREFIX}` },
+    });
+    assert.ok(conv);
+    assert.equal(conv!.locationId, locationId);
+  });
+
+  it("skips messages whose peer is the branch phone", async () => {
+    await prisma.location.update({
+      where: { id: locationId },
+      data: { phone: "085863666290" },
+    });
+    const r = await ingestWahaPayload({
+      event: "message",
+      session: `${PREFIX}-sess`,
+      payload: {
+        id: `${PREFIX}-self`,
+        from: "6285863666290@c.us",
+        fromMe: false,
+        body: "should skip",
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    });
+    assert.equal(r.ok, true);
+    assert.equal("ignored" in r && r.ignored, "skipped_event");
+    const n = await prisma.waMessage.count({ where: { externalId: `${PREFIX}-self` } });
+    assert.equal(n, 0);
+  });
+
   it("ignores unmapped session", async () => {
     const r = await ingestWahaPayload({
       event: "message",
@@ -318,5 +363,23 @@ describe("ingestWahaPayload", { concurrency: false }, () => {
         data: { mode: "LIVE", enabled: true },
       });
     }
+  });
+
+  it("does not store pairing-code inbound as a customer", async () => {
+    const r = await ingestWahaPayload(
+      event({
+        id: `${PREFIX}-code`,
+        from: "6281999888777@c.us",
+        body: "000-000 is your WhatsApp code. Don't share it.",
+      })
+    );
+    assert.equal(r.ok, true);
+    assert.equal("ignored" in r && r.ignored, "secret_code");
+    const n = await prisma.waContact.count({
+      where: { tenantId, phone: "6281999888777" },
+    });
+    assert.equal(n, 0);
+    const msgs = await prisma.waMessage.count({ where: { externalId: `${PREFIX}-code` } });
+    assert.equal(msgs, 0);
   });
 });

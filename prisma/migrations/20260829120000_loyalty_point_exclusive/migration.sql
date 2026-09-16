@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "LoyaltyProgram" ADD COLUMN "pointEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "LoyaltyProgram" ADD COLUMN "pointUnitRupiah" INTEGER NOT NULL DEFAULT 100000;
+ALTER TABLE "LoyaltyProgram" ADD COLUMN "pointPerUnit" INTEGER NOT NULL DEFAULT 1000;
+ALTER TABLE "LoyaltyProgram" ADD COLUMN "pointTiersJson" TEXT NOT NULL DEFAULT '[]';

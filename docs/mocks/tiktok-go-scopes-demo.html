@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AtlasNow · TikTok GO — 3 scopes (mock)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --sky: #b7e1ff; --cyan: #6fd6f6; --aqua: #7ee5d6; --mint: #c5f0c1;
+      --lime: #e7f662; --peach: #ffd6b3; --blush: #ffc1d6; --lavender: #d9c6f7;
+      --warm: #faf8fc; --ink: #1f1b1d; --muted: #6b6568; --border: #ece8ee;
+      --card: #fff; --ok: #1b7a4a; --bad: #b42318;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: Inter, "Helvetica Neue", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(900px 480px at 0% -8%, rgba(183,225,255,.55), transparent 58%),
+        radial-gradient(720px 420px at 100% 0%, rgba(197,240,193,.35), transparent 52%),
+        radial-gradient(640px 360px at 80% 100%, rgba(217,198,247,.28), transparent 50%),
+        var(--warm);
+      min-height: 100vh;
+      letter-spacing: -0.011em;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 22px 18px 64px; }
+    header.top { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; margin-bottom: 22px; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .brand img { width: 44px; height: 44px; object-fit: contain; }
+    .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    h1 { font-size: 1.55rem; margin: 2px 0 0; font-weight: 700; }
+    .lede { color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 52ch; margin: 6px 0 0; }
+    .pill { font-size: 11px; font-weight: 600; background: #1f1b1d; color: #fff; border-radius: 999px; padding: 5px 10px; }
+    .pill.warn { background: #fff; color: var(--ink); border: 1px solid var(--border); }
+    nav.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 20px; }
+    nav.tabs button {
+      border: 1px solid var(--border); background: #fff; border-radius: 999px;
+      padding: 8px 14px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--ink);
+    }
+    nav.tabs button[aria-selected="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .panel { display: none; }
+    .panel.on { display: block; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 1.15rem; box-shadow: 0 8px 24px rgba(183,225,255,.28); }
+    .grid { display: grid; gap: 14px; }
+    @media (min-width: 840px) { .cols-3 { grid-template-columns: 1fr 1fr 1fr; } .cols-2 { grid-template-columns: 1.1fr .9fr; } }
+    .step { padding: 16px 16px 14px; }
+    .kicker { font-size: 11px; font-weight: 700; color: #3a7ca8; letter-spacing: .04em; text-transform: uppercase; }
+    .step h2 { font-size: 16px; margin: 4px 0 8px; }
+    .step p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+    .scope { display: inline-block; margin-top: 10px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f3f0f6; padding: 3px 8px; border-radius: 6px; }
+    .row { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-top: 1px solid var(--border); }
+    .row:first-child { border-top: 0; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .dot.ok { background: #22a06b; } .dot.wait { background: #e8b931; } .dot.off { background: #c5c0c4; }
+    .muted { color: var(--muted); font-size: 12.5px; }
+    .tiny { font-size: 11px; color: #8a8388; }
+    button.act, .act {
+      font: inherit; font-size: 13px; font-weight: 600; border: 0; border-radius: 12px;
+      padding: 10px 14px; cursor: pointer; background: var(--ink); color: #fff;
+    }
+    button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--border); }
+    button.act:disabled { opacity: .45; cursor: not-allowed; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .chip { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 8px 12px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+    .chip:hover { border-color: #b7e1ff; }
+    .phone {
+      width: min(360px, 100%); margin: 0 auto; background: #1f1b1d; border-radius: 32px; padding: 12px 10px 18px;
+      box-shadow: 0 24px 50px rgba(31,27,29,.18);
+    }
+    .phone .screen { background: var(--warm); border-radius: 24px; min-height: 520px; overflow: hidden; }
+    .status { display: flex; justify-content: space-between; padding: 10px 16px 4px; font-size: 11px; font-weight: 600; }
+    .viewfinder {
+      margin: 8px 16px; height: 180px; border-radius: 18px; background:
+        linear-gradient(180deg, #1a2228, #0e1418);
+      position: relative; overflow: hidden;
+    }
+    .viewfinder::after {
+      content: ""; position: absolute; left: 12%; right: 12%; height: 2px; background: #6fd6f6;
+      animation: scan 2.2s linear infinite; box-shadow: 0 0 12px #6fd6f6;
+    }
+    @keyframes scan { from { top: 12%; } to { top: 82%; } }
+    .corners { position: absolute; inset: 28px 36px; border: 2px solid rgba(255,255,255,.35); border-radius: 12px; }
+    .till { padding: 14px 16px 18px; }
+    .banner { padding: 10px 12px; border-radius: 14px; font-size: 13px; line-height: 1.45; }
+    .okbox { background: #eaf8ef; color: #145c38; }
+    .badbox { background: #fdecea; color: #8a1c14; }
+    .infobox { background: #eef8ff; color: #1f1b1d; }
+    .warnbox { background: #fff6e5; color: #6a4b08; }
+    .api {
+      margin-top: 14px; background: #1f1b1d; color: #e8f4ea; border-radius: 14px; padding: 12px 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap;
+    }
+    .api b { color: #7ee5d6; font-weight: 600; }
+    .note { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-top: 12px; }
+    .swirl { height: 4px; border-radius: 999px; background: linear-gradient(90deg, var(--cyan), var(--sky), var(--aqua), var(--mint), var(--lime), var(--peach), var(--blush), var(--lavender)); margin: 16px 0; }
+    .tag { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 3px 7px; border-radius: 999px; }
+    .tag.live { background: #c5f0c1; } .tag.later { background: #d9c6f7; } .tag.hq { background: #b7e1ff; }
+    h3 { font-size: 15px; margin: 0 0 8px; }
+    .pad { padding: 16px; }
+    .nots { display: grid; gap: 8px; margin-top: 16px; }
+    .nots li { list-style: none; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+    ul.nots { margin: 0; padding: 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <img src="../../public/brand/atlasnow_logo.png" alt="AtlasNow" />
+        <div>
+          <div class="eyebrow">Mock desk · bukan API live</div>
+          <h1>Tiga pintu TikTok GO</h1>
+          <p class="lede">Satu app Live. Tiga scope. Customer bayar di TikTok, kasir tebus di Atlas. Voucher berbayar <b>bukan stamp</b>.</p>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="pill">DEMO Kopi Senja</span>
+        <span class="pill warn">Tidak ada omzet / visit palsu</span>
+      </div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" aria-selected="true" data-tab="story">Alur</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="shop">1 · Outlet<br /><span class="tiny">local.shop.manage</span></button>
+      <button type="button" role="tab" aria-selected="false" data-tab="product">2 · Paket<br /><span class="tiny">local.product.manage</span></button>
+      <button type="button" role="tab" aria-selected="false" data-tab="voucher">3 · Kasir<br /><span class="tiny">local.voucher.manage</span></button>
+    </nav>
+
+    <section id="story" class="panel on">
+      <div class="grid cols-3">
+        <article class="card step">
+          <div class="kicker">Customer · TikTok</div>
+          <h2>Beli di aplikasi TikTok</h2>
+          <p>Paket “Ngopi berdua” dibayar di TikTok GO. QR hidup di app TikTok (awalan <b>TT-</b>). Atlas tidak pegang uang ini, tidak catat sebagai omzet desk.</p>
+        </article>
+        <article class="card step">
+          <div class="kicker">HQ · scope 1 + 2</div>
+          <h2>Cabang &amp; paket</h2>
+          <p><b>Shop</b> = gerai Atlas dipetakan ke shop TikTok. <b>Product</b> = SKU voucher di TikTok (bisa tetap di Merchant Portal). Belum kasir.</p>
+          <span class="scope">local.shop.manage · local.product.manage</span>
+        </article>
+        <article class="card step">
+          <div class="kicker">Kasir · scope 3 · Wave 1</div>
+          <h2>Scan, cek, tebus</h2>
+          <p>Kamera yang sama dengan stamp. Kalau payload <b>TT-</b>, ini voucher GO — bukan kartu member. Salah cabang / sudah dipakai / di luar jam = ditolak jujur.</p>
+          <span class="scope">local.voucher.manage</span>
+        </article>
+      </div>
+      <div class="swirl"></div>
+      <div class="card pad">
+        <h3>Siapa klik apa</h3>
+        <div class="row"><span class="dot ok"></span><div><b>HQ / Grup</b> memetakan outlet &amp; (nanti) paket. Butuh <code>merchant_id</code> + NIB.</div></div>
+        <div class="row"><span class="dot ok"></span><div><b>Kasir cabang itu</b> scan + tebus. Role BRANCH, location yang sama — seperti Redeem stamp.</div></div>
+        <div class="row"><span class="dot wait"></span><div><b>WhatsApp HQ</b> boleh kabari member yang sudah opt-in: “beli di TikTok, tunjukkan QR di kasir.” Bukan kirim payload QR. Bukan buku telepon TikTok.</div></div>
+      </div>
+      <ul class="nots">
+        <li>Bukan inbox DM. Bukan Login Kit. Bukan TikTok Shop chat.</li>
+        <li>Bukan stamp. Tebus GO tidak nambah kotak stamp.</li>
+        <li>TikTok tidak kasih nomor HP. Jangan blast CSV “semua yang beli GO.”</li>
+      </ul>
+    </section>
+
+    <section id="shop" class="panel">
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="pad">
+            <span class="tag hq">HQ</span>
+            <h3 style="margin-top:8px">Location 360 · sumber TikTok GO shop</h3>
+            <p class="muted">Satu shop TikTok = satu outlet Atlas. Claim POI + NIB di TikTok. Atlas hanya menyimpan peta.</p>
+          </div>
+          <div class="row" data-shop="menteng">
+            <span class="dot ok"></span>
+            <div style="flex:1">
+              <b>Menteng</b>
+              <div class="tiny">third_shop_id · loc_menteng · POI claimed · NIB ok</div>
+            </div>
+            <span class="tag live">Mapped</span>
+          </div>
+          <div class="row" data-shop="senopati">
+            <span class="dot ok"></span>
+            <div style="flex:1">
+              <b>Senopati</b>
+              <div class="tiny">third_shop_id · loc_senopati · POI claimed</div>
+            </div>
+            <span class="tag live">Mapped</span>
+          </div>
+          <div class="row" data-shop="pik">
+            <span class="dot wait"></span>
+            <div style="flex:1">
+              <b>PIK</b>
+              <div class="tiny">Belum NIB — kasir di sini tidak boleh tebus</div>
+            </div>
+            <span class="tag later">Waiting cert</span>
+          </div>
+          <div class="pad">
+            <button class="act ghost" type="button" id="claimPik">Demo: claim POI PIK</button>
+          </div>
+        </div>
+        <div>
+          <div class="card pad" id="shopDetail">
+            <div class="kicker">local.shop.manage</div>
+            <h3>Menteng</h3>
+            <p class="muted">Kasir Menteng hanya boleh tebus voucher yang shop-nya Menteng. Voucher Senopati di Menteng → “This voucher is not for this outlet.”</p>
+            <div class="api" id="shopApi"><b>POST</b> /v2/localservice/saas/shop_info/batch_query/
+merchant_id: (Merchant Portal)
+third_shop_ids: ["loc_menteng"]</div>
+          </div>
+          <p class="note">Wave 1 butuh peta ini sebelum kasir. Tanpa map, scan TT- ditolak: “Map TikTok GO shop ID on this outlet.”</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="product" class="panel">
+      <div class="grid cols-2">
+        <div class="card">
+          <div class="pad">
+            <span class="tag later">Wave 2 · opsional</span>
+            <h3 style="margin-top:8px">Paket yang dijual di TikTok</h3>
+            <p class="muted">Group-buying coupon (<code>product_type = 2</code>). Harga &amp; jam berlaku milik TikTok, bukan laporan omzet Atlas.</p>
+          </div>
+          <div class="row">
+            <div style="flex:1">
+              <b>Ngopi berdua</b>
+              <div class="tiny">Rp 99.000 di TikTok · dine-in · Menteng + Senopati · 10:00–21:00</div>
+            </div>
+            <span class="tag live">Listed</span>
+          </div>
+          <div class="row">
+            <div style="flex:1">
+              <b>Lunch set</b>
+              <div class="tiny">Menunggu review TikTok</div>
+            </div>
+            <span class="tag later">Under review</span>
+          </div>
+          <div class="pad">
+            <button class="act ghost" type="button" id="saveProduct">Demo: simpan draft (Wave 2)</button>
+          </div>
+        </div>
+        <div class="card pad">
+          <div class="kicker">local.product.manage</div>
+          <h3>Boleh skip dulu</h3>
+          <p class="muted">Merchant Portal TikTok sudah bisa bikin paket. Atlas Wave 1 = till saja. Kalau ops menolak buka portal TikTok, baru kita bikin editor di desk.</p>
+          <div class="api" id="productApi"><b>POST</b> /v2/localservice/saas/product/batch_query/
+merchant_id
+product_type_list: [2]
+list_tab: LISTED</div>
+          <p class="note">Jangan taruh angka “revenue Atlas” di sini. Itu harga paket di TikTok.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="voucher" class="panel">
+      <div class="grid cols-2">
+        <div>
+          <div class="phone">
+            <div class="screen">
+              <div class="status"><span>9:41</span><span>Menteng · kasir</span></div>
+              <div class="till">
+                <div class="eyebrow">Loyalty · Scan</div>
+                <h3>Scan stamp QR atau TikTok GO</h3>
+                <p class="tiny">QR stamp member, atau QR voucher (awalan TT-). Bukan stiker daftar di meja.</p>
+              </div>
+              <div class="viewfinder"><div class="corners"></div></div>
+              <div class="till">
+                <div id="tillResult" class="banner infobox">Arahkan kamera ke QR di app TikTok pelanggan. Atau coba salah satu contoh di kanan.</div>
+                <button class="act" type="button" id="redeemBtn" style="width:100%;margin-top:12px;display:none">Tebus voucher TikTok GO</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="card pad">
+            <div class="kicker">local.voucher.manage · Wave 1</div>
+            <h3>Coba tiga nasib QR</h3>
+            <p class="muted">Kamera yang sama. Payload <code>TT-</code> → query dulu, kasir konfirmasi, baru redeem. Outlet = Menteng.</p>
+            <div class="chips">
+              <button class="chip" type="button" data-demo="ok">QR valid Menteng</button>
+              <button class="chip" type="button" data-demo="wrong">QR untuk Senopati</button>
+              <button class="chip" type="button" data-demo="used">QR sudah dipakai</button>
+              <button class="chip" type="button" data-demo="time">Di luar jam</button>
+            </div>
+            <div class="api" id="voucherApi">Menunggu scan…</div>
+            <p class="note">Setelah tebus: “Voucher TikTok GO tebus di Menteng. Bukan stamp.” Tidak ada kotak stamp baru. Tidak ada visit.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const tabs = document.querySelectorAll("nav.tabs button");
+    tabs.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        tabs.forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+        document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("on", p.id === btn.dataset.tab));
+      });
+    });
+
+    const shopCopy = {
+      menteng: `Menteng sudah siap till.
+third_shop_id = loc_menteng
+Kasir di sini hanya tebus voucher shop ini.`,
+      senopati: `Senopati mapped.
+Voucher Menteng yang di-scan di sini akan ditolak — salah outlet.`,
+      pik: `PIK menunggu NIB.
+Jangan hidupkan till GO di sini sampai cert lolos.`,
+    };
+    document.querySelectorAll("[data-shop]").forEach((row) => {
+      row.style.cursor = "pointer";
+      row.addEventListener("click", () => {
+        const id = row.dataset.shop;
+        document.getElementById("shopDetail").querySelector("h3").textContent = row.querySelector("b").textContent;
+        document.getElementById("shopDetail").querySelector("p").textContent = shopCopy[id];
+        document.getElementById("shopApi").innerHTML =
+          `<b>POST</b> /v2/localservice/saas/shop_info/batch_query/\nmerchant_id\nthird_shop_ids: ["loc_${id}"]`;
+      });
+    });
+    document.getElementById("claimPik").addEventListener("click", () => {
+      const row = document.querySelector('[data-shop="pik"]');
+      row.querySelector(".dot").className = "dot ok";
+      row.querySelector(".tiny").textContent = "third_shop_id · loc_pik · POI claimed (demo)";
+      row.querySelector(".tag").textContent = "Mapped";
+      row.querySelector(".tag").className = "tag live";
+      document.getElementById("shopApi").innerHTML =
+        `<b>POST</b> /v2/localservice/saas/poi/batch_claim/\nlocale: id-ID\nNIB still required in Merchant Portal before Production redeem.`;
+    });
+
+    document.getElementById("saveProduct").addEventListener("click", () => {
+      document.getElementById("productApi").innerHTML =
+        `<b>POST</b> /v2/localservice/saas/product/save/\nmerchant_id\nthird_product_id: "kopi-berdua"\nproduct_type: 2  (group-buying coupon)\nWave 2 — till tidak menunggu ini.`;
+    });
+
+    const till = document.getElementById("tillResult");
+    const redeemBtn = document.getElementById("redeemBtn");
+    const voucherApi = document.getElementById("voucherApi");
+    let pending = null;
+
+    const demos = {
+      ok: {
+        box: "infobox",
+        html: "<b>Ngopi berdua</b><br>Berlaku hari ini · 10:00–21:00 · outlet ini boleh.<br><span class='tiny'>Menteng · bukan kartu stamp</span>",
+        api: `<b>POST</b> /v2/localservice/saas/fulfill/get_code_item_list/\nqr_info: TT-MENTENG-OK\nthird_shop_id: loc_menteng\nlocale: id-ID\n→ valid, waiting cashier confirm`,
+        canRedeem: true,
+      },
+      wrong: {
+        box: "badbox",
+        html: "Voucher ini bukan untuk gerai ini.<br><span class='tiny'>Shop TikTok = Senopati, kasir = Menteng</span>",
+        api: `<b>POST</b> get_code_item_list/\nthird_shop_id: loc_menteng\n→ error: This voucher is not for this outlet.`,
+        canRedeem: false,
+      },
+      used: {
+        box: "badbox",
+        html: "Voucher ini sudah dipakai atau di-refund.",
+        api: `<b>POST</b> get_code_item_list/\n→ already used / refunded`,
+        canRedeem: false,
+      },
+      time: {
+        box: "warnbox",
+        html: "Di luar jam berlaku. Minta pelanggan buka TikTok lagi besok, atau paket yang masih hidup.",
+        api: `<b>POST</b> get_code_item_list/\n→ outside valid time`,
+        canRedeem: false,
+      },
+    };
+
+    document.querySelectorAll("[data-demo]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const d = demos[chip.dataset.demo];
+        till.className = "banner " + d.box;
+        till.innerHTML = d.html;
+        voucherApi.innerHTML = d.api;
+        pending = chip.dataset.demo === "ok" ? d : null;
+        redeemBtn.style.display = d.canRedeem ? "block" : "none";
+      });
+    });
+
+    redeemBtn.addEventListener("click", () => {
+      if (!pending) return;
+      till.className = "banner okbox";
+      till.innerHTML = "Voucher TikTok GO tebus di Menteng. <b>Bukan stamp.</b>";
+      voucherApi.innerHTML =
+        `<b>POST</b> /v2/localservice/saas/fulfill/redeem_code/\nthird_shop_id: loc_menteng\ncode_list + shop_order_id\nlocale: id-ID\n→ redeemed. No stamp row. No visit KPI.`;
+      redeemBtn.style.display = "none";
+      pending = null;
+    });
+  </script>
+</body>
+</html>

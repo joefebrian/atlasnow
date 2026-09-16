@@ -1,0 +1,7 @@
+# Local laptop: publish Postgres on 5433 (5432 is often taken).
+# WAHA on the laptop can stay the existing container on :3001.
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d postgres
+services:
+  postgres:
+    ports:
+      - "5433:5432"

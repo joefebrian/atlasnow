@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mergeIdentity, resolveIdentity } from "./identity";
+import { mergeIdentity, resolveIdentity, samePhone } from "./identity";
 
 describe("resolveIdentity", () => {
   it("stores digits from @c.us as PHONE_VERIFIED", () => {
@@ -79,6 +79,33 @@ describe("resolveIdentity", () => {
     assert.equal(r.phone, null);
     assert.equal(r.confidence, "UNKNOWN");
     assert.equal(r.identifier, "unknown");
+  });
+
+  it("does not treat Instagram IGSID digits as a phone", () => {
+    const r = resolveIdentity("17841405309234712", null, "INSTAGRAM");
+    assert.equal(r.phone, null);
+    assert.equal(r.confidence, "PLATFORM_ID");
+    assert.equal(r.identifier, "ig:17841405309234712");
+  });
+
+  it("does not treat Facebook PSID digits as a phone", () => {
+    const r = resolveIdentity("1234567890123456", null, "FACEBOOK");
+    assert.equal(r.phone, null);
+    assert.equal(r.confidence, "PLATFORM_ID");
+    assert.equal(r.identifier, "fb:1234567890123456");
+  });
+
+  it("keeps a real phone when social later shares a number", () => {
+    const r = resolveIdentity("17841405309234712", "628111222333", "INSTAGRAM");
+    assert.equal(r.phone, "628111222333");
+    assert.equal(r.confidence, "PHONE_VERIFIED");
+    assert.equal(r.identifier, "628111222333");
+  });
+});
+
+describe("samePhone", () => {
+  it("treats 08 local and 62 international as the same", () => {
+    assert.equal(samePhone("085863666290", "6285863666290"), true);
   });
 });
 

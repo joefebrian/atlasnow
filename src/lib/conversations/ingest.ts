@@ -1,8 +1,12 @@
 import { prisma } from "@/lib/db";
-import { mergeIdentity, resolveIdentity } from "./identity";
-import { parseWahaEvent } from "./parse";
+import { writeAudit } from "@/lib/auth";
+import { recordNotice } from "@/lib/notices";
+import { mergeIdentity, resolveIdentity, samePhone } from "./identity";
+import { parseWahaEvent, parseWahaSessionStatus } from "./parse";
 import { previewBody, shouldStartNewConversation } from "./window";
 import { isWahaIngestEnabled } from "./waha-config";
+import { resolveLidToPhone } from "./waha-lids";
+import { isSecretCodeMessage } from "./secret-code";
 
 function isPrismaP2002(err: unknown, field?: string): boolean {
   if (!err || typeof err !== "object") return false;
@@ -17,7 +21,7 @@ function isPrismaP2002(err: unknown, field?: string): boolean {
 
 export type IngestResult =
   | { ok: true; conversationId: string; duplicate?: boolean }
-  | { ok: true; ignored: true | "unmapped_session" | "kill_switch" | "skipped_event" }
+  | { ok: true; ignored: true | "unmapped_session" | "kill_switch" | "skipped_event" | "secret_code" }
   | { ok: false; error: string };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -37,7 +41,69 @@ function lidFromRemote(input: unknown): string | null {
   return m ? m[1] : null;
 }
 
+/** Session name = SourceMapping.externalId (legacy) or Location.atlasLocationId. */
+export async function resolveLocationForWahaSession(
+  session: string
+): Promise<{ locationId: string; tenantId: string } | null> {
+  const mapping = await prisma.sourceMapping.findFirst({
+    where: {
+      sourceType: "WAHA",
+      externalId: session,
+      status: "ACTIVE",
+    },
+    include: { location: { select: { id: true, tenantId: true, status: true } } },
+  });
+  if (mapping && mapping.location.status !== "ARCHIVED") {
+    return { locationId: mapping.location.id, tenantId: mapping.location.tenantId };
+  }
+
+  const byAtlasId = await prisma.location.findUnique({
+    where: { atlasLocationId: session },
+    select: { id: true, tenantId: true, status: true },
+  });
+  if (byAtlasId && byAtlasId.status !== "ARCHIVED") {
+    return { locationId: byAtlasId.id, tenantId: byAtlasId.tenantId };
+  }
+  return null;
+}
+
+async function ingestSessionStatus(input: unknown): Promise<IngestResult | null> {
+  const st = parseWahaSessionStatus(input);
+  if (st === null) return null;
+  if ("error" in st) return { ok: false, error: st.error };
+  const loc = await resolveLocationForWahaSession(st.session);
+  if (!loc) return { ok: true, ignored: "unmapped_session" };
+  const down = st.status === "FAILED" || st.status === "STOPPED";
+  const up = st.status === "WORKING";
+  if (!down && !up) return { ok: true, ignored: "skipped_event" };
+  const location = await prisma.location.findUnique({
+    where: { id: loc.locationId },
+    select: { name: true, atlasLocationId: true },
+  });
+  const branch = location?.name || st.session;
+  const action = down ? "WAHA_SESSION_DOWN" : "WAHA_SESSION_UP";
+  await writeAudit({
+    tenantId: loc.tenantId,
+    action,
+    objectType: "location",
+    objectId: loc.locationId,
+    meta: { session: st.session, status: st.status, branch },
+  });
+  await recordNotice({
+    tenantId: loc.tenantId,
+    kind: down ? "waha_down" : "waha_up",
+    title: down ? `WhatsApp disconnected · ${branch}` : `WhatsApp connected · ${branch}`,
+    body: down
+      ? `Session ${st.session} is ${st.status}. Scan QR again on the outlet if chats should keep landing.`
+      : `Session ${st.session} is WORKING again.`,
+    href: `/locations/${loc.locationId}`,
+  });
+  return { ok: true, ignored: "skipped_event" };
+}
+
 export async function ingestWahaPayload(input: unknown): Promise<IngestResult> {
+  const statusResult = await ingestSessionStatus(input);
+  if (statusResult) return statusResult;
   if (!(await isWahaIngestEnabled())) {
     return { ok: true, ignored: "kill_switch" };
   }
@@ -46,6 +112,9 @@ export async function ingestWahaPayload(input: unknown): Promise<IngestResult> {
   const ev = parsed.event.toLowerCase();
   if (ev !== "message" && ev !== "message.any") {
     return { ok: true, ignored: "skipped_event" };
+  }
+  if (!parsed.fromMe && isSecretCodeMessage(parsed.body)) {
+    return { ok: true, ignored: "secret_code" };
   }
 
   const existingMsg = await prisma.waMessage.findUnique({
@@ -56,21 +125,31 @@ export async function ingestWahaPayload(input: unknown): Promise<IngestResult> {
     return { ok: true, conversationId: existingMsg.conversationId, duplicate: true };
   }
 
-  const mapping = await prisma.sourceMapping.findFirst({
-    where: {
-      sourceType: "WAHA",
-      externalId: parsed.session,
-      status: "ACTIVE",
-    },
-    include: { location: { select: { id: true, tenantId: true } } },
-  });
-  if (!mapping) return { ok: true, ignored: "unmapped_session" };
+  const bound = await resolveLocationForWahaSession(parsed.session);
+  if (!bound) return { ok: true, ignored: "unmapped_session" };
 
-  const tenantId = mapping.location.tenantId;
-  const locationId = mapping.location.id;
-  const resolved = resolveIdentity(parsed.peerRaw, parsed.extraPhone);
+  const tenantId = bound.tenantId;
+  const locationId = bound.locationId;
+  let resolved = resolveIdentity(parsed.peerRaw, parsed.extraPhone);
   const remoteLid = lidFromRemote(input);
-  const incoming = remoteLid && !resolved.lid ? { ...resolved, lid: remoteLid } : resolved;
+  if (remoteLid && !resolved.lid) {
+    resolved = { ...resolved, lid: remoteLid };
+  }
+  if (!resolved.phone && resolved.lid) {
+    const pn = await resolveLidToPhone(parsed.session, resolved.lid);
+    if (pn) {
+      resolved = mergeIdentity(resolved, resolveIdentity(`${pn}@c.us`));
+    }
+  }
+  const incoming = resolved;
+
+  const branch = await prisma.location.findUnique({
+    where: { id: locationId },
+    select: { phone: true },
+  });
+  if (incoming.phone && samePhone(incoming.phone, branch?.phone)) {
+    return { ok: true, ignored: "skipped_event" };
+  }
 
   const found =
     (incoming.lid

@@ -1,0 +1,2 @@
+ALTER TABLE "LoyaltyProgram" ADD COLUMN IF NOT EXISTS "stampCardImage" BYTEA;
+ALTER TABLE "LoyaltyProgram" ADD COLUMN IF NOT EXISTS "stampCardMime" TEXT NOT NULL DEFAULT '';

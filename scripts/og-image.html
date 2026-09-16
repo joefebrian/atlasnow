@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face {
+        font-family: "NHaas";
+        src: url("../src/fonts/NHaasGroteskTXPro-55Rg.woff") format("woff");
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: "NHaas";
+        src: url("../src/fonts/NHaasGroteskTXPro-65Md.woff2") format("woff2");
+        font-weight: 600;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+        background: #faf8fc;
+        font-family: NHaas, "Helvetica Neue", Helvetica, Arial, sans-serif;
+        color: #1f1b1d;
+        -webkit-font-smoothing: antialiased;
+      }
+      .frame {
+        position: relative;
+        width: 1200px;
+        height: 630px;
+        padding: 64px 72px;
+        display: flex;
+        align-items: center;
+        gap: 56px;
+        overflow: hidden;
+      }
+      .orb {
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+      }
+      .orb-a {
+        left: -120px;
+        top: -140px;
+        width: 420px;
+        height: 420px;
+        background: #b7e1ff;
+        filter: blur(70px);
+        opacity: 0.85;
+      }
+      .orb-b {
+        right: -80px;
+        top: 80px;
+        width: 360px;
+        height: 360px;
+        background: #c5f0c1;
+        filter: blur(80px);
+        opacity: 0.7;
+      }
+      .orb-c {
+        right: 180px;
+        bottom: -160px;
+        width: 380px;
+        height: 380px;
+        background: #d9c6f7;
+        filter: blur(80px);
+        opacity: 0.55;
+      }
+      .logo {
+        position: relative;
+        width: 360px;
+        height: 360px;
+        flex-shrink: 0;
+        object-fit: contain;
+      }
+      .copy {
+        position: relative;
+        flex: 1;
+        min-width: 0;
+      }
+      .kicker {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #2a9bb8;
+      }
+      h1 {
+        margin-top: 14px;
+        font-size: 54px;
+        font-weight: 600;
+        letter-spacing: -0.035em;
+        line-height: 1.05;
+      }
+      .tag {
+        margin-top: 10px;
+        font-size: 32px;
+        font-weight: 400;
+        letter-spacing: -0.03em;
+        line-height: 1.15;
+        color: #1f1b1d;
+      }
+      .tag mark {
+        background: #7ee5d6;
+        color: #1f1b1d;
+        font: inherit;
+        padding: 0 0.16em;
+        border-radius: 0.08em;
+      }
+      .lede {
+        margin-top: 22px;
+        font-size: 22px;
+        font-weight: 400;
+        letter-spacing: -0.015em;
+        color: rgba(31, 27, 29, 0.5);
+      }
+      .lab {
+        margin-top: 28px;
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: rgba(31, 27, 29, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <div class="orb orb-a"></div>
+      <div class="orb orb-b"></div>
+      <div class="orb orb-c"></div>
+      <img class="logo" src="../public/brand/atlasnow_logo.png" alt="" />
+      <div class="copy">
+        <p class="kicker">A P2P Labs product</p>
+        <h1>AtlasNow</h1>
+        <p class="tag">
+          Optimize Every Outlet.<br />
+          Capture More <mark>Demand.</mark>
+        </p>
+        <p class="lede">One desk for every location.</p>
+        <p class="lab">WhatsApp CRM · Google Business Profile · outlet operations</p>
+      </div>
+    </div>
+  </body>
+</html>

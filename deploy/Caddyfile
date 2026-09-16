@@ -1,0 +1,38 @@
+{
+	email {$CADDY_EMAIL}
+}
+
+{$ATLAS_DOMAIN} {
+	encode gzip zstd
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+		X-Permitted-Cross-Domain-Policies "none"
+		-Server
+	}
+	request_body {
+		max_size 20MB
+	}
+	reverse_proxy atlas:3000
+}
+
+www.{$ATLAS_DOMAIN} {
+	redir https://{$ATLAS_DOMAIN}{uri} permanent
+}
+
+help.{$ATLAS_DOMAIN} {
+	encode gzip zstd
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Permitted-Cross-Domain-Policies "none"
+		-Server
+	}
+	reverse_proxy atlas:3000
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { parseWahaEvent } from "./parse";
+import { parseWahaEvent, parseWahaSessionStatus } from "./parse";
 
 describe("parseWahaEvent", () => {
   it("reads nested payload.id.id and session", () => {
@@ -46,6 +46,25 @@ describe("parseWahaEvent", () => {
     assert.equal(r.body, "");
   });
 
+  it("uses to (customer) as peer on fromMe, not the branch from", () => {
+    const r = parseWahaEvent({
+      event: "message",
+      session: "atl_x",
+      payload: {
+        id: "out-1",
+        fromMe: true,
+        from: "6285863666290@c.us",
+        to: "6285697210806@c.us",
+        body: "Sorry I message with other number",
+        timestamp: 1776230616,
+      },
+    });
+    assert.ok(!("error" in r));
+    if ("error" in r) return;
+    assert.equal(r.peerRaw, "6285697210806@c.us");
+    assert.equal(r.fromMe, true);
+  });
+
   it("returns error when session or id missing", () => {
     const r = parseWahaEvent({ event: "message", payload: {} });
     assert.ok("error" in r);
@@ -54,5 +73,19 @@ describe("parseWahaEvent", () => {
   it("returns error for non-object", () => {
     const r = parseWahaEvent(null);
     assert.ok("error" in r);
+  });
+});
+
+describe("parseWahaSessionStatus", () => {
+  it("reads FAILED and ignores messages", () => {
+    const r = parseWahaSessionStatus({
+      event: "session.status",
+      session: "toko-a",
+      payload: { status: "FAILED" },
+    });
+    assert.ok(r && !("error" in r));
+    if (!r || "error" in r) return;
+    assert.equal(r.status, "FAILED");
+    assert.equal(parseWahaSessionStatus({ event: "message", session: "x" }), null);
   });
 });

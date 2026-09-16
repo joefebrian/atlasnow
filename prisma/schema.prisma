@@ -5,7 +5,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -13,21 +13,30 @@ datasource db {
 // TenantStatus: ACTIVE | INACTIVE | ARCHIVED
 // LocationStatus: ACTIVE | INACTIVE | ARCHIVED
 // LocationReadiness: DRAFT | PARTIAL | READY | MAPPED | BLOCKED
-// SourceType: GOOGLE_BUSINESS_PROFILE | GSC | ADS | WAHA | SOCIAL | REDEMPTION | MANUAL
-// Role: SUPER_ADMIN | ANALYST | CLIENT_ADMIN | HQ_MARKETING | HQ_OPS | REGIONAL | BRANCH | VIEWER
+// SourceType: GOOGLE_BUSINESS_PROFILE | GOOGLE_MAPS | GSC | ADS | WAHA | SOCIAL | REDEMPTION | MANUAL
+// Role: SUPER_ADMIN | AGENCY_ADMIN | ANALYST | CLIENT_ADMIN | HQ_MARKETING | HQ_OPS | REGIONAL | BRANCH | VIEWER
 // MembershipStatus: ACTIVE | INVITED | DISABLED
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String?
-  passwordHash String
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String?
+  passwordHash     String
+  isActive         Boolean   @default(true)
+  /// email | google | facebook
+  signupMethod     String?
+  termsAcceptedAt  DateTime?
+  termsVersion     String?
+  privacyVersion   String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  memberships Membership[]
-  auditEvents AuditEvent[] @relation("AuditActor")
+  noticeSeenAt     DateTime?
+  memberships      Membership[]
+  auditEvents      AuditEvent[] @relation("AuditActor")
+  upgradeRequests  AgencyUpgradeRequest[] @relation("UpgradeApplicant")
+  supportThreads   SupportThread[]
+  broadcastBatches BroadcastBatch[]
 }
 
 model Tenant {
@@ -38,6 +47,8 @@ model Tenant {
   timezone     String   @default("Asia/Jakarta")
   status       String   @default("ACTIVE")
   loginEnabled Boolean  @default(false)
+  /// free | silver | gold | platinum | diamond — Free hard-stops at 2 store outlets.
+  plan         String   @default("free")
   industry     String?
   contactName  String?
   contactEmail String?
@@ -46,32 +57,92 @@ model Tenant {
   address      String?
   notes        String?
   activatedAt  DateTime?
+  /// Parent agency when type=CLIENT. Null = standalone brand.
+  agencyId     String?
+  /// Compressed square mark for the public join page (WebP). Upload original; Atlas resizes.
+  logoImage    Bytes?
+  logoMime     String   @default("")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships Membership[]
-  auditEvents AuditEvent[]
-  locations   Location[]
-  connectors  Connector[]
+  parentAgency    Tenant?  @relation("AgencyBrands", fields: [agencyId], references: [id], onDelete: Restrict)
+  managedBrands   Tenant[] @relation("AgencyBrands")
+  memberships     Membership[]
+  auditEvents     AuditEvent[]
+  locations       Location[]
+  connectors      Connector[]
   waContacts      WaContact[]
   waConversations WaConversation[]
+  upgradeRequests AgencyUpgradeRequest[] @relation("UpgradeClient")
+  notices         InboxNotice[]
+  loyaltyProgram  LoyaltyProgram?
+  loyaltyMembers  LoyaltyMember[]
+  loyaltyIntakes  LoyaltyIntake[]
+  loyaltyStamps   LoyaltyStamp[]
+  loyaltyRedeems      LoyaltyRedemption[]
+  birthdayWaSends     LoyaltyBirthdayWaSend[]
+  roleMenuConfigs     RoleMenuConfig[]
+  supportThreads      SupportThread[]
+  broadcastBatches    BroadcastBatch[]
+  broadcastSends      BroadcastSend[]
+  loyaltyGoEvents     LoyaltyGoEvent[]
+  wabaPhones          WabaPhone[]
 
   @@index([type, status])
+  @@index([agencyId])
+  @@index([type, agencyId])
+}
+
+model AgencyUpgradeRequest {
+  id               String    @id @default(cuid())
+  clientId         String
+  applicantUserId  String
+  status           String    @default("PENDING")
+  note             String?
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  agencyId         String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  client    Tenant @relation("UpgradeClient", fields: [clientId], references: [id], onDelete: Cascade)
+  applicant User   @relation("UpgradeApplicant", fields: [applicantUserId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([clientId])
 }
 
 model Membership {
-  id        String   @id @default(cuid())
-  userId    String
-  tenantId  String
-  role      String   @default("VIEWER")
-  status    String   @default("ACTIVE")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  userId     String
+  tenantId   String
+  role       String   @default("VIEWER")
+  status     String   @default("ACTIVE")
+  /// Branch PIC: the one outlet they work. Null for HQ / brand-wide roles.
+  locationId String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location Location? @relation("BranchStaff", fields: [locationId], references: [id], onDelete: SetNull)
 
   @@unique([userId, tenantId])
+  @@index([tenantId])
+  @@index([locationId])
+}
+
+/// Per-brand checkbox list of menus each client role may open.
+model RoleMenuConfig {
+  id        String   @id @default(cuid())
+  tenantId  String
+  role      String
+  hrefsJson String
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, role])
   @@index([tenantId])
 }
 
@@ -87,6 +158,20 @@ model AuditEvent {
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   actor  User?   @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
+
+model InboxNotice {
+  id        String    @id @default(cuid())
+  tenantId  String
+  kind      String
+  title     String
+  body      String?
+  href      String?
+  createdAt DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
 }
@@ -110,23 +195,38 @@ model Location {
   latitude        Float?
   longitude       Float?
   timezone        String    @default("Asia/Jakarta")
+  /// STORE | HQ — HQ holds the brand Cloud API inbox (not a cashier outlet).
+  kind            String    @default("STORE")
+  /// Confirmed branch WhatsApp allowed to send loyalty intake to HQ.
+  waOutletPhone     String?
+  waOutletConfirmed Boolean @default(false)
   status          String    @default("ACTIVE")
   readiness       String    @default("DRAFT")
   readinessJson   String?
   notes           String?
+  /// Public Review Capture token → GET /r/{token}. Null until staff open the link UI.
+  reviewCaptureToken String?  @unique
   archivedAt      DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  staffMemberships    Membership[]         @relation("BranchStaff")
   mappings            SourceMapping[]
   metricObservations  MetricObservation[]
   reviews             Review[]
+  captureEvents       ReviewCaptureEvent[]
   waConversations     WaConversation[]
+  loyaltyIntakes      LoyaltyIntake[]
+  loyaltyStamps       LoyaltyStamp[]
+  loyaltyRedeems      LoyaltyRedemption[]
+  memberSignups       LoyaltyMember[]     @relation("MemberSignupLocation")
+  loyaltyGoEvents     LoyaltyGoEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, city])
   @@index([tenantId, readiness])
+  @@index([tenantId, kind])
   @@unique([tenantId, code])
 }
 
@@ -134,8 +234,10 @@ model Location {
 model Review {
   id              String    @id @default(cuid())
   locationId      String
-  /// Google resource name accounts/.../locations/.../reviews/...
+  /// GBP: accounts/.../locations/.../reviews/...  Maps: maps:{id}
   externalId      String    @unique
+  /// GOOGLE_BUSINESS_PROFILE | GOOGLE_MAPS
+  sourceType      String    @default("GOOGLE_BUSINESS_PROFILE")
   reviewerName    String?
   starRating      Int
   comment         String?
@@ -153,7 +255,27 @@ model Review {
   drafts   ReviewReplyDraft[]
 
   @@index([locationId, updateTime])
+  @@index([locationId, sourceType])
   @@index([starRating])
+}
+
+/// Guest opened the Review Capture link (intent). No customer PII required.
+model ReviewCaptureEvent {
+  id          String   @id @default(cuid())
+  locationId  String
+  token       String
+  eventType   String   @default("opened")
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmContent  String?
+  deviceType  String?
+  createdAt   DateTime @default(now())
+
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([locationId, createdAt])
+  @@index([token, createdAt])
 }
 
 /// Local draft / approve / publish workflow for review replies (one page inbox).
@@ -312,6 +434,19 @@ model MetricObservation {
   @@index([sourceSystem, observedOn])
 }
 
+/// AtlasNow PAYG fee on WhatsApp broadcast. Singleton id=default.
+/// Atlas each = flat IDR + marginPct% of Meta's per-message rate.
+model BroadcastFeeConfig {
+  id                String   @id @default("default")
+  sessionIdr        Float    @default(0)
+  marketingIdr      Float    @default(150)
+  utilityIdr        Float    @default(90)
+  authenticationIdr Float    @default(90)
+  /// Percent of Meta rate, added on top of the flat fee. 25 = +25%.
+  marginPct         Float    @default(0)
+  updatedAt         DateTime @updatedAt
+}
+
 /// Central API / integration credentials & mode (Settings → API Configuration).
 /// Secrets stored AES-GCM encrypted (AUTH_SECRET). Non-secret fields in publicJson.
 model IntegrationConfig {
@@ -330,6 +465,216 @@ model IntegrationConfig {
   lastCheckedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+}
+
+/// Founder-facing error log (Settings → Error log). Errors only.
+model AppErrorLog {
+  id        String   @id @default(cuid())
+  source    String
+  title     String
+  detail    String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// Brand loyalty program (stamp card and/or monthly top spender).
+model LoyaltyProgram {
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  stampEnabled       Boolean  @default(false)
+  stampGoal          Int      @default(10)
+  stampMinAmount     Int      @default(0)
+  stampRewardText    String   @default("")
+  /// [{ "stamps": 5, "reward": "Gratis es kopi" }, ...]
+  stampTiersJson     String   @default("[]")
+  /// lifetime | years_1 | years_2
+  stampExpiry        String   @default("lifetime")
+  /// Exclusive with stamp and top spender on Save.
+  pointEnabled       Boolean  @default(false)
+  /// Every Rp unitRupiah → pointPerUnit points (remainder discarded).
+  pointUnitRupiah    Int      @default(100000)
+  pointPerUnit       Int      @default(1000)
+  /// [{ "points": 5000, "reward": "Tumbler" }, ...]
+  pointTiersJson     String   @default("[]")
+  spenderEnabled     Boolean  @default(false)
+  /// BRAND | LOCATION
+  spenderScope       String   @default("BRAND")
+  spenderLocationId  String?
+  spenderMinAmount   Int      @default(0)
+  spenderTopN        Int      @default(1)
+  spenderRewardText  String   @default("")
+  /// [{ "rank": 1, "reward": "Voucher 200rb" }, ...]
+  spenderTiersJson   String   @default("[]")
+  /// Public token for /join/{joinKey}
+  joinKey            String   @unique @default(cuid())
+  /// BRAND | LOCATION
+  qrScope            String   @default("BRAND")
+  birthdayEnabled    Boolean  @default(false)
+  birthdayRewardText String   @default("")
+  /// Letters/numbers only. New WA codes: PREFIX + optional YY + - + random.
+  birthdayVoucherPrefix    String  @default("BDY")
+  birthdayVoucherYear      Boolean @default(true)
+  birthdayVoucherSuffixLen Int     @default(4)
+  /// JSON HQ WhatsApp auto-replies (Status Stamp, etc.). Empty keys use defaults.
+  waRepliesJson      String   @default("{}")
+  /// Merchant stamp-card artwork (JPEG/PNG). Overlay is count/goal only.
+  stampCardImage     Bytes?
+  stampCardMime      String   @default("")
+  /// When true, even OCR MATCH waits for HQ Approve.
+  receiptAuditMode   Boolean  @default(false)
+  /// Tamu boleh kirim struk dari kartu stamp (/c/...).
+  guestReceiptUpload Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Brand member from QR/form. Status calon/aktif is derived from approved receipts.
+model LoyaltyMember {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  phone              String
+  name               String    @default("")
+  email              String    @default("")
+  /// YYYY-MM-DD
+  birthDate          String?
+  /// Indonesia domicile (phone +62 / 08). Kota or kabupaten name.
+  city               String    @default("")
+  province           String    @default("")
+  birthdayWaOptIn    Boolean   @default(false)
+  birthdayWaOptInAt  DateTime?
+  signupLocationId   String?
+  /// QR | QR_OUTLET | STAFF
+  source             String    @default("QR")
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  signupLocation Location? @relation("MemberSignupLocation", fields: [signupLocationId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, phone])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, birthdayWaOptIn])
+}
+
+/// One H-2 birthday_greeting per member per calendar year (tenant TZ).
+model LoyaltyBirthdayWaSend {
+  id            String   @id @default(cuid())
+  tenantId      String
+  memberPhone   String
+  periodKey     String
+  templateName  String
+  /// PENDING | SENT | FAILED
+  status        String
+  error         String   @default("")
+  /// Shown to the member in WA and to kasir on lookup.
+  voucherCode   String   @default("")
+  voucherValue  String   @default("")
+  sentAt        DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, memberPhone, periodKey])
+  @@index([tenantId, periodKey])
+}
+
+model LoyaltyIntake {
+  id            String    @id @default(cuid())
+  tenantId      String
+  locationId    String
+  phone         String
+  trxId         String
+  amount        Int?
+  invoiceRef    String?
+  source        String    @default("FORM")
+  /// PENDING | APPROVED | REJECTED
+  status        String    @default("PENDING")
+  rejectReason  String?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  /// NONE | SENT | FAILED | SKIPPED
+  notifyStatus  String    @default("NONE")
+  notifyError   String?
+  photoImage    Bytes?
+  photoMime     String    @default("")
+  /// raw OCR + extracted fields
+  ocrJson       String    @default("")
+  /// MATCH | MISMATCH | UNREADABLE | SKIPPED
+  matchStatus   String    @default("SKIPPED")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location Location      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  stamps   LoyaltyStamp[]
+
+  @@unique([tenantId, trxId])
+  @@index([tenantId, status, createdAt])
+  @@index([locationId, createdAt])
+}
+
+model LoyaltyStamp {
+  id          String   @id @default(cuid())
+  tenantId    String
+  memberPhone String
+  intakeId    String
+  locationId  String
+  amount      Int?
+  stampedAt   DateTime @default(now())
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  intake   LoyaltyIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  location Location      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, memberPhone, stampedAt])
+}
+
+model LoyaltyRedemption {
+  id          String   @id @default(cuid())
+  tenantId    String
+  memberPhone String
+  /// STAMP_CARD | TOP_SPENDER
+  kind        String
+  periodKey   String?
+  /// stamp count ("5") or spender rank ("1"); empty = legacy single-reward redeem
+  tierKey     String   @default("")
+  /// true only when the highest stamp gift is claimed — starts a new card
+  resetsCard  Boolean  @default(false)
+  locationId  String?
+  actorId     String?
+  /// Birthday WA code the cashier typed. Empty for stamp / top spender.
+  voucherCode String   @default("")
+  redeemedAt  DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, memberPhone, kind])
+  @@unique([tenantId, memberPhone, kind, periodKey, tierKey])
+}
+
+/// TikTok GO till: query / redeem / deny at an outlet. Not a stamp. Not GMV.
+model LoyaltyGoEvent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  locationId  String
+  /// QUERY | REDEEM | DENY
+  kind        String
+  demo        Boolean  @default(false)
+  title       String
+  detail      String   @default("")
+  /// Short hint (TT-DEMO-OK), never the full QR payload.
+  codeHint    String   @default("")
+  shopOrderId String?
+  createdAt   DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, locationId, createdAt])
 }
 
 model WaContact {
@@ -392,4 +737,202 @@ model WaMessage {
   conversation WaConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, sentAt])
+}
+
+/// Public About / Contact copy — edited in Settings → Pages (agency).
+model SitePageConfig {
+  id                 String   @id @default("default")
+  aboutHeadlineEn    String
+  aboutBodyEn        String
+  aboutPointsJsonEn  String
+  aboutHeadlineId    String
+  aboutBodyId        String
+  aboutPointsJsonId  String
+  contactHeadlineEn  String
+  contactBodyEn      String
+  contactHeadlineId  String
+  contactBodyId      String
+  contactNoteEn      String?
+  contactNoteId      String?
+  /// JSON { instagram, facebook, threads, tiktok, x }
+  socialJson         String?
+  /// JSON FaqItem[] — public /faq, edited in Settings → Pages
+  faqJson            String?
+  updatedAt          DateTime @updatedAt
+}
+
+/// Submissions from the public Contact page. Emails also go to hello@atlasnow.co.
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  company   String?
+  message   String
+  locale    String   @default("en")
+  ipHash    String?
+  mailSent  Boolean  @default(false)
+  mailError String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([ipHash, createdAt])
+}
+
+/// P2P support desk (Radit). Not WhatsApp. Not merchant-customer chat.
+model SupportDeskSettings {
+  id          String    @id @default("default")
+  enabled     Boolean   @default(true)
+  openHm      String    @default("09:00")
+  closeHm     String    @default("17:00")
+  daysOfWeek  String    @default("1,2,3,4,5,6,7")
+  timezone    String    @default("Asia/Jakarta")
+  agentSeenAt DateTime?
+  updatedAt   DateTime  @updatedAt
+}
+
+model SupportThread {
+  id                String    @id @default(cuid())
+  status            String    @default("QUEUED")
+  visitorKind       String
+  userId            String?
+  tenantId          String?
+  name              String
+  email             String
+  locale            String    @default("en")
+  roleLabel         String    @default("")
+  firstPath         String    @default("")
+  lastPath          String    @default("")
+  queuedAt          DateTime  @default(now())
+  openedAt          DateTime?
+  closedAt          DateTime?
+  closeReason       String?
+  lastVisitorAt     DateTime?
+  lastAgentAt       DateTime?
+  lastPreview       String    @default("")
+  silenceDeadlineAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user     User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenant   Tenant?          @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  messages SupportMessage[]
+
+  @@index([status, queuedAt])
+  @@index([email, status])
+  @@index([userId, status])
+}
+
+model SupportMessage {
+  id       String   @id @default(cuid())
+  threadId String
+  from     String
+  body     String   @default("")
+  sentAt   DateTime @default(now())
+
+  thread SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, sentAt])
+}
+
+/// HQ Cloud blast History. Not inbox. Not loyalty.
+model BroadcastBatch {
+  id              String   @id @default(cuid())
+  tenantId        String
+  createdByUserId String?
+  kind            String
+  templateName    String?
+  attemptedCount  Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  sends     BroadcastSend[]
+
+  @@index([tenantId, createdAt])
+}
+
+model BroadcastSend {
+  id               String    @id @default(cuid())
+  batchId          String
+  tenantId         String
+  phone            String
+  wamid            String?
+  status           String    @default("PENDING")
+  sentAt           DateTime?
+  deliveredAt      DateTime?
+  readAt           DateTime?
+  failedAt         DateTime?
+  errorCode        Int?
+  errorTitle       String    @default("")
+  pricingCategory  String?
+  pricingType      String?
+  repliedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  batch  BroadcastBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([wamid])
+  @@index([tenantId, phone, sentAt])
+  @@index([batchId])
+}
+
+/// One Cloud business phone. Meta’s 1,000 free service msgs reset per this number, monthly.
+model WabaPhone {
+  id              String   @id @default(cuid())
+  tenantId        String
+  wabaId          String   @default("")
+  phoneNumberId   String   @unique
+  displayPhone    String   @default("")
+  /// BRAND = Meta invoices the merchant. P2P = we pass through.
+  billingOwner    String   @default("BRAND")
+  timezone        String   @default("Asia/Jakarta")
+  paymentMethodOk Boolean  @default(false)
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  months     WabaServiceMonth[]
+  deliveries WabaServiceDelivery[]
+
+  @@index([tenantId])
+}
+
+model WabaServiceMonth {
+  id            String @id @default(cuid())
+  phoneNumberId String
+  /// YYYY-MM in that phone’s timezone (resets 00:00 on the 1st)
+  periodKey     String
+  serviceCount  Int    @default(0)
+  freeCap       Int    @default(1000)
+
+  phone WabaPhone @relation(fields: [phoneNumberId], references: [phoneNumberId], onDelete: Cascade)
+
+  @@unique([phoneNumberId, periodKey])
+}
+
+/// Idempotent delivered-service count. Retry is not a second gift.
+model WabaServiceDelivery {
+  id            String   @id @default(cuid())
+  phoneNumberId String
+  periodKey     String
+  wamid         String   @unique
+  createdAt     DateTime @default(now())
+
+  phone WabaPhone @relation(fields: [phoneNumberId], references: [phoneNumberId], onDelete: Cascade)
+
+  @@index([phoneNumberId, periodKey])
+}
+
+/// What we sent, so we can count session replies before Meta tags category=service.
+model WabaOutbound {
+  wamid         String   @id
+  phoneNumberId String
+  tenantId      String
+  /// session | template
+  kind          String
+  createdAt     DateTime @default(now())
+
+  @@index([phoneNumberId])
 }

@@ -1,0 +1,128 @@
+name: atlasnow
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 768m
+    shm_size: 256mb
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-atlasnow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlasnow}
+      POSTGRES_DB: ${POSTGRES_DB:-atlasnow}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - max_connections=50
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - checkpoint_completion_target=0.9
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atlasnow} -d ${POSTGRES_DB:-atlasnow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  waha:
+    image: devlikeapro/waha:latest
+    restart: unless-stopped
+    # WEBJS = one Chromium per session. 31 sessions OOMed this 8GB VPS and took down login.
+    mem_limit: 2g
+    cpus: "1.2"
+    pids_limit: 400
+    logging: *default-logging
+    environment:
+      WHATSAPP_API_KEY: ${WAHA_API_KEY:-atlasnow-waha}
+      WAHA_WORKER_RESTART_SESSIONS: "False"
+      WHATSAPP_RESTART_ALL_SESSIONS: "False"
+      WAHA_AUTO_START_DELAY_SECONDS: "8"
+      WAHA_PRINT_QR: "False"
+    volumes:
+      - waha_sessions:/app/.sessions
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  atlas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 1536m
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      waha:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      NODE_OPTIONS: --max-old-space-size=1024
+      DATABASE_URL: postgresql://${POSTGRES_USER:-atlasnow}:${POSTGRES_PASSWORD:-atlasnow}@postgres:5432/${POSTGRES_DB:-atlasnow}?schema=public
+      AUTH_SECRET: ${AUTH_SECRET:-atlasnow-dev-secret-change-me}
+      APP_BASE_URL: ${APP_BASE_URL:-https://atlasnow.co}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://atlasnow.co/api/google/oauth/callback}
+      META_REDIRECT_URI: ${META_REDIRECT_URI:-https://atlasnow.co/api/meta/oauth/callback}
+      META_LOGIN_CONFIG_ID: ${META_LOGIN_CONFIG_ID:-2295500691270291}
+      META_WHATSAPP_ES_CONFIG_ID: ${META_WHATSAPP_ES_CONFIG_ID:-1401943948578182}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TIKTOK_WEBHOOK_SECRET: ${TIKTOK_WEBHOOK_SECRET:-}
+      TIKTOK_REDIRECT_URI: ${TIKTOK_REDIRECT_URI:-}
+      TIKTOK_GO_MERCHANT_ID: ${TIKTOK_GO_MERCHANT_ID:-}
+      TIKTOK_GO_ACCESS_TOKEN: ${TIKTOK_GO_ACCESS_TOKEN:-}
+      WAHA_BASE_URL: http://waha:3000
+      WAHA_API_KEY: ${WAHA_API_KEY:-atlasnow-waha}
+      WAHA_WEBHOOK_BASE: http://atlas:3000
+      WAHA_MAX_LIVE_SESSIONS: ${WAHA_MAX_LIVE_SESSIONS:-6}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TO: ${SMTP_TO:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    logging: *default-logging
+    depends_on:
+      - atlas
+    profiles: ["prod"]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ATLAS_DOMAIN: ${ATLAS_DOMAIN:-atlasnow.co}
+      CADDY_EMAIL: ${CADDY_EMAIL:-hello@atlasnow.co}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  waha_sessions:
+  caddy_data:
+  caddy_config:

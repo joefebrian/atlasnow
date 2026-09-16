@@ -1,0 +1,673 @@
+market,currency,category,from,to,rate_type,rate,vs_list
+Argentina,IDR,utility,0,100000,List rate,371.19,0.0
+Argentina,IDR,authentication,0,120000,List rate,371.19,0.0
+Argentina,IDR,utility,100001,1000000,Tier rate,352.63,-0.05
+Argentina,IDR,authentication,120001,400000,Tier rate,352.63,-0.05
+Argentina,IDR,utility,1000001,4500000,Tier rate,334.07,-0.1
+Argentina,IDR,authentication,400001,1000000,Tier rate,334.07,-0.1
+Argentina,IDR,utility,4500001,15000000,Tier rate,315.51,-0.15
+Argentina,IDR,authentication,1000001,5000000,Tier rate,315.51,-0.15
+Argentina,IDR,utility,15000001,30000000,Tier rate,296.95,-0.2
+Argentina,IDR,authentication,5000001,10000000,Tier rate,296.95,-0.2
+Argentina,IDR,utility,30000001,,Tier rate,278.39,-0.25
+Argentina,IDR,authentication,10000001,,Tier rate,278.39,-0.25
+Bangladesh,IDR,utility,0,150000,List rate,52.81,0.0
+Bangladesh,IDR,authentication,0,100000,List rate,52.81,0.0
+Bangladesh,IDR,authentication_international,0,100000,List rate,1370.08,0.0
+Bangladesh,IDR,utility,150001,1000000,Tier rate,50.17,-0.05
+Bangladesh,IDR,authentication,100001,300000,Tier rate,50.17,-0.05
+Bangladesh,IDR,authentication_international,100001,300000,Tier rate,1301.58,-0.05
+Bangladesh,IDR,utility,1000001,4000000,Tier rate,47.53,-0.1
+Bangladesh,IDR,authentication,300001,1000000,Tier rate,47.53,-0.1
+Bangladesh,IDR,authentication_international,300001,1000000,Tier rate,1233.07,-0.1
+Bangladesh,IDR,utility,4000001,25000000,Tier rate,44.89,-0.15
+Bangladesh,IDR,authentication,1000001,10000000,Tier rate,44.89,-0.15
+Bangladesh,IDR,authentication_international,1000001,10000000,Tier rate,1164.57,-0.15
+Bangladesh,IDR,utility,25000001,50000000,Tier rate,42.25,-0.2
+Bangladesh,IDR,authentication,10000001,20000000,Tier rate,42.25,-0.2
+Bangladesh,IDR,authentication_international,10000001,20000000,Tier rate,1096.06,-0.2
+Bangladesh,IDR,utility,50000001,,Tier rate,39.61,-0.25
+Bangladesh,IDR,authentication,20000001,,Tier rate,39.61,-0.25
+Bangladesh,IDR,authentication_international,20000001,,Tier rate,1027.56,-0.25
+Brazil,IDR,utility,0,250000,List rate,97.05,0.0
+Brazil,IDR,authentication,0,500000,List rate,97.05,0.0
+Brazil,IDR,utility,250001,2000000,Tier rate,92.2,-0.05
+Brazil,IDR,authentication,500001,3000000,Tier rate,92.2,-0.05
+Brazil,IDR,utility,2000001,17000000,Tier rate,87.35,-0.1
+Brazil,IDR,authentication,3000001,5250000,Tier rate,87.35,-0.1
+Brazil,IDR,utility,17000001,35000000,Tier rate,82.49,-0.15
+Brazil,IDR,authentication,5250001,10000000,Tier rate,82.49,-0.15
+Brazil,IDR,utility,35000001,70000000,Tier rate,77.64,-0.2
+Brazil,IDR,authentication,10000001,20000000,Tier rate,77.64,-0.2
+Brazil,IDR,utility,70000001,,Tier rate,72.79,-0.25
+Brazil,IDR,authentication,20000001,,Tier rate,72.79,-0.25
+Chile,IDR,utility,0,100000,List rate,285.34,0.0
+Chile,IDR,authentication,0,120000,List rate,285.34,0.0
+Chile,IDR,utility,100001,1000000,Tier rate,271.07,-0.05
+Chile,IDR,authentication,120001,400000,Tier rate,271.07,-0.05
+Chile,IDR,utility,1000001,4500000,Tier rate,256.81,-0.1
+Chile,IDR,authentication,400001,1000000,Tier rate,256.81,-0.1
+Chile,IDR,utility,4500001,15000000,Tier rate,242.54,-0.15
+Chile,IDR,authentication,1000001,5000000,Tier rate,242.54,-0.15
+Chile,IDR,utility,15000001,30000000,Tier rate,228.27,-0.2
+Chile,IDR,authentication,5000001,10000000,Tier rate,228.27,-0.2
+Chile,IDR,utility,30000001,,Tier rate,214.01,-0.25
+Chile,IDR,authentication,10000001,,Tier rate,214.01,-0.25
+Colombia,IDR,utility,0,100000,List rate,11.4,0.0
+Colombia,IDR,authentication,0,120000,List rate,11.4,0.0
+Colombia,IDR,utility,100001,1000000,Tier rate,10.83,-0.05
+Colombia,IDR,authentication,120001,400000,Tier rate,10.83,-0.05
+Colombia,IDR,utility,1000001,4500000,Tier rate,10.26,-0.1
+Colombia,IDR,authentication,400001,1000000,Tier rate,10.26,-0.1
+Colombia,IDR,utility,4500001,15000000,Tier rate,9.69,-0.15
+Colombia,IDR,authentication,1000001,5000000,Tier rate,9.69,-0.15
+Colombia,IDR,utility,15000001,30000000,Tier rate,9.12,-0.2
+Colombia,IDR,authentication,5000001,10000000,Tier rate,9.12,-0.2
+Colombia,IDR,utility,30000001,,Tier rate,8.55,-0.25
+Colombia,IDR,authentication,10000001,,Tier rate,8.55,-0.25
+Egypt,IDR,utility,0,100000,List rate,51.38,0.0
+Egypt,IDR,authentication,0,300000,List rate,51.38,0.0
+Egypt,IDR,authentication_international,0,300000,List rate,928.22,0.0
+Egypt,IDR,utility,100001,1000000,Tier rate,48.81,-0.05
+Egypt,IDR,authentication,300001,2000000,Tier rate,48.81,-0.05
+Egypt,IDR,authentication_international,300001,2000000,Tier rate,881.81,-0.05
+Egypt,IDR,utility,1000001,4500000,Tier rate,46.24,-0.1
+Egypt,IDR,authentication,2000001,10000000,Tier rate,46.24,-0.1
+Egypt,IDR,authentication_international,2000001,10000000,Tier rate,835.4,-0.1
+Egypt,IDR,utility,4500001,40000000,Tier rate,43.67,-0.15
+Egypt,IDR,authentication,10000001,20000000,Tier rate,43.67,-0.15
+Egypt,IDR,authentication_international,10000001,20000000,Tier rate,788.99,-0.15
+Egypt,IDR,utility,40000001,80000000,Tier rate,41.1,-0.2
+Egypt,IDR,authentication,20000001,40000000,Tier rate,41.1,-0.2
+Egypt,IDR,authentication_international,20000001,40000000,Tier rate,742.58,-0.2
+Egypt,IDR,utility,80000001,,Tier rate,38.54,-0.25
+Egypt,IDR,authentication,40000001,,Tier rate,38.54,-0.25
+Egypt,IDR,authentication_international,40000001,,Tier rate,696.17,-0.25
+France,IDR,utility,0,100000,List rate,428.27,0.0
+France,IDR,authentication,0,300000,List rate,428.27,0.0
+France,IDR,utility,100001,1000000,Tier rate,406.86,-0.05
+France,IDR,authentication,300001,2000000,Tier rate,406.86,-0.05
+France,IDR,utility,1000001,4500000,Tier rate,385.44,-0.1
+France,IDR,authentication,2000001,10000000,Tier rate,385.44,-0.1
+France,IDR,utility,4500001,40000000,Tier rate,364.03,-0.15
+France,IDR,authentication,10000001,20000000,Tier rate,364.03,-0.15
+France,IDR,utility,40000001,80000000,Tier rate,342.62,-0.2
+France,IDR,authentication,20000001,40000000,Tier rate,342.62,-0.2
+France,IDR,utility,80000001,,Tier rate,321.2,-0.25
+France,IDR,authentication,40000001,,Tier rate,321.2,-0.25
+Germany,IDR,utility,0,100000,List rate,785.17,0.0
+Germany,IDR,authentication,0,300000,List rate,785.17,0.0
+Germany,IDR,utility,100001,1000000,Tier rate,745.91,-0.05
+Germany,IDR,authentication,300001,2000000,Tier rate,745.91,-0.05
+Germany,IDR,utility,1000001,4500000,Tier rate,706.65,-0.1
+Germany,IDR,authentication,2000001,10000000,Tier rate,706.65,-0.1
+Germany,IDR,utility,4500001,40000000,Tier rate,667.39,-0.15
+Germany,IDR,authentication,10000001,20000000,Tier rate,667.39,-0.15
+Germany,IDR,utility,40000001,80000000,Tier rate,628.14,-0.2
+Germany,IDR,authentication,20000001,40000000,Tier rate,628.14,-0.2
+Germany,IDR,utility,80000001,,Tier rate,588.88,-0.25
+Germany,IDR,authentication,40000001,,Tier rate,588.88,-0.25
+Hong Kong,IDR,utility,0,150000,List rate,371.06,0.0
+Hong Kong,IDR,authentication,0,100000,List rate,371.06,0.0
+Hong Kong,IDR,utility,150001,1000000,Tier rate,352.51,-0.05
+Hong Kong,IDR,authentication,100001,300000,Tier rate,352.51,-0.05
+Hong Kong,IDR,utility,1000001,4000000,Tier rate,333.95,-0.1
+Hong Kong,IDR,authentication,300001,1000000,Tier rate,333.95,-0.1
+Hong Kong,IDR,utility,4000001,25000000,Tier rate,315.4,-0.15
+Hong Kong,IDR,authentication,1000001,10000000,Tier rate,315.4,-0.15
+Hong Kong,IDR,utility,25000001,50000000,Tier rate,296.85,-0.2
+Hong Kong,IDR,authentication,10000001,20000000,Tier rate,296.85,-0.2
+Hong Kong,IDR,utility,50000001,,Tier rate,278.3,-0.25
+Hong Kong,IDR,authentication,20000001,,Tier rate,278.3,-0.25
+Hungary,IDR,utility,0,100000,List rate,498.17,0.0
+Hungary,IDR,authentication,0,300000,List rate,498.17,0.0
+Hungary,IDR,utility,100001,1000000,Tier rate,473.26,-0.05
+Hungary,IDR,authentication,300001,2000000,Tier rate,473.26,-0.05
+Hungary,IDR,utility,1000001,4500000,Tier rate,448.35,-0.1
+Hungary,IDR,authentication,2000001,10000000,Tier rate,448.35,-0.1
+Hungary,IDR,utility,4500001,40000000,Tier rate,423.44,-0.15
+Hungary,IDR,authentication,10000001,20000000,Tier rate,423.44,-0.15
+Hungary,IDR,utility,40000001,80000000,Tier rate,398.54,-0.2
+Hungary,IDR,authentication,20000001,40000000,Tier rate,398.54,-0.2
+Hungary,IDR,utility,80000001,,Tier rate,373.63,-0.25
+Hungary,IDR,authentication,40000001,,Tier rate,373.63,-0.25
+India,IDR,utility,0,25000000,List rate,19.97,0.0
+India,IDR,authentication,0,750000,List rate,19.97,0.0
+India,IDR,authentication_international,0,750000,List rate,433.68,0.0
+India,IDR,utility,25000001,50000000,Tier rate,18.77,-0.06
+India,IDR,authentication,750001,15000000,Tier rate,18.77,-0.06
+India,IDR,authentication_international,750001,15000000,Tier rate,407.66,-0.06
+India,IDR,utility,50000001,100000000,Tier rate,17.57,-0.12
+India,IDR,authentication,15000001,20000000,Tier rate,17.57,-0.12
+India,IDR,authentication_international,15000001,20000000,Tier rate,381.64,-0.12
+India,IDR,utility,100000001,200000000,Tier rate,16.38,-0.18
+India,IDR,authentication,20000001,50000000,Tier rate,16.38,-0.18
+India,IDR,authentication_international,20000001,50000000,Tier rate,355.62,-0.18
+India,IDR,utility,200000001,300000000,Tier rate,15.18,-0.24
+India,IDR,authentication,50000001,100000000,Tier rate,15.18,-0.24
+India,IDR,authentication_international,50000001,100000000,Tier rate,329.6,-0.24
+India,IDR,utility,300000001,,Tier rate,13.98,-0.3
+India,IDR,authentication,100000001,,Tier rate,13.98,-0.3
+India,IDR,authentication_international,100000001,,Tier rate,303.58,-0.3
+Indonesia,IDR,utility,0,750000,List rate,356.65,0.0
+Indonesia,IDR,authentication,0,750000,List rate,356.65,0.0
+Indonesia,IDR,authentication_international,0,750000,List rate,1940.13,0.0
+Indonesia,IDR,utility,750001,4000000,Tier rate,338.82,-0.05
+Indonesia,IDR,authentication,750001,2000000,Tier rate,338.82,-0.05
+Indonesia,IDR,authentication_international,750001,2000000,Tier rate,1843.12,-0.05
+Indonesia,IDR,utility,4000001,25000000,Tier rate,320.99,-0.1
+Indonesia,IDR,authentication,2000001,6000000,Tier rate,320.99,-0.1
+Indonesia,IDR,authentication_international,2000001,6000000,Tier rate,1746.12,-0.1
+Indonesia,IDR,utility,25000001,75000000,Tier rate,303.15,-0.15
+Indonesia,IDR,authentication,6000001,30000000,Tier rate,303.15,-0.15
+Indonesia,IDR,authentication_international,6000001,30000000,Tier rate,1649.11,-0.15
+Indonesia,IDR,utility,75000001,150000000,Tier rate,285.32,-0.2
+Indonesia,IDR,authentication,30000001,60000000,Tier rate,285.32,-0.2
+Indonesia,IDR,authentication_international,30000001,60000000,Tier rate,1552.1,-0.2
+Indonesia,IDR,utility,150000001,,Tier rate,267.49,-0.25
+Indonesia,IDR,authentication,60000001,,Tier rate,267.49,-0.25
+Indonesia,IDR,authentication_international,60000001,,Tier rate,1455.1,-0.25
+Iraq,IDR,utility,0,100000,List rate,112.67,0.0
+Iraq,IDR,authentication,0,300000,List rate,112.67,0.0
+Iraq,IDR,authentication_international,0,300000,List rate,1825.48,0.0
+Iraq,IDR,utility,100001,1000000,Tier rate,107.04,-0.05
+Iraq,IDR,authentication,300001,2000000,Tier rate,107.04,-0.05
+Iraq,IDR,authentication_international,300001,2000000,Tier rate,1734.21,-0.05
+Iraq,IDR,utility,1000001,4500000,Tier rate,101.4,-0.1
+Iraq,IDR,authentication,2000001,10000000,Tier rate,101.4,-0.1
+Iraq,IDR,authentication_international,2000001,10000000,Tier rate,1642.93,-0.1
+Iraq,IDR,utility,4500001,40000000,Tier rate,95.77,-0.15
+Iraq,IDR,authentication,10000001,20000000,Tier rate,95.77,-0.15
+Iraq,IDR,authentication_international,10000001,20000000,Tier rate,1551.66,-0.15
+Iraq,IDR,utility,40000001,80000000,Tier rate,90.14,-0.2
+Iraq,IDR,authentication,20000001,40000000,Tier rate,90.14,-0.2
+Iraq,IDR,authentication_international,20000001,40000000,Tier rate,1460.38,-0.2
+Iraq,IDR,utility,80000001,,Tier rate,84.5,-0.25
+Iraq,IDR,authentication,40000001,,Tier rate,84.5,-0.25
+Iraq,IDR,authentication_international,40000001,,Tier rate,1369.11,-0.25
+Israel,IDR,utility,0,100000,List rate,75.64,0.0
+Israel,IDR,authentication,0,300000,List rate,75.64,0.0
+Israel,IDR,utility,100001,1000000,Tier rate,71.86,-0.05
+Israel,IDR,authentication,300001,2000000,Tier rate,71.86,-0.05
+Israel,IDR,utility,1000001,4500000,Tier rate,68.08,-0.1
+Israel,IDR,authentication,2000001,10000000,Tier rate,68.08,-0.1
+Israel,IDR,utility,4500001,40000000,Tier rate,64.29,-0.15
+Israel,IDR,authentication,10000001,20000000,Tier rate,64.29,-0.15
+Israel,IDR,utility,40000001,80000000,Tier rate,60.51,-0.2
+Israel,IDR,authentication,20000001,40000000,Tier rate,60.51,-0.2
+Israel,IDR,utility,80000001,,Tier rate,56.73,-0.25
+Israel,IDR,authentication,40000001,,Tier rate,56.73,-0.25
+Italy,IDR,utility,0,100000,List rate,427.89,0.0
+Italy,IDR,authentication,0,300000,List rate,427.89,0.0
+Italy,IDR,utility,100001,1000000,Tier rate,406.5,-0.05
+Italy,IDR,authentication,300001,2000000,Tier rate,406.5,-0.05
+Italy,IDR,utility,1000001,4500000,Tier rate,385.1,-0.1
+Italy,IDR,authentication,2000001,10000000,Tier rate,385.1,-0.1
+Italy,IDR,utility,4500001,40000000,Tier rate,363.71,-0.15
+Italy,IDR,authentication,10000001,20000000,Tier rate,363.71,-0.15
+Italy,IDR,utility,40000001,80000000,Tier rate,342.31,-0.2
+Italy,IDR,authentication,20000001,40000000,Tier rate,342.31,-0.2
+Italy,IDR,utility,80000001,,Tier rate,320.92,-0.25
+Italy,IDR,authentication,40000001,,Tier rate,320.92,-0.25
+Kazakhstan,IDR,utility,0,80000,List rate,256.77,0.0
+Kazakhstan,IDR,authentication,0,100000,List rate,256.77,0.0
+Kazakhstan,IDR,authentication_international,0,100000,List rate,2282.39,0.0
+Kazakhstan,IDR,utility,80001,750000,Tier rate,243.93,-0.05
+Kazakhstan,IDR,authentication,100001,500000,Tier rate,243.93,-0.05
+Kazakhstan,IDR,authentication_international,100001,500000,Tier rate,2168.27,-0.05
+Kazakhstan,IDR,utility,750001,2250000,Tier rate,231.09,-0.1
+Kazakhstan,IDR,authentication,500001,2000000,Tier rate,231.09,-0.1
+Kazakhstan,IDR,authentication_international,500001,2000000,Tier rate,2054.15,-0.1
+Kazakhstan,IDR,utility,2250001,3000000,Tier rate,218.25,-0.15
+Kazakhstan,IDR,authentication,2000001,5000000,Tier rate,218.25,-0.15
+Kazakhstan,IDR,authentication_international,2000001,5000000,Tier rate,1940.03,-0.15
+Kazakhstan,IDR,utility,3000001,6000000,Tier rate,205.42,-0.2
+Kazakhstan,IDR,authentication,5000001,10000000,Tier rate,205.42,-0.2
+Kazakhstan,IDR,authentication_international,5000001,10000000,Tier rate,1825.91,-0.2
+Kazakhstan,IDR,utility,6000001,,Tier rate,192.58,-0.25
+Kazakhstan,IDR,authentication,10000001,,Tier rate,192.58,-0.25
+Kazakhstan,IDR,authentication_international,10000001,,Tier rate,1711.79,-0.25
+Kuwait,IDR,utility,0,100000,List rate,627.51,0.0
+Kuwait,IDR,authentication,0,300000,List rate,627.51,0.0
+Kuwait,IDR,authentication_international,0,300000,List rate,1711.38,0.0
+Kuwait,IDR,utility,100001,1000000,Tier rate,596.13,-0.05
+Kuwait,IDR,authentication,300001,2000000,Tier rate,596.13,-0.05
+Kuwait,IDR,authentication_international,300001,2000000,Tier rate,1625.81,-0.05
+Kuwait,IDR,utility,1000001,4500000,Tier rate,564.76,-0.1
+Kuwait,IDR,authentication,2000001,10000000,Tier rate,564.76,-0.1
+Kuwait,IDR,authentication_international,2000001,10000000,Tier rate,1540.24,-0.1
+Kuwait,IDR,utility,4500001,40000000,Tier rate,533.38,-0.15
+Kuwait,IDR,authentication,10000001,20000000,Tier rate,533.38,-0.15
+Kuwait,IDR,authentication_international,10000001,20000000,Tier rate,1454.67,-0.15
+Kuwait,IDR,utility,40000001,80000000,Tier rate,502.01,-0.2
+Kuwait,IDR,authentication,20000001,40000000,Tier rate,502.01,-0.2
+Kuwait,IDR,authentication_international,20000001,40000000,Tier rate,1369.1,-0.2
+Kuwait,IDR,utility,80000001,,Tier rate,470.63,-0.25
+Kuwait,IDR,authentication,40000001,,Tier rate,470.63,-0.25
+Kuwait,IDR,authentication_international,40000001,,Tier rate,1283.54,-0.25
+Malaysia,IDR,utility,0,150000,List rate,199.82,0.0
+Malaysia,IDR,authentication,0,100000,List rate,199.82,0.0
+Malaysia,IDR,authentication_international,0,100000,List rate,596.63,0.0
+Malaysia,IDR,utility,150001,1000000,Tier rate,189.83,-0.05
+Malaysia,IDR,authentication,100001,300000,Tier rate,189.83,-0.05
+Malaysia,IDR,authentication_international,100001,300000,Tier rate,566.8,-0.05
+Malaysia,IDR,utility,1000001,4000000,Tier rate,179.84,-0.1
+Malaysia,IDR,authentication,300001,1000000,Tier rate,179.84,-0.1
+Malaysia,IDR,authentication_international,300001,1000000,Tier rate,536.97,-0.1
+Malaysia,IDR,utility,4000001,25000000,Tier rate,169.85,-0.15
+Malaysia,IDR,authentication,1000001,10000000,Tier rate,169.85,-0.15
+Malaysia,IDR,authentication_international,1000001,10000000,Tier rate,507.14,-0.15
+Malaysia,IDR,utility,25000001,50000000,Tier rate,159.86,-0.2
+Malaysia,IDR,authentication,10000001,20000000,Tier rate,159.86,-0.2
+Malaysia,IDR,authentication_international,10000001,20000000,Tier rate,477.3,-0.2
+Malaysia,IDR,utility,50000001,,Tier rate,149.87,-0.25
+Malaysia,IDR,authentication,20000001,,Tier rate,149.87,-0.25
+Malaysia,IDR,authentication_international,20000001,,Tier rate,447.47,-0.25
+Mexico,IDR,utility,0,1000000,List rate,121.24,0.0
+Mexico,IDR,authentication,0,250000,List rate,121.24,0.0
+Mexico,IDR,utility,1000001,5000000,Tier rate,115.18,-0.05
+Mexico,IDR,authentication,250001,1000000,Tier rate,115.18,-0.05
+Mexico,IDR,utility,5000001,10000000,Tier rate,109.12,-0.1
+Mexico,IDR,authentication,1000001,3000000,Tier rate,109.12,-0.1
+Mexico,IDR,utility,10000001,20000000,Tier rate,103.05,-0.15
+Mexico,IDR,authentication,3000001,5000000,Tier rate,103.05,-0.15
+Mexico,IDR,utility,20000001,40000000,Tier rate,96.99,-0.2
+Mexico,IDR,authentication,5000001,10000000,Tier rate,96.99,-0.2
+Mexico,IDR,utility,40000001,,Tier rate,90.93,-0.25
+Mexico,IDR,authentication,10000001,,Tier rate,90.93,-0.25
+Morocco,IDR,utility,0,100000,List rate,328.1,0.0
+Morocco,IDR,authentication,0,300000,List rate,328.1,0.0
+Morocco,IDR,authentication_international,0,300000,List rate,1156.89,0.0
+Morocco,IDR,utility,100001,1000000,Tier rate,311.7,-0.05
+Morocco,IDR,authentication,300001,2000000,Tier rate,311.7,-0.05
+Morocco,IDR,authentication_international,300001,2000000,Tier rate,1099.05,-0.05
+Morocco,IDR,utility,1000001,4500000,Tier rate,295.29,-0.1
+Morocco,IDR,authentication,2000001,10000000,Tier rate,295.29,-0.1
+Morocco,IDR,authentication_international,2000001,10000000,Tier rate,1041.2,-0.1
+Morocco,IDR,utility,4500001,40000000,Tier rate,278.89,-0.15
+Morocco,IDR,authentication,10000001,20000000,Tier rate,278.89,-0.15
+Morocco,IDR,authentication_international,10000001,20000000,Tier rate,983.36,-0.15
+Morocco,IDR,utility,40000001,80000000,Tier rate,262.48,-0.2
+Morocco,IDR,authentication,20000001,40000000,Tier rate,262.48,-0.2
+Morocco,IDR,authentication_international,20000001,40000000,Tier rate,925.51,-0.2
+Morocco,IDR,utility,80000001,,Tier rate,246.08,-0.25
+Morocco,IDR,authentication,40000001,,Tier rate,246.08,-0.25
+Morocco,IDR,authentication_international,40000001,,Tier rate,867.67,-0.25
+Netherlands,IDR,utility,0,100000,List rate,713.78,0.0
+Netherlands,IDR,authentication,0,300000,List rate,713.78,0.0
+Netherlands,IDR,utility,100001,1000000,Tier rate,678.09,-0.05
+Netherlands,IDR,authentication,300001,2000000,Tier rate,678.09,-0.05
+Netherlands,IDR,utility,1000001,4500000,Tier rate,642.4,-0.1
+Netherlands,IDR,authentication,2000001,10000000,Tier rate,642.4,-0.1
+Netherlands,IDR,utility,4500001,40000000,Tier rate,606.71,-0.15
+Netherlands,IDR,authentication,10000001,20000000,Tier rate,606.71,-0.15
+Netherlands,IDR,utility,40000001,80000000,Tier rate,571.02,-0.2
+Netherlands,IDR,authentication,20000001,40000000,Tier rate,571.02,-0.2
+Netherlands,IDR,utility,80000001,,Tier rate,535.34,-0.25
+Netherlands,IDR,authentication,40000001,,Tier rate,535.34,-0.25
+Nepal,IDR,utility,0,150000,List rate,48.52,0.0
+Nepal,IDR,authentication,0,100000,List rate,48.52,0.0
+Nepal,IDR,authentication_international,0,100000,List rate,1598.43,0.0
+Nepal,IDR,utility,150001,1000000,Tier rate,46.09,-0.05
+Nepal,IDR,authentication,100001,300000,Tier rate,46.09,-0.05
+Nepal,IDR,authentication_international,100001,300000,Tier rate,1518.51,-0.05
+Nepal,IDR,utility,1000001,4000000,Tier rate,43.67,-0.1
+Nepal,IDR,authentication,300001,1000000,Tier rate,43.67,-0.1
+Nepal,IDR,authentication_international,300001,1000000,Tier rate,1438.59,-0.1
+Nepal,IDR,utility,4000001,25000000,Tier rate,41.24,-0.15
+Nepal,IDR,authentication,1000001,10000000,Tier rate,41.24,-0.15
+Nepal,IDR,authentication_international,1000001,10000000,Tier rate,1358.67,-0.15
+Nepal,IDR,utility,25000001,50000000,Tier rate,38.82,-0.2
+Nepal,IDR,authentication,10000001,20000000,Tier rate,38.82,-0.2
+Nepal,IDR,authentication_international,10000001,20000000,Tier rate,1278.74,-0.2
+Nepal,IDR,utility,50000001,,Tier rate,36.39,-0.25
+Nepal,IDR,authentication,20000001,,Tier rate,36.39,-0.25
+Nepal,IDR,authentication_international,20000001,,Tier rate,1198.82,-0.25
+Nigeria,IDR,utility,0,100000,List rate,95.7,0.0
+Nigeria,IDR,authentication,0,300000,List rate,95.7,0.0
+Nigeria,IDR,authentication_international,0,300000,List rate,1071.67,0.0
+Nigeria,IDR,utility,100001,1000000,Tier rate,90.92,-0.05
+Nigeria,IDR,authentication,300001,2000000,Tier rate,90.92,-0.05
+Nigeria,IDR,authentication_international,300001,2000000,Tier rate,1018.09,-0.05
+Nigeria,IDR,utility,1000001,4500000,Tier rate,86.13,-0.1
+Nigeria,IDR,authentication,2000001,10000000,Tier rate,86.13,-0.1
+Nigeria,IDR,authentication_international,2000001,10000000,Tier rate,964.5,-0.1
+Nigeria,IDR,utility,4500001,40000000,Tier rate,81.35,-0.15
+Nigeria,IDR,authentication,10000001,20000000,Tier rate,81.35,-0.15
+Nigeria,IDR,authentication_international,10000001,20000000,Tier rate,910.92,-0.15
+Nigeria,IDR,utility,40000001,80000000,Tier rate,76.56,-0.2
+Nigeria,IDR,authentication,20000001,40000000,Tier rate,76.56,-0.2
+Nigeria,IDR,authentication_international,20000001,40000000,Tier rate,857.34,-0.2
+Nigeria,IDR,utility,80000001,,Tier rate,71.78,-0.25
+Nigeria,IDR,authentication,40000001,,Tier rate,71.78,-0.25
+Nigeria,IDR,authentication_international,40000001,,Tier rate,803.75,-0.25
+Oman,IDR,utility,0,100000,List rate,352.26,0.0
+Oman,IDR,authentication,0,300000,List rate,352.26,0.0
+Oman,IDR,authentication_international,0,300000,List rate,855.69,0.0
+Oman,IDR,utility,100001,1000000,Tier rate,334.65,-0.05
+Oman,IDR,authentication,300001,2000000,Tier rate,334.65,-0.05
+Oman,IDR,authentication_international,300001,2000000,Tier rate,812.91,-0.05
+Oman,IDR,utility,1000001,4500000,Tier rate,317.03,-0.1
+Oman,IDR,authentication,2000001,10000000,Tier rate,317.03,-0.1
+Oman,IDR,authentication_international,2000001,10000000,Tier rate,770.12,-0.1
+Oman,IDR,utility,4500001,40000000,Tier rate,299.42,-0.15
+Oman,IDR,authentication,10000001,20000000,Tier rate,299.42,-0.15
+Oman,IDR,authentication_international,10000001,20000000,Tier rate,727.34,-0.15
+Oman,IDR,utility,40000001,80000000,Tier rate,281.81,-0.2
+Oman,IDR,authentication,20000001,40000000,Tier rate,281.81,-0.2
+Oman,IDR,authentication_international,20000001,40000000,Tier rate,684.55,-0.2
+Oman,IDR,utility,80000001,,Tier rate,264.2,-0.25
+Oman,IDR,authentication,40000001,,Tier rate,264.2,-0.25
+Oman,IDR,authentication_international,40000001,,Tier rate,641.77,-0.25
+Pakistan,IDR,utility,0,150000,List rate,214.17,0.0
+Pakistan,IDR,authentication,0,100000,List rate,214.17,0.0
+Pakistan,IDR,authentication_international,0,100000,List rate,1071.67,0.0
+Pakistan,IDR,utility,150001,1000000,Tier rate,203.46,-0.05
+Pakistan,IDR,authentication,100001,300000,Tier rate,203.46,-0.05
+Pakistan,IDR,authentication_international,100001,300000,Tier rate,1018.09,-0.05
+Pakistan,IDR,utility,1000001,4000000,Tier rate,192.75,-0.1
+Pakistan,IDR,authentication,300001,1000000,Tier rate,192.75,-0.1
+Pakistan,IDR,authentication_international,300001,1000000,Tier rate,964.5,-0.1
+Pakistan,IDR,utility,4000001,25000000,Tier rate,182.04,-0.15
+Pakistan,IDR,authentication,1000001,10000000,Tier rate,182.04,-0.15
+Pakistan,IDR,authentication_international,1000001,10000000,Tier rate,910.92,-0.15
+Pakistan,IDR,utility,25000001,50000000,Tier rate,171.34,-0.2
+Pakistan,IDR,authentication,10000001,20000000,Tier rate,171.34,-0.2
+Pakistan,IDR,authentication_international,10000001,20000000,Tier rate,857.34,-0.2
+Pakistan,IDR,utility,50000001,,Tier rate,160.63,-0.25
+Pakistan,IDR,authentication,20000001,,Tier rate,160.63,-0.25
+Pakistan,IDR,authentication_international,20000001,,Tier rate,803.75,-0.25
+Peru,IDR,utility,0,100000,List rate,428.25,0.0
+Peru,IDR,authentication,0,120000,List rate,428.25,0.0
+Peru,IDR,utility,100001,1000000,Tier rate,406.84,-0.05
+Peru,IDR,authentication,120001,400000,Tier rate,406.84,-0.05
+Peru,IDR,utility,1000001,4500000,Tier rate,385.43,-0.1
+Peru,IDR,authentication,400001,1000000,Tier rate,385.43,-0.1
+Peru,IDR,utility,4500001,15000000,Tier rate,364.01,-0.15
+Peru,IDR,authentication,1000001,5000000,Tier rate,364.01,-0.15
+Peru,IDR,utility,15000001,30000000,Tier rate,342.6,-0.2
+Peru,IDR,authentication,5000001,10000000,Tier rate,342.6,-0.2
+Peru,IDR,utility,30000001,,Tier rate,321.19,-0.25
+Peru,IDR,authentication,10000001,,Tier rate,321.19,-0.25
+Poland,IDR,utility,0,100000,List rate,173.65,0.0
+Poland,IDR,authentication,0,300000,List rate,173.65,0.0
+Poland,IDR,utility,100001,1000000,Tier rate,164.97,-0.05
+Poland,IDR,authentication,300001,2000000,Tier rate,164.97,-0.05
+Poland,IDR,utility,1000001,4500000,Tier rate,156.29,-0.1
+Poland,IDR,authentication,2000001,10000000,Tier rate,156.29,-0.1
+Poland,IDR,utility,4500001,40000000,Tier rate,147.6,-0.15
+Poland,IDR,authentication,10000001,20000000,Tier rate,147.6,-0.15
+Poland,IDR,utility,40000001,80000000,Tier rate,138.92,-0.2
+Poland,IDR,authentication,20000001,40000000,Tier rate,138.92,-0.2
+Poland,IDR,utility,80000001,,Tier rate,130.24,-0.25
+Poland,IDR,authentication,40000001,,Tier rate,130.24,-0.25
+Qatar,IDR,utility,0,100000,List rate,171.14,0.0
+Qatar,IDR,authentication,0,300000,List rate,171.14,0.0
+Qatar,IDR,utility,100001,1000000,Tier rate,162.58,-0.05
+Qatar,IDR,authentication,300001,2000000,Tier rate,162.58,-0.05
+Qatar,IDR,utility,1000001,4500000,Tier rate,154.03,-0.1
+Qatar,IDR,authentication,2000001,10000000,Tier rate,154.03,-0.1
+Qatar,IDR,utility,4500001,40000000,Tier rate,145.47,-0.15
+Qatar,IDR,authentication,10000001,20000000,Tier rate,145.47,-0.15
+Qatar,IDR,utility,40000001,80000000,Tier rate,136.91,-0.2
+Qatar,IDR,authentication,20000001,40000000,Tier rate,136.91,-0.2
+Qatar,IDR,utility,80000001,,Tier rate,128.36,-0.25
+Qatar,IDR,authentication,40000001,,Tier rate,128.36,-0.25
+Romania,IDR,utility,0,100000,List rate,412.77,0.0
+Romania,IDR,authentication,0,300000,List rate,412.77,0.0
+Romania,IDR,utility,100001,1000000,Tier rate,392.13,-0.05
+Romania,IDR,authentication,300001,2000000,Tier rate,392.13,-0.05
+Romania,IDR,utility,1000001,4500000,Tier rate,371.49,-0.1
+Romania,IDR,authentication,2000001,10000000,Tier rate,371.49,-0.1
+Romania,IDR,utility,4500001,40000000,Tier rate,350.85,-0.15
+Romania,IDR,authentication,10000001,20000000,Tier rate,350.85,-0.15
+Romania,IDR,utility,40000001,80000000,Tier rate,330.22,-0.2
+Romania,IDR,authentication,20000001,40000000,Tier rate,330.22,-0.2
+Romania,IDR,utility,80000001,,Tier rate,309.58,-0.25
+Romania,IDR,authentication,40000001,,Tier rate,309.58,-0.25
+Russia,IDR,utility,0,100000,List rate,570.75,0.0
+Russia,IDR,authentication,0,300000,List rate,570.75,0.0
+Russia,IDR,utility,100001,1000000,Tier rate,542.21,-0.05
+Russia,IDR,authentication,300001,2000000,Tier rate,542.21,-0.05
+Russia,IDR,utility,1000001,4500000,Tier rate,513.68,-0.1
+Russia,IDR,authentication,2000001,10000000,Tier rate,513.68,-0.1
+Russia,IDR,utility,4500001,40000000,Tier rate,485.14,-0.15
+Russia,IDR,authentication,10000001,20000000,Tier rate,485.14,-0.15
+Russia,IDR,utility,40000001,80000000,Tier rate,456.6,-0.2
+Russia,IDR,authentication,20000001,40000000,Tier rate,456.6,-0.2
+Russia,IDR,utility,80000001,,Tier rate,428.06,-0.25
+Russia,IDR,authentication,40000001,,Tier rate,428.06,-0.25
+Saudi Arabia,IDR,utility,0,100000,List rate,152.54,0.0
+Saudi Arabia,IDR,authentication,0,300000,List rate,152.54,0.0
+Saudi Arabia,IDR,authentication_international,0,300000,List rate,854.24,0.0
+Saudi Arabia,IDR,utility,100001,1000000,Tier rate,144.91,-0.05
+Saudi Arabia,IDR,authentication,300001,2000000,Tier rate,144.91,-0.05
+Saudi Arabia,IDR,authentication_international,300001,2000000,Tier rate,811.53,-0.05
+Saudi Arabia,IDR,utility,1000001,4500000,Tier rate,137.29,-0.1
+Saudi Arabia,IDR,authentication,2000001,10000000,Tier rate,137.29,-0.1
+Saudi Arabia,IDR,authentication_international,2000001,10000000,Tier rate,768.82,-0.1
+Saudi Arabia,IDR,utility,4500001,40000000,Tier rate,129.66,-0.15
+Saudi Arabia,IDR,authentication,10000001,20000000,Tier rate,129.66,-0.15
+Saudi Arabia,IDR,authentication_international,10000001,20000000,Tier rate,726.1,-0.15
+Saudi Arabia,IDR,utility,40000001,80000000,Tier rate,122.03,-0.2
+Saudi Arabia,IDR,authentication,20000001,40000000,Tier rate,122.03,-0.2
+Saudi Arabia,IDR,authentication_international,20000001,40000000,Tier rate,683.39,-0.2
+Saudi Arabia,IDR,utility,80000001,,Tier rate,114.41,-0.25
+Saudi Arabia,IDR,authentication,40000001,,Tier rate,114.41,-0.25
+Saudi Arabia,IDR,authentication_international,40000001,,Tier rate,640.68,-0.25
+Singapore,IDR,utility,0,150000,List rate,228.35,0.0
+Singapore,IDR,authentication,0,100000,List rate,228.35,0.0
+Singapore,IDR,utility,150001,1000000,Tier rate,216.93,-0.05
+Singapore,IDR,authentication,100001,300000,Tier rate,216.93,-0.05
+Singapore,IDR,utility,1000001,4000000,Tier rate,205.52,-0.1
+Singapore,IDR,authentication,300001,1000000,Tier rate,205.52,-0.1
+Singapore,IDR,utility,4000001,25000000,Tier rate,194.1,-0.15
+Singapore,IDR,authentication,1000001,10000000,Tier rate,194.1,-0.15
+Singapore,IDR,utility,25000001,50000000,Tier rate,182.68,-0.2
+Singapore,IDR,authentication,10000001,20000000,Tier rate,182.68,-0.2
+Singapore,IDR,utility,50000001,,Tier rate,171.26,-0.25
+Singapore,IDR,authentication,20000001,,Tier rate,171.26,-0.25
+South Africa,IDR,utility,0,100000,List rate,135.8,0.0
+South Africa,IDR,authentication,0,300000,List rate,135.8,0.0
+South Africa,IDR,authentication_international,0,300000,List rate,285.89,0.0
+South Africa,IDR,utility,100001,1000000,Tier rate,129.01,-0.05
+South Africa,IDR,authentication,300001,2000000,Tier rate,129.01,-0.05
+South Africa,IDR,authentication_international,300001,2000000,Tier rate,271.6,-0.05
+South Africa,IDR,utility,1000001,4500000,Tier rate,122.22,-0.1
+South Africa,IDR,authentication,2000001,10000000,Tier rate,122.22,-0.1
+South Africa,IDR,authentication_international,2000001,10000000,Tier rate,257.3,-0.1
+South Africa,IDR,utility,4500001,40000000,Tier rate,115.43,-0.15
+South Africa,IDR,authentication,10000001,20000000,Tier rate,115.43,-0.15
+South Africa,IDR,authentication_international,10000001,20000000,Tier rate,243.01,-0.15
+South Africa,IDR,utility,40000001,80000000,Tier rate,108.64,-0.2
+South Africa,IDR,authentication,20000001,40000000,Tier rate,108.64,-0.2
+South Africa,IDR,authentication_international,20000001,40000000,Tier rate,228.71,-0.2
+South Africa,IDR,utility,80000001,,Tier rate,101.85,-0.25
+South Africa,IDR,authentication,40000001,,Tier rate,101.85,-0.25
+South Africa,IDR,authentication_international,40000001,,Tier rate,214.42,-0.25
+Spain,IDR,utility,0,100000,List rate,285.24,0.0
+Spain,IDR,authentication,0,300000,List rate,285.24,0.0
+Spain,IDR,utility,100001,1000000,Tier rate,270.98,-0.05
+Spain,IDR,authentication,300001,2000000,Tier rate,270.98,-0.05
+Spain,IDR,utility,1000001,4500000,Tier rate,256.72,-0.1
+Spain,IDR,authentication,2000001,10000000,Tier rate,256.72,-0.1
+Spain,IDR,utility,4500001,40000000,Tier rate,242.45,-0.15
+Spain,IDR,authentication,10000001,20000000,Tier rate,242.45,-0.15
+Spain,IDR,utility,40000001,80000000,Tier rate,228.19,-0.2
+Spain,IDR,authentication,20000001,40000000,Tier rate,228.19,-0.2
+Spain,IDR,utility,80000001,,Tier rate,213.93,-0.25
+Spain,IDR,authentication,40000001,,Tier rate,213.93,-0.25
+Sri Lanka,IDR,utility,0,150000,List rate,28.54,0.0
+Sri Lanka,IDR,authentication,0,100000,List rate,28.54,0.0
+Sri Lanka,IDR,authentication_international,0,100000,List rate,2055.12,0.0
+Sri Lanka,IDR,utility,150001,1000000,Tier rate,27.11,-0.05
+Sri Lanka,IDR,authentication,100001,300000,Tier rate,27.11,-0.05
+Sri Lanka,IDR,authentication_international,100001,300000,Tier rate,1952.36,-0.05
+Sri Lanka,IDR,utility,1000001,4000000,Tier rate,25.69,-0.1
+Sri Lanka,IDR,authentication,300001,1000000,Tier rate,25.69,-0.1
+Sri Lanka,IDR,authentication_international,300001,1000000,Tier rate,1849.61,-0.1
+Sri Lanka,IDR,utility,4000001,25000000,Tier rate,24.26,-0.15
+Sri Lanka,IDR,authentication,1000001,10000000,Tier rate,24.26,-0.15
+Sri Lanka,IDR,authentication_international,1000001,10000000,Tier rate,1746.85,-0.15
+Sri Lanka,IDR,utility,25000001,50000000,Tier rate,22.83,-0.2
+Sri Lanka,IDR,authentication,10000001,20000000,Tier rate,22.83,-0.2
+Sri Lanka,IDR,authentication_international,10000001,20000000,Tier rate,1644.1,-0.2
+Sri Lanka,IDR,utility,50000001,,Tier rate,21.41,-0.25
+Sri Lanka,IDR,authentication,20000001,,Tier rate,21.41,-0.25
+Sri Lanka,IDR,authentication_international,20000001,,Tier rate,1541.34,-0.25
+Turkey,IDR,utility,0,100000,List rate,12.84,0.0
+Turkey,IDR,authentication,0,300000,List rate,12.84,0.0
+Turkey,IDR,utility,100001,1000000,Tier rate,12.2,-0.05
+Turkey,IDR,authentication,300001,2000000,Tier rate,12.2,-0.05
+Turkey,IDR,utility,1000001,4500000,Tier rate,11.56,-0.1
+Turkey,IDR,authentication,2000001,10000000,Tier rate,11.56,-0.1
+Turkey,IDR,utility,4500001,40000000,Tier rate,10.91,-0.15
+Turkey,IDR,authentication,10000001,20000000,Tier rate,10.91,-0.15
+Turkey,IDR,utility,40000001,80000000,Tier rate,10.27,-0.2
+Turkey,IDR,authentication,20000001,40000000,Tier rate,10.27,-0.2
+Turkey,IDR,utility,80000001,,Tier rate,9.63,-0.25
+Turkey,IDR,authentication,40000001,,Tier rate,9.63,-0.25
+Ukraine,IDR,utility,0,100000,List rate,424.16,0.0
+Ukraine,IDR,authentication,0,300000,List rate,424.16,0.0
+Ukraine,IDR,authentication_international,0,300000,List rate,1061.82,0.0
+Ukraine,IDR,utility,100001,1000000,Tier rate,402.95,-0.05
+Ukraine,IDR,authentication,300001,2000000,Tier rate,402.95,-0.05
+Ukraine,IDR,authentication_international,300001,2000000,Tier rate,1008.73,-0.05
+Ukraine,IDR,utility,1000001,4500000,Tier rate,381.74,-0.1
+Ukraine,IDR,authentication,2000001,10000000,Tier rate,381.74,-0.1
+Ukraine,IDR,authentication_international,2000001,10000000,Tier rate,955.64,-0.1
+Ukraine,IDR,utility,4500001,40000000,Tier rate,360.54,-0.15
+Ukraine,IDR,authentication,10000001,20000000,Tier rate,360.54,-0.15
+Ukraine,IDR,authentication_international,10000001,20000000,Tier rate,902.55,-0.15
+Ukraine,IDR,utility,40000001,80000000,Tier rate,339.33,-0.2
+Ukraine,IDR,authentication,20000001,40000000,Tier rate,339.33,-0.2
+Ukraine,IDR,authentication_international,20000001,40000000,Tier rate,849.46,-0.2
+Ukraine,IDR,utility,80000001,,Tier rate,318.12,-0.25
+Ukraine,IDR,authentication,40000001,,Tier rate,318.12,-0.25
+Ukraine,IDR,authentication_international,40000001,,Tier rate,796.37,-0.25
+United Arab Emirates,IDR,utility,0,100000,List rate,224.11,0.0
+United Arab Emirates,IDR,authentication,0,300000,List rate,224.11,0.0
+United Arab Emirates,IDR,authentication_international,0,300000,List rate,727.12,0.0
+United Arab Emirates,IDR,utility,100001,1000000,Tier rate,212.9,-0.05
+United Arab Emirates,IDR,authentication,300001,2000000,Tier rate,212.9,-0.05
+United Arab Emirates,IDR,authentication_international,300001,2000000,Tier rate,690.76,-0.05
+United Arab Emirates,IDR,utility,1000001,4500000,Tier rate,201.7,-0.1
+United Arab Emirates,IDR,authentication,2000001,10000000,Tier rate,201.7,-0.1
+United Arab Emirates,IDR,authentication_international,2000001,10000000,Tier rate,654.41,-0.1
+United Arab Emirates,IDR,utility,4500001,40000000,Tier rate,190.49,-0.15
+United Arab Emirates,IDR,authentication,10000001,20000000,Tier rate,190.49,-0.15
+United Arab Emirates,IDR,authentication_international,10000001,20000000,Tier rate,618.05,-0.15
+United Arab Emirates,IDR,utility,40000001,80000000,Tier rate,179.29,-0.2
+United Arab Emirates,IDR,authentication,20000001,40000000,Tier rate,179.29,-0.2
+United Arab Emirates,IDR,authentication_international,20000001,40000000,Tier rate,581.7,-0.2
+United Arab Emirates,IDR,utility,80000001,,Tier rate,168.08,-0.25
+United Arab Emirates,IDR,authentication,40000001,,Tier rate,168.08,-0.25
+United Arab Emirates,IDR,authentication_international,40000001,,Tier rate,545.34,-0.25
+United Kingdom,IDR,utility,0,100000,List rate,313.93,0.0
+United Kingdom,IDR,authentication,0,300000,List rate,313.93,0.0
+United Kingdom,IDR,utility,100001,1000000,Tier rate,298.23,-0.05
+United Kingdom,IDR,authentication,300001,2000000,Tier rate,298.23,-0.05
+United Kingdom,IDR,utility,1000001,4500000,Tier rate,282.54,-0.1
+United Kingdom,IDR,authentication,2000001,10000000,Tier rate,282.54,-0.1
+United Kingdom,IDR,utility,4500001,40000000,Tier rate,266.84,-0.15
+United Kingdom,IDR,authentication,10000001,20000000,Tier rate,266.84,-0.15
+United Kingdom,IDR,utility,40000001,80000000,Tier rate,251.14,-0.2
+United Kingdom,IDR,authentication,20000001,40000000,Tier rate,251.14,-0.2
+United Kingdom,IDR,utility,80000001,,Tier rate,235.45,-0.25
+United Kingdom,IDR,authentication,40000001,,Tier rate,235.45,-0.25
+North America,IDR,utility,0,80000,List rate,48.5,0.0
+North America,IDR,authentication,0,100000,List rate,48.5,0.0
+North America,IDR,utility,80001,750000,Tier rate,46.08,-0.05
+North America,IDR,authentication,100001,500000,Tier rate,46.08,-0.05
+North America,IDR,utility,750001,2250000,Tier rate,43.65,-0.1
+North America,IDR,authentication,500001,2000000,Tier rate,43.65,-0.1
+North America,IDR,utility,2250001,3000000,Tier rate,41.23,-0.15
+North America,IDR,authentication,2000001,5000000,Tier rate,41.23,-0.15
+North America,IDR,utility,3000001,6000000,Tier rate,38.8,-0.2
+North America,IDR,authentication,5000001,10000000,Tier rate,38.8,-0.2
+North America,IDR,utility,6000001,,Tier rate,36.38,-0.25
+North America,IDR,authentication,10000001,,Tier rate,36.38,-0.25
+Rest of Africa,IDR,utility,0,100000,List rate,57.06,0.0
+Rest of Africa,IDR,authentication,0,300000,List rate,57.06,0.0
+Rest of Africa,IDR,utility,100001,1000000,Tier rate,54.21,-0.05
+Rest of Africa,IDR,authentication,300001,2000000,Tier rate,54.21,-0.05
+Rest of Africa,IDR,utility,1000001,4500000,Tier rate,51.35,-0.1
+Rest of Africa,IDR,authentication,2000001,10000000,Tier rate,51.35,-0.1
+Rest of Africa,IDR,utility,4500001,40000000,Tier rate,48.5,-0.15
+Rest of Africa,IDR,authentication,10000001,20000000,Tier rate,48.5,-0.15
+Rest of Africa,IDR,utility,40000001,80000000,Tier rate,45.65,-0.2
+Rest of Africa,IDR,authentication,20000001,40000000,Tier rate,45.65,-0.2
+Rest of Africa,IDR,utility,80000001,,Tier rate,42.8,-0.25
+Rest of Africa,IDR,authentication,40000001,,Tier rate,42.8,-0.25
+Rest of Asia Pacific,IDR,utility,0,150000,List rate,161.27,0.0
+Rest of Asia Pacific,IDR,authentication,0,100000,List rate,161.27,0.0
+Rest of Asia Pacific,IDR,utility,150001,1000000,Tier rate,153.21,-0.05
+Rest of Asia Pacific,IDR,authentication,100001,300000,Tier rate,153.21,-0.05
+Rest of Asia Pacific,IDR,utility,1000001,4000000,Tier rate,145.14,-0.1
+Rest of Asia Pacific,IDR,authentication,300001,1000000,Tier rate,145.14,-0.1
+Rest of Asia Pacific,IDR,utility,4000001,25000000,Tier rate,137.08,-0.15
+Rest of Asia Pacific,IDR,authentication,1000001,10000000,Tier rate,137.08,-0.15
+Rest of Asia Pacific,IDR,utility,25000001,50000000,Tier rate,129.02,-0.2
+Rest of Asia Pacific,IDR,authentication,10000001,20000000,Tier rate,129.02,-0.2
+Rest of Asia Pacific,IDR,utility,50000001,,Tier rate,120.95,-0.25
+Rest of Asia Pacific,IDR,authentication,20000001,,Tier rate,120.95,-0.25
+Rest of Central & Eastern Europe,IDR,utility,0,100000,List rate,301.75,0.0
+Rest of Central & Eastern Europe,IDR,authentication,0,300000,List rate,301.75,0.0
+Rest of Central & Eastern Europe,IDR,utility,100001,1000000,Tier rate,286.66,-0.05
+Rest of Central & Eastern Europe,IDR,authentication,300001,2000000,Tier rate,286.66,-0.05
+Rest of Central & Eastern Europe,IDR,utility,1000001,4500000,Tier rate,271.58,-0.1
+Rest of Central & Eastern Europe,IDR,authentication,2000001,10000000,Tier rate,271.58,-0.1
+Rest of Central & Eastern Europe,IDR,utility,4500001,40000000,Tier rate,256.49,-0.15
+Rest of Central & Eastern Europe,IDR,authentication,10000001,20000000,Tier rate,256.49,-0.15
+Rest of Central & Eastern Europe,IDR,utility,40000001,80000000,Tier rate,241.4,-0.2
+Rest of Central & Eastern Europe,IDR,authentication,20000001,40000000,Tier rate,241.4,-0.2
+Rest of Central & Eastern Europe,IDR,utility,80000001,,Tier rate,226.31,-0.25
+Rest of Central & Eastern Europe,IDR,authentication,40000001,,Tier rate,226.31,-0.25
+Rest of Latin America,IDR,utility,0,100000,List rate,161.18,0.0
+Rest of Latin America,IDR,authentication,0,120000,List rate,161.18,0.0
+Rest of Latin America,IDR,utility,100001,1000000,Tier rate,153.12,-0.05
+Rest of Latin America,IDR,authentication,120001,400000,Tier rate,153.12,-0.05
+Rest of Latin America,IDR,utility,1000001,4500000,Tier rate,145.06,-0.1
+Rest of Latin America,IDR,authentication,400001,1000000,Tier rate,145.06,-0.1
+Rest of Latin America,IDR,utility,4500001,15000000,Tier rate,137.0,-0.15
+Rest of Latin America,IDR,authentication,1000001,5000000,Tier rate,137.0,-0.15
+Rest of Latin America,IDR,utility,15000001,30000000,Tier rate,128.94,-0.2
+Rest of Latin America,IDR,authentication,5000001,10000000,Tier rate,128.94,-0.2
+Rest of Latin America,IDR,utility,30000001,,Tier rate,120.89,-0.25
+Rest of Latin America,IDR,authentication,10000001,,Tier rate,120.89,-0.25
+Rest of Middle East,IDR,utility,0,100000,List rate,129.78,0.0
+Rest of Middle East,IDR,authentication,0,300000,List rate,129.78,0.0
+Rest of Middle East,IDR,utility,100001,1000000,Tier rate,123.29,-0.05
+Rest of Middle East,IDR,authentication,300001,2000000,Tier rate,123.29,-0.05
+Rest of Middle East,IDR,utility,1000001,4500000,Tier rate,116.8,-0.1
+Rest of Middle East,IDR,authentication,2000001,10000000,Tier rate,116.8,-0.1
+Rest of Middle East,IDR,utility,4500001,40000000,Tier rate,110.31,-0.15
+Rest of Middle East,IDR,authentication,10000001,20000000,Tier rate,110.31,-0.15
+Rest of Middle East,IDR,utility,40000001,80000000,Tier rate,103.82,-0.2
+Rest of Middle East,IDR,authentication,20000001,40000000,Tier rate,103.82,-0.2
+Rest of Middle East,IDR,utility,80000001,,Tier rate,97.34,-0.25
+Rest of Middle East,IDR,authentication,40000001,,Tier rate,97.34,-0.25
+Rest of Western Europe,IDR,utility,0,100000,List rate,243.72,0.0
+Rest of Western Europe,IDR,authentication,0,300000,List rate,243.72,0.0
+Rest of Western Europe,IDR,utility,100001,1000000,Tier rate,231.53,-0.05
+Rest of Western Europe,IDR,authentication,300001,2000000,Tier rate,231.53,-0.05
+Rest of Western Europe,IDR,utility,1000001,4500000,Tier rate,219.35,-0.1
+Rest of Western Europe,IDR,authentication,2000001,10000000,Tier rate,219.35,-0.1
+Rest of Western Europe,IDR,utility,4500001,40000000,Tier rate,207.16,-0.15
+Rest of Western Europe,IDR,authentication,10000001,20000000,Tier rate,207.16,-0.15
+Rest of Western Europe,IDR,utility,40000001,80000000,Tier rate,194.98,-0.2
+Rest of Western Europe,IDR,authentication,20000001,40000000,Tier rate,194.98,-0.2
+Rest of Western Europe,IDR,utility,80000001,,Tier rate,182.79,-0.25
+Rest of Western Europe,IDR,authentication,40000001,,Tier rate,182.79,-0.25
+Other,IDR,utility,0,80000,List rate,109.84,0.0
+Other,IDR,authentication,0,100000,List rate,109.84,0.0
+Other,IDR,utility,80001,750000,Tier rate,104.35,-0.05
+Other,IDR,authentication,100001,500000,Tier rate,104.35,-0.05
+Other,IDR,utility,750001,2250000,Tier rate,98.86,-0.1
+Other,IDR,authentication,500001,2000000,Tier rate,98.86,-0.1
+Other,IDR,utility,2250001,3000000,Tier rate,93.36,-0.15
+Other,IDR,authentication,2000001,5000000,Tier rate,93.36,-0.15
+Other,IDR,utility,3000001,6000000,Tier rate,87.87,-0.2
+Other,IDR,authentication,5000001,10000000,Tier rate,87.87,-0.2
+Other,IDR,utility,6000001,,Tier rate,82.38,-0.25
+Other,IDR,authentication,10000001,,Tier rate,82.38,-0.25

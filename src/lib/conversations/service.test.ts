@@ -52,12 +52,12 @@ describe("listConversations / getConversationThread", { concurrency: false }, ()
 
   after(async () => {
     await prisma.auditEvent.deleteMany({
-      where: { OR: [{ actorId }, { objectId: conversationId || undefined }] },
+      where: { OR: [{ actorId }, { tenantId }] },
     });
     await prisma.waMessage.deleteMany({
-      where: { conversation: { sessionId: `${PREFIX}-sess` } },
+      where: { conversation: { tenantId } },
     });
-    await prisma.waConversation.deleteMany({ where: { sessionId: `${PREFIX}-sess` } });
+    await prisma.waConversation.deleteMany({ where: { tenantId } });
     await prisma.waContact.deleteMany({ where: { tenantId } });
     await prisma.sourceMapping.deleteMany({ where: { locationId } });
     await prisma.location.delete({ where: { id: locationId } }).catch(() => {});
@@ -97,6 +97,10 @@ describe("listConversations / getConversationThread", { concurrency: false }, ()
     assert.equal(row.location.name, "Cabang Test");
     assert.equal(row.preview, "halo");
     assert.equal(row.sessionId, `${PREFIX}-sess`);
+    assert.equal(row.provider, "WAHA");
+    assert.equal(row.assetLabel, null);
+    const igOnly = await listConversations({ locationId, provider: "INSTAGRAM" });
+    assert.equal(igOnly.conversations.length, 0);
 
     const missing = await getConversationThread("does-not-exist", actorId);
     assert.equal(missing, null);
@@ -185,5 +189,48 @@ describe("listConversations / getConversationThread", { concurrency: false }, ()
       false
     );
     assert.equal(miss.stats.unreplied, 0);
+  });
+
+  it("surfaces the mapped Facebook Page name as the conversation asset", async () => {
+    const pageId = `${PREFIX}-page`;
+    await prisma.sourceMapping.create({
+      data: {
+        locationId,
+        sourceType: "FACEBOOK",
+        externalId: pageId,
+        externalLabel: "Cafe Demo Page",
+        status: "ACTIVE",
+      },
+    });
+    const contact = await prisma.waContact.create({
+      data: {
+        tenantId,
+        identifier: `fb:${PREFIX}-psid`,
+        identityConfidence: "HIGH",
+        displayName: "Review Customer",
+      },
+    });
+    const now = new Date();
+    const conv = await prisma.waConversation.create({
+      data: {
+        tenantId,
+        locationId,
+        contactId: contact.id,
+        provider: "FACEBOOK",
+        sessionId: pageId,
+        status: "OPEN",
+        firstMessageAt: now,
+        lastMessageAt: now,
+        lastInboundAt: now,
+        lastPreview: "hello from messenger",
+      },
+    });
+    const list = await listConversations({ locationId, provider: "FACEBOOK" });
+    assert.equal(list.conversations.length, 1);
+    assert.equal(list.conversations[0].assetLabel, "Cafe Demo Page");
+    assert.equal(list.conversations[0].sessionId, pageId);
+    const thread = await getConversationThread(conv.id, actorId);
+    assert.ok(thread);
+    assert.equal(thread.conversation.assetLabel, "Cafe Demo Page");
   });
 });

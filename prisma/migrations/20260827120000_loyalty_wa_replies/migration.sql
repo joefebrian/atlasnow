@@ -1,0 +1,1 @@
+ALTER TABLE "LoyaltyProgram" ADD COLUMN IF NOT EXISTS "waRepliesJson" TEXT NOT NULL DEFAULT '{}';
