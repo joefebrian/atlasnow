@@ -1,7 +1,7 @@
-import { randomBytes } from "crypto";
 import { NextResponse } from "next/server";
+import { readSessionToken } from "@/lib/auth";
 import { guardCommerce } from "@/lib/commerce/guard";
-import { buildCommerceAuthUrl, encodeCommerceState } from "@/lib/commerce/meta-oauth";
+import { buildCommerceAuthUrl, commerceSessionKey, issueCommerceState } from "@/lib/commerce/meta-oauth";
 import { resolvedAppBaseUrl } from "@/lib/integrations/service";
 
 export async function GET(request: Request) {
@@ -12,10 +12,10 @@ export async function GET(request: Request) {
   if (guard.ok && guard.session.isAgencyStaff) back.searchParams.set("client", guard.tenantId);
   if (!guard.ok) return NextResponse.redirect(new URL("/login", base));
   try {
-    const state = encodeCommerceState({
+    const state = await issueCommerceState({
       tenantId: guard.tenantId,
       userId: guard.session.userId,
-      nonce: randomBytes(8).toString("hex"),
+      sessionKey: commerceSessionKey(await readSessionToken()),
     });
     const dest = await buildCommerceAuthUrl(state);
     return NextResponse.redirect(dest);

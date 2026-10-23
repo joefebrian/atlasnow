@@ -96,6 +96,7 @@ model Tenant {
   commerceConnection  CommerceConnection?
   commerceVariantMaps CommerceVariantMap[]
   commerceSyncJobs    CommerceSyncJob[]
+  commerceOAuthNonces CommerceOAuthNonce[]
 
   @@index([type, status])
   @@index([agencyId])
@@ -1037,10 +1038,14 @@ model CommerceCatalogLink {
   /// Graph product id. Empty until Meta returns one.
   metaProductId     String    @default("")
   retailerId        String
-  /// NOT_CONNECTED | BLOCKED | PREVIEWED | PENDING | SYNCED | FAILED | OUTDATED
+  /// NOT_CONNECTED | BLOCKED | PREVIEWED | PENDING | SUBMITTED | PROCESSING | SYNCED | FAILED | OUTDATED
   syncStatus        String    @default("NOT_CONNECTED")
-  /// UNKNOWN | PENDING | APPROVED | REJECTED. Never copied from availability.
+  /// UNKNOWN | PENDING | APPROVED | REJECTED. Never copied from availability or from batch acceptance.
   reviewStatus      String    @default("UNKNOWN")
+  /// Hash of the last batch Meta finished with no item errors. Empty until processing is confirmed.
+  processedPayloadHash String @default("")
+  /// Public product URL included in that confirmed payload.
+  processedPublicUrl   String @default("")
   lastError         String    @default("")
   lastAttemptAt     DateTime?
   lastSyncedAt      DateTime?
@@ -1125,11 +1130,15 @@ model CommerceSyncJob {
   productId      String?
   idempotencyKey String
   action         String
-  /// BLOCKED | SUCCEEDED | FAILED
+  /// BLOCKED | SUBMITTED | PROCESSING | SUCCEEDED | FAILED
   status         String
   attempts       Int       @default(0)
   lastError      String    @default("")
   payloadHash    String    @default("")
+  /// Meta catalog batch handle. Empty until Graph accepts the batch.
+  batchHandle    String    @default("")
+  /// Per-item validation JSON. Never a token.
+  itemResults    String    @default("")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   finishedAt     DateTime?
@@ -1139,6 +1148,23 @@ model CommerceSyncJob {
 
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId, status])
+}
+
+/// One-time commerce OAuth nonce. Bound to the session that started the login. The value is not a Meta token.
+model CommerceOAuthNonce {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  nonce      String
+  sessionKey String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, nonce])
+  @@index([expiresAt])
 }
 
 /// Payment flags only. Checkout stays off. This row is not a Meta connection.

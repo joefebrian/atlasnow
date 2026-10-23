@@ -18,7 +18,8 @@ export async function POST(request: Request) {
     tenantId: typeof body.tenantId === "string" ? body.tenantId : null,
   });
   if (!guard.ok) return guard.response;
-  const result = await discoverCommerceAssets(guard.tenantId);
+  const businessId = typeof body.businessId === "string" ? body.businessId : "";
+  const result = await discoverCommerceAssets(guard.tenantId, fetch, businessId);
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error, connection: "connection" in result ? result.connection : undefined },

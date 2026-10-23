@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { decodeCommerceState, encodeCommerceState } from "@/lib/commerce/meta-oauth";
+import { readFileSync } from "node:fs";
+import { commerceAuthSecret, decodeCommerceState, encodeCommerceState } from "@/lib/commerce/meta-oauth";
 import { connectionJson, presentConnection } from "@/lib/commerce/connection";
-import { batchBody, catalogItems, decideCatalogSync, type SyncProduct } from "@/lib/commerce/catalog-sync";
-import { pushCatalogItems } from "@/lib/commerce/meta-graph";
+import { batchBody, catalogItems, decideCatalogSync, payloadHash, type SyncProduct } from "@/lib/commerce/catalog-sync";
+import { classifyBatchStatus, COMMERCE_GRAPH, listBusinesses, pushCatalogItems, scrubSecret } from "@/lib/commerce/meta-graph";
 
 const ready: SyncProduct = {
   sku: "WEEKDAY-PASS",
@@ -142,13 +143,74 @@ describe("commerce catalog sync gate", () => {
       }) as typeof fetch,
     });
     assert.equal(calls.length, 1);
-    assert.match(calls[0].url, /\/cat\/batch$/);
-    const body = JSON.parse(calls[0].body) as { requests: { method: string; data: { price: string } }[] };
+    assert.match(calls[0].url, /\/v25\.0\/cat\/items_batch$/);
+    const body = JSON.parse(calls[0].body) as {
+      item_type: string;
+      requests: { method: string; data: { price: string } }[];
+    };
+    assert.equal(body.item_type, "PRODUCT_ITEM");
     assert.equal(body.requests[0]?.method, "UPDATE");
     assert.equal(body.requests[1]?.method, "CREATE");
     assert.equal(body.requests[0]?.data.price, "99000 IDR");
     assert.equal(calls[0].body.includes("WEEKDAY-PASS"), true);
     const built = batchBody(decision.items, new Set(), "https://brand.example/pass");
     assert.equal(JSON.stringify(built).includes("EAA-secret-token"), false);
+  });
+
+  it("changes the payload hash when a public attribute changes", () => {
+    const url = "https://brand.example/pass";
+    const items = catalogItems(ready);
+    const base = payloadHash("cat", items, url);
+    assert.notEqual(payloadHash("cat", items, "https://brand.example/other"), base);
+    assert.notEqual(payloadHash("cat", catalogItems({ ...ready, unitPriceIdr: 1000 }), url), base);
+    assert.notEqual(payloadHash("cat", catalogItems({ ...ready, name: "Other" }), url), base);
+    assert.notEqual(payloadHash("cat", catalogItems({ ...ready, description: "Other" }), url), base);
+    assert.notEqual(payloadHash("cat", catalogItems({ ...ready, availability: "UNAVAILABLE" }), url), base);
+    assert.notEqual(payloadHash("cat", catalogItems({ ...ready, imageUrl: "https://cdn.example/other.jpg" }), url), base);
+    assert.notEqual(
+      payloadHash(
+        "cat",
+        catalogItems({ ...ready, variants: [{ sku: "WEEKDAY-PASS-AM", name: "Morning", unitPriceIdr: 1, status: "ACTIVE" }] }),
+        url
+      ),
+      base
+    );
+  });
+
+  it("keeps batch acceptance distinct from finished processing", () => {
+    assert.equal(classifyBatchStatus({ status: "", errorsTotal: 0, invalidIds: [] }), "SUBMITTED");
+    assert.equal(classifyBatchStatus({ status: "started", errorsTotal: 0, invalidIds: [] }), "PROCESSING");
+    assert.equal(classifyBatchStatus({ status: "finished", errorsTotal: 0, invalidIds: [] }), "SUCCEEDED");
+    assert.equal(classifyBatchStatus({ status: "finished", errorsTotal: 1, invalidIds: ["SKU"] }), "FAILED");
+    assert.equal(classifyBatchStatus({ status: "error", errorsTotal: 0, invalidIds: [] }), "FAILED");
+  });
+
+  it("follows Graph pagination and stays on the commerce Graph version", async () => {
+    const urls: string[] = [];
+    const businesses = await listBusinesses("EAA-secret-token", (async (url: RequestInfo | URL) => {
+      urls.push(String(url));
+      if (String(url).includes("after=")) {
+        return new Response(JSON.stringify({ data: [{ id: "biz-2", name: "Two" }] }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ data: [{ id: "biz-1", name: "One" }], paging: { cursors: { after: "c1" } } }),
+        { status: 200 }
+      );
+    }) as typeof fetch);
+    assert.deepEqual(businesses.map((row) => row.id), ["biz-1", "biz-2"]);
+    assert.equal(urls.every((url) => url.startsWith(`${COMMERCE_GRAPH}/`)), true);
+    assert.equal(scrubSecret("token EAA-secret-token failed").includes("EAA-secret-token"), false);
+    const inbox = readFileSync(new URL("../meta/oauth.ts", import.meta.url), "utf8");
+    assert.match(inbox, /graph\.facebook\.com\/v21\.0/);
+    assert.equal(inbox.includes("catalog_management"), false);
+  });
+
+  it("refuses the development auth secret in production", () => {
+    assert.throws(() => commerceAuthSecret({ NODE_ENV: "production", AUTH_SECRET: "" }), /AUTH_SECRET/);
+    assert.throws(
+      () => commerceAuthSecret({ NODE_ENV: "production", AUTH_SECRET: "atlasnow-dev-secret-change-me" }),
+      /AUTH_SECRET/
+    );
+    assert.equal(commerceAuthSecret({ NODE_ENV: "test", AUTH_SECRET: "" }).length > 0, true);
   });
 });

@@ -145,8 +145,12 @@ function syncLabel(status: string) {
       return "Preview only";
     case "PENDING":
       return "Pending";
+    case "SUBMITTED":
+      return "Submitted";
+    case "PROCESSING":
+      return "Processing";
     case "SYNCED":
-      return "Sent";
+      return "Synced";
     case "FAILED":
       return "Failed";
     case "OUTDATED":

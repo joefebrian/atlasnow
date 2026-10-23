@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/auth";
 import { productListWhere } from "@/lib/commerce/access";
 import { planCatalogSync, presentCatalog } from "@/lib/commerce/catalog-adapter";
+import { catalogItems, payloadHash } from "@/lib/commerce/catalog-sync";
 import { requestCatalogSync } from "@/lib/commerce/connection-service";
 import { presentStoredReadiness, readinessWriteData } from "@/lib/commerce/readiness";
 import { collectSkus, decideProductUpdate, foreignOutlets, type ProductInput } from "@/lib/commerce/validate";
@@ -242,7 +243,16 @@ async function writeProduct(
         status: true,
         archivedAt: true,
         updatedAt: true,
-        catalogLink: { select: { retailerId: true, externalProductId: true } },
+        catalogLink: {
+          select: {
+            retailerId: true,
+            externalProductId: true,
+            externalCatalogId: true,
+            processedPayloadHash: true,
+            processedPublicUrl: true,
+            syncStatus: true,
+          },
+        },
         variantMaps: { select: { retailerId: true, externalProductId: true, metaProductId: true, syncStatus: true, reviewStatus: true, lastError: true, lastSyncedAt: true } },
       },
     });
@@ -258,7 +268,27 @@ async function writeProduct(
     const keptMaps = existing.variantMaps;
     await tx.commerceVariant.deleteMany({ where: { productId, tenantId } });
     await tx.commerceProductOutlet.deleteMany({ where: { productId, tenantId } });
-    const skuChanged = Boolean(existing.catalogLink?.externalProductId) && existing.catalogLink?.retailerId !== input.sku;
+    const link = existing.catalogLink;
+    const nextHash = payloadHash(
+      link?.externalCatalogId || "",
+      catalogItems({
+        sku: input.sku,
+        name: input.name,
+        description: input.description,
+        category: input.category,
+        imageUrl: input.imageUrl,
+        hasImage: false,
+        unitPriceIdr: input.unitPriceIdr,
+        status: input.status,
+        availability: input.availability,
+        catalogEligibility: input.catalogEligibility,
+        variants: input.variants,
+      }),
+      link?.processedPublicUrl || null
+    );
+    const detailsChanged = Boolean(link?.processedPayloadHash) && link?.processedPayloadHash !== nextHash;
+    const skuChanged = Boolean(link?.externalProductId) && link?.retailerId !== input.sku;
+    const outdated = detailsChanged || skuChanged;
     const updated = await tx.commerceProduct.update({
       where: { id: productId },
       data: {
@@ -277,8 +307,13 @@ async function writeProduct(
             },
             update: {
               retailerId: input.sku,
-              ...(skuChanged
-                ? { syncStatus: "OUTDATED", lastError: "SKU changed. Preview sync again before a live push." }
+              ...(outdated
+                ? {
+                    syncStatus: "OUTDATED",
+                    lastError: skuChanged
+                      ? "SKU changed. Preview sync again before a live push."
+                      : "Product details changed. Preview sync again before a live push.",
+                  }
                 : {}),
             },
           },
@@ -297,7 +332,7 @@ async function writeProduct(
           retailerId: variant.sku,
           externalProductId: prev.externalProductId,
           metaProductId: prev.metaProductId,
-          syncStatus: prev.syncStatus,
+          syncStatus: outdated && (prev.syncStatus === "SYNCED" || prev.externalProductId) ? "OUTDATED" : prev.syncStatus,
           reviewStatus: prev.reviewStatus,
           lastError: prev.lastError,
           lastSyncedAt: prev.lastSyncedAt,

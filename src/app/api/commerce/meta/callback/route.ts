@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { readSession } from "@/lib/auth";
+import { readSession, readSessionToken } from "@/lib/auth";
 import { canAccessTenant } from "@/lib/locations/access";
 import { canWriteCommerce } from "@/lib/commerce/access";
 import { saveCommerceToken } from "@/lib/commerce/connection-service";
-import { decodeCommerceState, exchangeCommerceCode } from "@/lib/commerce/meta-oauth";
+import { commerceSessionKey, consumeCommerceState, decodeCommerceState, exchangeCommerceCode } from "@/lib/commerce/meta-oauth";
 import { resolvedAppBaseUrl } from "@/lib/integrations/service";
 
 function safeError(error: unknown): string {
@@ -26,6 +26,14 @@ export async function GET(request: Request) {
     back.searchParams.set("commerceError", "That brand is not available on this login.");
     return NextResponse.redirect(back);
   }
+  const consumed = await consumeCommerceState(url.searchParams.get("state") || "", {
+    userId: session.userId,
+    sessionKey: commerceSessionKey(await readSessionToken()),
+  });
+  if (!consumed) {
+    back.searchParams.set("commerceError", "The Meta connection expired. Start it again.");
+    return NextResponse.redirect(back);
+  }
   const code = url.searchParams.get("code");
   if (!code) {
     back.searchParams.set("commerceError", url.searchParams.get("error_reason") || "Meta did not return a connection");
@@ -34,7 +42,7 @@ export async function GET(request: Request) {
   try {
     const exchanged = await exchangeCommerceCode(code);
     await saveCommerceToken({
-      tenantId: state.tenantId,
+      tenantId: consumed.tenantId,
       accessToken: exchanged.accessToken,
       expiresAt: exchanged.expiresAt,
       scopes: [],

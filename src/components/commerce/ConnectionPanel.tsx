@@ -53,14 +53,14 @@ export function ConnectionPanel({
     };
   }
 
-  async function discover() {
+  async function discover(selectedBusinessId = "") {
     setBusy(true);
     setError("");
     try {
       const response = await fetch("/api/commerce/connection/discover", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tenantId }),
+        body: JSON.stringify({ tenantId, businessId: selectedBusinessId }),
       });
       const body = await read(response);
       if (body.connection) setConnection(body.connection);
@@ -149,7 +149,7 @@ export function ConnectionPanel({
               Connect Meta
             </a>
             {started ? (
-              <button type="button" className="an-btn-ghost text-sm" disabled={busy} onClick={discover}>
+              <button type="button" className="an-btn-ghost text-sm" disabled={busy} onClick={() => void discover()}>
                 {busy ? "Checking…" : "Find catalogs"}
               </button>
             ) : null}
@@ -170,11 +170,23 @@ export function ConnectionPanel({
           {error}
         </p>
       ) : null}
-      {catalogs.length > 0 || phones.length > 0 ? (
+      {businesses.length > 0 || catalogs.length > 0 || phones.length > 0 ? (
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="block text-sm text-slate-600">
             Business
-            <select className="an-input mt-1" value={businessId} onChange={(event) => setBusinessId(event.target.value)}>
+            <select
+              className="an-input mt-1"
+              value={businessId}
+              onChange={(event) => {
+                const next = event.target.value;
+                setBusinessId(next);
+                setCatalogId("");
+                setPhoneId("");
+                setCatalogs([]);
+                setPhones([]);
+                if (next) void discover(next);
+              }}
+            >
               <option value="">Choose</option>
               {businesses.map((row) => (
                 <option key={row.id} value={row.id}>

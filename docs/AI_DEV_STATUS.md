@@ -16,14 +16,22 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 - Catalog eligibility cannot be set to approved from the product form. Offer status is not Meta review status.
 - Connection states: Not connected, Setup required, Connected, Permission error, Disconnected. Payment stays Not connected.
 - Sync preview and a blocked sync job. A second identical blocked sync reuses the same job and does not call Graph.
-- A stored token is absent from the connection JSON. A request body that contains an access token is rejected.
+- A stored token is absent from the connection JSON. A request body that contains an access token is rejected. Graph error text is stored with `EAA…` removed. This was checked with a fake error string, not a live token.
 - Commerce is on the default menu for brand admin, HQ marketing, HQ ops, and regional. Cashiers do not see it.
+- Catalog batch states with a fake `fetch`: accepted (`SUBMITTED` plus a stored handle), pending (`PROCESSING`), partial item failure, complete failure, and success only after a finished status and product-id lookup. Meta review stayed `UNKNOWN` in each case. A second call did not post the batch again.
+- Two overlapping sync calls produced one `items_batch` post. The unique-constraint error in the test log is the losing claim. It is caught.
+- Three failed posts stop. The fourth call does not call the network.
+- A new authorization clears the old catalog. Discovery of a different Meta business rejects the old catalog id. The connection does not stay Connected.
+- A token that loses `catalog_management` drops the catalog id and reports Permission error. A revoked token is not stored.
+- An OAuth nonce works once for the session key that created it. A different session key does not consume it.
+- Changing price, name, description, image, availability, variant price, or the public URL changes the payload hash. A processed product becomes `OUTDATED` and keeps its external id.
+- Production mode refuses the development `AUTH_SECRET` fallback. Inbox `src/lib/meta/oauth.ts` still points at Graph v21.0 and does not request `catalog_management`.
 
 ## Implemented, not proven against Meta
 
-- Facebook Login start, code exchange, encrypted token save, catalog and WABA discovery, and catalog batch build.
+- Facebook Login start, code exchange, encrypted token save, paginated business discovery, and `items_batch` plus `check_batch_request_status` on Graph v25.0.
 - Local Connect Meta redirects back with “Meta App ID / Secret not set”. No Graph call was made.
-- `pushCatalogItems` was tested with a fake `fetch`, not with `graph.facebook.com`.
+- Every Graph failure and retry test used a fake `fetch`. None of them called `graph.facebook.com`.
 
 ## Not built
 
@@ -33,7 +41,7 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 
 ## Tests
 
-2026-10-23, re-run before the draft pull request: commerce, connection, and nav tests **28 passed, 0 failed**. Typecheck was clean on the earlier run and was not repeated for this docs-only update. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts`.
+2026-10-23, after the review fixes: commerce, connection, validation, and nav tests **39 passed, 0 failed**. `npx tsc --noEmit` passed. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again. No GitHub Actions workflow is configured. `gh pr checks` reported no checks.
 
 Browser, demo brand, localhost: product list, detail, sync preview (“No request was sent”), checkout copy off, no token field. Network stayed on localhost except the Connect redirect back to Commerce.
 
@@ -44,8 +52,11 @@ Applied on localhost:5433 only:
 - `20261023120000_commerce_products`
 - `20261023180000_commerce_image_sku`
 - `20261023210000_commerce_catalog_connection`
+- `20261023233000_commerce_sync_hardening` — `processedPayloadHash`, `processedPublicUrl`, `batchHandle`, `itemResults`, `CommerceOAuthNonce`
 
-No staging database is configured in this workspace. Server migrate has not been run.
+`prisma migrate status` before deploy showed only `20261023233000_commerce_sync_hardening` pending. `migrate deploy` applied that file on localhost:5433. A schema diff also showed unrelated loyalty-index and broadcast-id drift. That drift was not applied.
+
+Rollback for this migration, if the columns must come back out: drop `CommerceOAuthNonce`, then drop `CommerceSyncJob.batchHandle`, `CommerceSyncJob.itemResults`, `CommerceCatalogLink.processedPayloadHash`, and `CommerceCatalogLink.processedPublicUrl`. Do not drop product rows. There is no staging database. Server migrate has not been run.
 
 ## Blockers before live sync
 
@@ -57,8 +68,8 @@ No staging database is configured in this workspace. Server migrate has not been
 
 ## Git
 
-Branch `feature/commerce-meta-catalog`. Feature commit `c045788`. Draft pull request https://github.com/joefebrian/atlasnow/pull/1 against `main`. Not merged. No server deploy. Unrelated local work (inbox photos, public site) stays unstaged.
+Branch `feature/commerce-meta-catalog`. Draft pull request https://github.com/joefebrian/atlasnow/pull/1 against `main`. Not merged. No server deploy. Unrelated local work (inbox photos, public site) stays unstaged.
 
 ## Next
 
-Review this slice. Do not start checkout. After approval: founder Meta setup, then a server migration with backup. See `docs/COMMERCE_ARCHITECTURE.md` and `docs/DECISION_LOG.md`.
+Review the hardening on the draft pull request. Do not merge. Do not start checkout. After approval: founder Meta setup, then a server migration with backup. See `docs/COMMERCE_ARCHITECTURE.md` and `docs/DECISION_LOG.md`.

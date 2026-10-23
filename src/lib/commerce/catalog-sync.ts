@@ -29,7 +29,17 @@ export type SyncProduct = {
 };
 
 const TICKET_CATEGORY = /ticket|event|admission|voucher/i;
-const SYNC_STATUSES = new Set(["NOT_CONNECTED", "BLOCKED", "PREVIEWED", "PENDING", "SYNCED", "FAILED", "OUTDATED"]);
+const SYNC_STATUSES = new Set([
+  "NOT_CONNECTED",
+  "BLOCKED",
+  "PREVIEWED",
+  "PENDING",
+  "SUBMITTED",
+  "PROCESSING",
+  "SYNCED",
+  "FAILED",
+  "OUTDATED",
+]);
 const REVIEW_STATUSES = new Set(["UNKNOWN", "PENDING", "APPROVED", "REJECTED"]);
 
 export function syncStatusLabel(status: string): string {
@@ -40,8 +50,12 @@ export function syncStatusLabel(status: string): string {
       return "Preview only";
     case "PENDING":
       return "Pending";
+    case "SUBMITTED":
+      return "Submitted";
+    case "PROCESSING":
+      return "Processing";
     case "SYNCED":
-      return "Sent";
+      return "Synced";
     case "FAILED":
       return "Failed";
     case "OUTDATED":
@@ -117,8 +131,27 @@ export function catalogItems(product: SyncProduct): CatalogItem[] {
   return [parent, ...variants];
 }
 
-export function payloadHash(catalogId: string, items: CatalogItem[]): string {
-  return createHash("sha256").update(JSON.stringify({ catalogId, items })).digest("hex");
+/** Hash of every attribute the catalog request sends, including the public product URL. */
+export function payloadHash(catalogId: string, items: CatalogItem[], publicUrl: string | null): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        catalogId,
+        publicUrl: publicUrl || "",
+        items: items.map((row) => ({
+          retailerId: row.retailerId,
+          title: row.title,
+          description: row.description,
+          price: row.price,
+          currency: row.currency,
+          availability: row.availability,
+          imageUrl: row.imageUrl || "",
+          condition: row.condition,
+          link: publicUrl || "",
+        })),
+      })
+    )
+    .digest("hex");
 }
 
 export function syncBlockers(opts: {
@@ -183,7 +216,7 @@ export function decideCatalogSync(opts: {
     };
   }
   const items = catalogItems(opts.product);
-  const hash = payloadHash(opts.catalogId, items);
+  const hash = payloadHash(opts.catalogId, items, opts.publicUrl);
   const disconnected = opts.catalogState === "NOT_CONNECTED" || opts.catalogState === "DISCONNECTED";
   const blockers = syncBlockers({
     catalogState: opts.catalogState,

@@ -38,6 +38,14 @@ A saved product is not a sale. Commerce does not call a payment gateway and does
 
 Commerce work is pushed to `feature/commerce-meta-catalog` and opened as a draft pull request against `main`. The agent does not merge, deploy, or set the live-sync switch. Approval is required first.
 
+## 2026-10-23 — A catalog batch is not synced when Graph accepts it
+
+`SUCCEEDED` means `check_batch_request_status` finished with no item errors and the product ids were returned. `SUBMITTED` and `PROCESSING` are not success. Meta review `APPROVED` is not written by the sync path. Commerce calls Graph v25.0. Inbox OAuth stays on v21.0.
+
+## 2026-10-23 — Reconnect clears selected Meta assets
+
+A new commerce authorization drops the stored business, catalog, WABA, and phone. They are saved again only when the new token's discovery list contains them. A catalog from the previous business cannot stay Connected.
+
 ## 2026-10-23 — Handoff docs
 
 `docs/AI_DEV_STATUS.md`, `docs/COMMERCE_ARCHITECTURE.md`, and this file are the status pack for a reviewer. Update them at the end of a slice or when a blocker changes. Do not paste secrets into them.
