@@ -30,9 +30,13 @@ Code can build a batch. It sends only when `COMMERCE_CATALOG_SYNC_ENABLED=true` 
 
 Connection tokens use the existing AES-256-GCM helper. APIs reject bodies that contain token, secret, or access token fields. Phone numbers are stored masked.
 
+## 2026-10-24 — Shopper payment is the merchant's gateway
+
+A commerce order is paid through the merchant's own Xendit or Midtrans account. The money settles to the merchant. AtlasNow's software and credit fees stay on Rail A (IDR invoice) or, later, Rail B (Creem). Creem is not the shopper checkout. No commission rate is set. A payment URL visit is not `PAID`. Midtrans notifications are appended, not used to replace the merchant's callback. Xendit account webhook URLs are not overwritten. The design is `docs/COMMERCE_PAYMENTS_PRD.md`. No gateway call is built and the live switch stays off.
+
 ## 2026-10-23 — Checkout and payment stay out
 
-A saved product is not a sale. Commerce does not call a payment gateway and does not send WhatsApp. The HQ Cloud number is not registered or subscribed by this flow.
+A saved product is not a sale. Commerce does not call a payment gateway and does not send WhatsApp. The HQ Cloud number is not registered or subscribed by this flow. The 2026-10-24 decision specifies the later payment design. It does not turn that design on.
 
 ## 2026-10-23 — Draft review before merge
 

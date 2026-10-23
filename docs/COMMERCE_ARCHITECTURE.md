@@ -1,6 +1,6 @@
 # Commerce architecture
 
-AtlasNow is the product source of truth. Meta Catalog is a later projection. Checkout and payment are not part of this module.
+AtlasNow is the product source of truth. Meta Catalog is a later projection. Checkout and payment are specified in `docs/COMMERCE_PAYMENTS_PRD.md` and are not built. Payment readiness stays not connected.
 
 ## Tenancy
 
@@ -57,5 +57,5 @@ Changing or reconnecting to a different Meta catalog sets `mappingCurrent` false
 
 - Postgres via Prisma.
 - Meta Graph and Facebook Login. Not connected in this environment.
-- No Xendit, Midtrans, Creem, or WhatsApp send on these routes.
+- No Xendit, Midtrans, Creem, or WhatsApp send on these routes. The payments PRD does not add those calls.
 - This branch does not set `COMMERCE_CATALOG_SYNC_ENABLED`. Review happens on the draft pull request. Merging does not deploy and does not turn sync on.

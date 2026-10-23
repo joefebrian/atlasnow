@@ -40,7 +40,7 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 
 ## Not built
 
-- WhatsApp checkout, cart webhook, payment gateway, revenue.
+- WhatsApp checkout, cart webhook, payment gateway, revenue. The payment design is `docs/COMMERCE_PAYMENTS_PRD.md` (2026-10-24). It is not implemented. `COMMERCE_PAYMENTS_ENABLED` is unset.
 - Production catalog sync. `COMMERCE_CATALOG_SYNC_ENABLED` is unset.
 - `catalog_management` on the live Meta app (App ID 1551959122621683). Do not add it until the founder publishes that scope.
 
