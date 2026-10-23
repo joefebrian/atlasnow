@@ -39,6 +39,7 @@ const SYNC_STATUSES = new Set([
   "SYNCED",
   "FAILED",
   "OUTDATED",
+  "IMPORTED",
 ]);
 const REVIEW_STATUSES = new Set(["UNKNOWN", "PENDING", "APPROVED", "REJECTED"]);
 
@@ -60,6 +61,8 @@ export function syncStatusLabel(status: string): string {
       return "Failed";
     case "OUTDATED":
       return "Needs another sync";
+    case "IMPORTED":
+      return "Imported";
     default:
       return "Not connected";
   }

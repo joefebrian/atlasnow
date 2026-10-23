@@ -35,6 +35,7 @@ export function presentCatalog(
     syncStatus?: string;
     externalProductId?: string;
     reviewStatus?: string;
+    lastImportedAt?: Date | string | null;
     lastSyncedAt?: Date | string | null;
     mappingCurrent?: boolean;
   } | null,
@@ -47,6 +48,7 @@ export function presentCatalog(
     retailerId: link?.retailerId || sku,
     lastError: link?.lastError || "",
     reviewStatus: knownReviewStatus(link?.reviewStatus),
+    lastImportedAt: iso(link?.lastImportedAt),
     lastSyncedAt: iso(link?.lastSyncedAt),
     networkCalled: false as const,
   };

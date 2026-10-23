@@ -56,6 +56,7 @@ const productSelect = {
       syncStatus: true,
       externalProductId: true,
       reviewStatus: true,
+      lastImportedAt: true,
       lastSyncedAt: true,
       mappingCurrent: true,
     },
@@ -92,6 +93,7 @@ type ProductRow = {
     syncStatus: string;
     externalProductId: string;
     reviewStatus: string;
+    lastImportedAt: Date | null;
     lastSyncedAt: Date | null;
     mappingCurrent: boolean;
   } | null;

@@ -277,6 +277,86 @@ export async function checkBatchStatus(opts: {
   };
 }
 
+export type RemoteCatalogRow = {
+  id: string;
+  retailerId: string;
+  name: string;
+  description: string;
+  price: string;
+  currency: string;
+  availability: string;
+  imageUrl: string;
+  reviewStatus: string;
+  groupId: string;
+  variantKeys: string[];
+};
+
+const CATALOG_ITEM_FIELDS = [
+  "id",
+  "retailer_id",
+  "name",
+  "description",
+  "price",
+  "currency",
+  "availability",
+  "image_url",
+  "review_status",
+  "retailer_product_group_id",
+  "additional_variant_attributes",
+].join(",");
+
+function variantKeys(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const keys: string[] = [];
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue;
+    const key = (row as { key?: unknown }).key;
+    if (typeof key === "string" && key.trim()) keys.push(key.trim());
+  }
+  return keys;
+}
+
+function remoteRow(row: Record<string, unknown>): RemoteCatalogRow {
+  const price = row.price;
+  return {
+    id: String(row.id || ""),
+    retailerId: String(row.retailer_id || "").trim(),
+    name: String(row.name || "").trim(),
+    description: String(row.description || "").trim(),
+    price: typeof price === "number" || typeof price === "string" ? String(price).trim() : "",
+    currency: String(row.currency || "").trim().toUpperCase(),
+    availability: String(row.availability || "").trim().toLowerCase(),
+    imageUrl: String(row.image_url || "").trim(),
+    reviewStatus: String(row.review_status || "").trim().toLowerCase(),
+    groupId: String(row.retailer_product_group_id || "").trim(),
+    variantKeys: variantKeys(row.additional_variant_attributes),
+  };
+}
+
+/** Reads product items already in a catalog. Does not post a batch. */
+export async function listCatalogItems(
+  catalogId: string,
+  token: string,
+  fetchImpl: FetchLike = fetch
+): Promise<{ items: RemoteCatalogRow[]; truncated: boolean }> {
+  const items: RemoteCatalogRow[] = [];
+  let after = "";
+  for (let page = 0; page < PAGE_CAP; page += 1) {
+    const url = new URL(`${COMMERCE_GRAPH}/${encodeURIComponent(catalogId)}/products`);
+    url.searchParams.set("fields", CATALOG_ITEM_FIELDS);
+    url.searchParams.set("limit", "50");
+    if (after) url.searchParams.set("after", after);
+    const body = await graphGet(url, token, fetchImpl);
+    const chunk = Array.isArray(body.data) ? body.data : [];
+    items.push(...chunk.map(remoteRow));
+    const next = body.paging?.cursors?.after || "";
+    if (!next || next === after || chunk.length === 0) return { items, truncated: false };
+    after = next;
+    if (page === PAGE_CAP - 1) return { items, truncated: true };
+  }
+  return { items, truncated: true };
+}
+
 export async function lookupCatalogProducts(opts: {
   catalogId: string;
   retailerIds: string[];

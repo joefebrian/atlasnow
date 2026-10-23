@@ -38,6 +38,10 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 - Local Connect Meta redirects back with “Meta App ID / Secret not set”. No Graph call was made.
 - Every Graph failure and retry test used a fake `fetch`. None of them called `graph.facebook.com`.
 
+## Meta catalog import (not live)
+
+A connected catalog can be listed and selected items copied into the product master when `COMMERCE_CATALOG_IMPORT_ENABLED=true`. The switch is unset. Import does not push to Meta. See `docs/COMMERCE_CATALOG_IMPORT.md` before any deploy.
+
 ## Milestone C — order capture (not live)
 
 Inbound WhatsApp `type=order` capture is implemented behind `COMMERCE_ORDER_CAPTURE_ENABLED`. The switch is unset, so production does not store orders. A verified signature is required. The order status is `PENDING_PAYMENT` and the payment status is `NOT_INITIATED`. See `docs/COMMERCE_ORDER_CAPTURE.md` before any deploy.
@@ -52,6 +56,8 @@ Inbound WhatsApp `type=order` capture is implemented behind `COMMERCE_ORDER_CAPT
 ## Tests
 
 2026-10-23, after the worker-race follow-up: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **49 passed, 0 failed**. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
+
+2026-10-24, catalog import: `npx tsx --test src/lib/commerce/catalog-import.test.ts` — **6 passed, 0 failed**. `npx tsx --test src/lib/commerce/catalog-import.db.test.ts` on localhost:5433 — **3 passed, 0 failed**. `npx tsc --noEmit` passed. No `items_batch` call was made. `COMMERCE_CATALOG_IMPORT_ENABLED` stays unset outside the database test.
 
 2026-10-24, order capture: `npx tsx --test src/lib/commerce/order-capture.test.ts` — **11 passed, 0 failed**. `npx tsx --test src/lib/commerce/order-capture.db.test.ts` on localhost:5433 — **4 passed, 0 failed**. `npx tsc --noEmit` passed. The Commerce page for the local demo brand rendered "Catalog orders", the empty state, and, with a fixture row that was deleted afterward, the reference, SKU, `IDR 28,780` estimate, review label, and "Not started". The orders API omitted the sender id. Anonymous `GET /api/commerce/orders` returned 401. No payment call was made.
 

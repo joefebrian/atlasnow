@@ -1042,7 +1042,7 @@ model CommerceCatalogLink {
   /// Graph product id. Empty until Meta returns one.
   metaProductId     String    @default("")
   retailerId        String
-  /// NOT_CONNECTED | BLOCKED | PREVIEWED | PENDING | SUBMITTED | PROCESSING | SYNCED | FAILED | OUTDATED
+  /// NOT_CONNECTED | BLOCKED | PREVIEWED | PENDING | SUBMITTED | PROCESSING | SYNCED | FAILED | OUTDATED | IMPORTED
   syncStatus        String    @default("NOT_CONNECTED")
   /// UNKNOWN | PENDING | APPROVED | REJECTED. Never copied from availability or from batch acceptance.
   reviewStatus      String    @default("UNKNOWN")
@@ -1054,6 +1054,8 @@ model CommerceCatalogLink {
   mappingCurrent       Boolean @default(true)
   lastError         String    @default("")
   lastAttemptAt     DateTime?
+  /// Set when a Meta item is copied into the product master. Not a catalog push.
+  lastImportedAt    DateTime?
   lastSyncedAt      DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt

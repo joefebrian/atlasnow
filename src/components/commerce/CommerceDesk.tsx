@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { ConnectionPanel } from "@/components/commerce/ConnectionPanel";
+import { MetaCatalogProducts } from "@/components/commerce/MetaCatalogProducts";
 import { OrdersInbox } from "@/components/commerce/OrdersInbox";
 import type { CommerceConnectionView } from "@/lib/commerce/connection";
 import type { CommerceOrderView } from "@/lib/commerce/order-parse";
@@ -42,6 +43,7 @@ export type CommerceProductView = {
     retailerId: string;
     lastError: string;
     reviewStatus: string;
+    lastImportedAt: string | null;
     lastSyncedAt: string | null;
   };
 };
@@ -159,6 +161,8 @@ function syncLabel(status: string) {
       return "Failed";
     case "OUTDATED":
       return "Needs another sync";
+    case "IMPORTED":
+      return "Imported";
     default:
       return "Not connected";
   }
@@ -441,6 +445,7 @@ export function CommerceDesk({
           <p className="mb-4 text-[13px] text-slate-500">This page does not show revenue. A saved product is not a sale.</p>
           <ConnectionPanel tenantId={tenantId} canWrite={canWrite} initial={connection} />
           <OrdersInbox merchantName={merchantName} orders={orders} />
+          <MetaCatalogProducts tenantId={tenantId} canWrite={canWrite} />
           {previewText ? (
             <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" role="status">
               {previewText}
@@ -839,6 +844,8 @@ function Detail({
         <div>Catalog note: {product.catalogEligibility === "INELIGIBLE" ? "Not for catalog" : "Not reviewed"}</div>
         <div>Catalog sync: {syncLabel(product.catalog.syncStatus)}</div>
         <div>Meta review: {reviewLabel(product.catalog.reviewStatus)}</div>
+        <div>Last imported: {product.catalog.lastImportedAt ? product.catalog.lastImportedAt.slice(0, 16).replace("T", " ") : "Not imported"}</div>
+        <div>Last synced: {product.catalog.lastSyncedAt ? product.catalog.lastSyncedAt.slice(0, 16).replace("T", " ") : "Not synced"}</div>
       </dl>
       {product.description ? <p className="text-sm text-slate-600">{product.description}</p> : null}
       {product.variants.length > 0 ? (

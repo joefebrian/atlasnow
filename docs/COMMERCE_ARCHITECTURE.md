@@ -29,6 +29,8 @@ Writes: client admin and agency staff. Reads also include HQ marketing, HQ ops, 
 
 `GET /api/commerce/orders` and the Commerce page use the same tenant guard as the product list. The page shows reference, time, merchant, outlet when one outlet is known, masked customer, lines, the WhatsApp estimate, validation, and payment "Not started".
 
+`GET /api/commerce/catalog/products` reads the connected catalog with `GET /{catalog}/products` and a cursor. `POST` imports the selected retailer ids. Neither call posts `items_batch`. Import writes the Meta product id onto `CommerceCatalogLink`, sets `lastImportedAt`, and leaves `lastSyncedAt` empty. A SKU that already exists is returned as a conflict and is not changed. The switch is `COMMERCE_CATALOG_IMPORT_ENABLED`. It stays off.
+
 ## APIs
 
 Product: `GET/POST /api/commerce/products`, `PATCH /api/commerce/products/:id`, `POST .../archive`, `GET/POST/DELETE .../image`.

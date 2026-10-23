@@ -34,6 +34,10 @@ Connection tokens use the existing AES-256-GCM helper. APIs reject bodies that c
 
 A commerce order is paid through the merchant's own Xendit or Midtrans account. The money settles to the merchant. AtlasNow's software and credit fees stay on Rail A (IDR invoice) or, later, Rail B (Creem). Creem is not the shopper checkout. No commission rate is set. A payment URL visit is not `PAID`. Midtrans notifications are appended, not used to replace the merchant's callback. Xendit account webhook URLs are not overwritten. The design is `docs/COMMERCE_PAYMENTS_PRD.md`. No gateway call is built and the live switch stays off.
 
+## 2026-10-24 — Meta catalog import copies items into the product master
+
+A merchant can read the connected Meta catalog and import selected items into AtlasNow. The product master stays canonical. An existing SKU is not overwritten. The Meta product id and retailer id are stored on the catalog link, with sync status `IMPORTED` and `lastImportedAt` set. `lastSyncedAt` stays empty because import does not push. Internal catalog eligibility stays `UNKNOWN` even when Meta review is approved. The read and the import run only when `COMMERCE_CATALOG_IMPORT_ENABLED=true`. That switch stays off. `COMMERCE_CATALOG_SYNC_ENABLED` stays off. The proposal is `docs/COMMERCE_CATALOG_IMPORT.md`.
+
 ## 2026-10-24 — WhatsApp catalog orders are captured before any payment
 
 A native WhatsApp `order` message can be stored as a commerce order with status `PENDING_PAYMENT` and payment status `NOT_INITIATED`. The merchant is the connected WABA, phone number, and catalog. The same WhatsApp message id is one order. A different message id is another order. SKU and price are checked against the product master. An unknown SKU is kept for review and is not payment-ready. The WhatsApp item sum is an estimate, not revenue and not the master total. Capture runs only after a verified Cloud signature and only when `COMMERCE_ORDER_CAPTURE_ENABLED=true`. That switch stays off. No payment link, gateway call, ticket, or catalog sync is added. The deployment proposal is `docs/COMMERCE_ORDER_CAPTURE.md`.
