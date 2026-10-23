@@ -66,6 +66,14 @@ Reconnect and catalog link keep the old `externalProductId` and `metaProductId` 
 
 After the commerce migrations, the schema diff still wants to drop two voucher indexes and set a default on `BroadcastFeeConfig.id`. That drift is not part of commerce. It was not generated into a migration and it was not applied.
 
+## 2026-10-23 — A worker rechecks the product before it writes synced
+
+The poll worker loads the product again after `check_batch_request_status` and the product lookup. It writes Meta ids only in a transaction that still sees the same payload hash, retailer ids, and selected catalog. A price edit during the Meta call does not become `SYNCED`.
+
+## 2026-10-23 — Catalog polling has an entry and stays off
+
+`POST /api/internal/commerce/poll` accepts a bearer `COMMERCE_POLL_SECRET` and polls only when `COMMERCE_CATALOG_POLL_ENABLED=true`. Both are unset. The server process does not start a timer. The row lock stays with the worker until that tick returns.
+
 ## 2026-10-23 — Handoff docs
 
 `docs/AI_DEV_STATUS.md`, `docs/COMMERCE_ARCHITECTURE.md`, and this file are the status pack for a reviewer. Update them at the end of a slice or when a blocker changes. Do not paste secrets into them.

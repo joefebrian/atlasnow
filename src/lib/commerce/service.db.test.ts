@@ -14,6 +14,7 @@ import {
   resumeCatalogBatches,
   saveCommerceToken,
 } from "@/lib/commerce/connection-service";
+import { runCommercePollTick } from "@/lib/commerce/poll-scheduler";
 import {
   archiveCommerceProduct,
   createCommerceProduct,
@@ -1021,6 +1022,106 @@ describe("commerce persistence", { skip: localDb() ? false : "local database onl
     assert.equal(variant?.metaProductId, "meta-child");
     assert.equal(variant?.mappingCurrent, true);
     assert.equal(variant?.reviewStatus, "UNKNOWN");
+  });
+
+  it("does not let a slow worker poll mark a product synced after the price changes", async () => {
+    const seeded = await connectedProduct("poll-price");
+    const confirmed = await runSync(seeded.tenantId, seeded.product.id, "success");
+    assert.equal(confirmed.result.ok, true);
+    if (!confirmed.result.ok) return;
+    assert.equal(confirmed.result.plan.externalProductId, "meta-parent");
+    await openPollJob({
+      tenantId: seeded.tenantId,
+      productId: seeded.product.id,
+      handle: "handle-slow",
+      payloadHash: payloadHash("cat-1", catalogItems(syncedProductShape()), "https://brand.example/pass"),
+    });
+    const run = await resumeCatalogBatches({
+      tenantId: seeded.tenantId,
+      fetchImpl: (async (url: RequestInfo | URL) => {
+        const href = String(url);
+        if (href.includes("check_batch_request_status")) {
+          const edited = await updateCommerceProduct(
+            seeded.tenantId,
+            seeded.product.id,
+            {
+              sku: "SYNC-OK",
+              name: "Day pass",
+              description: "Entry",
+              category: "Package",
+              imageUrl: "https://cdn.example/pass.jpg",
+              unitPriceIdr: 150000,
+              status: "ACTIVE",
+              availability: "AVAILABLE",
+              catalogEligibility: "UNKNOWN",
+              catalogEligibilityNote: "",
+              variants: [{ sku: "SYNC-OK-W", name: "Weekend", unitPriceIdr: 160000, status: "ACTIVE" }],
+              outlets: seeded.product.outlets.map((outlet) => ({
+                locationId: outlet.locationId,
+                availability: outlet.availability === "UNAVAILABLE" ? ("UNAVAILABLE" as const) : ("AVAILABLE" as const),
+              })),
+            },
+            "missing-user",
+            seeded.product.updatedAt
+          );
+          assert.equal(edited.ok, true);
+          return json({
+            data: [{ handle: "handle-slow", status: "finished", errors_total_count: 0, ids_of_invalid_requests: [] }],
+          });
+        }
+        if (href.includes("/products")) {
+          return json({
+            data: [
+              { id: "meta-late", retailer_id: "SYNC-OK" },
+              { id: "meta-late-w", retailer_id: "SYNC-OK-W" },
+            ],
+          });
+        }
+        return json({ data: [] });
+      }) as typeof fetch,
+    });
+    assert.equal(run[0]?.status, "FAILED");
+    const link = await prisma.commerceCatalogLink.findFirst({ where: { productId: seeded.product.id } });
+    const variant = await prisma.commerceVariantMap.findFirst({ where: { productId: seeded.product.id } });
+    const job = await prisma.commerceSyncJob.findFirst({ where: { productId: seeded.product.id, batchHandle: "handle-slow" } });
+    assert.notEqual(link?.syncStatus, "SYNCED");
+    assert.equal(link?.metaProductId, "meta-parent");
+    assert.equal(link?.externalProductId, "meta-parent");
+    assert.equal(link?.reviewStatus, "UNKNOWN");
+    assert.equal(variant?.metaProductId, "meta-child");
+    assert.notEqual(job?.status, "SUCCEEDED");
+  });
+
+  it("does not poll until the poll switch is on, and then only one worker calls Meta", async () => {
+    const seeded = await connectedProduct("poll-switch");
+    await openPollJob({ tenantId: seeded.tenantId, productId: seeded.product.id, handle: "handle-switch" });
+    const previous = process.env.COMMERCE_CATALOG_POLL_ENABLED;
+    delete process.env.COMMERCE_CATALOG_POLL_ENABLED;
+    let calls = 0;
+    const fetchImpl = (async (url: RequestInfo | URL) => {
+      if (String(url).includes("check_batch_request_status")) {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return json({ data: [{ handle: "handle-switch", status: "started", errors_total_count: 0, ids_of_invalid_requests: [] }] });
+      }
+      return json({ data: [] });
+    }) as typeof fetch;
+    const off = await runCommercePollTick({ fetchImpl });
+    assert.equal(off.enabled, false);
+    assert.equal(off.polled, 0);
+    assert.equal(calls, 0);
+    process.env.COMMERCE_CATALOG_POLL_ENABLED = "true";
+    try {
+      const [first, second] = await Promise.all([
+        runCommercePollTick({ fetchImpl }),
+        runCommercePollTick({ fetchImpl }),
+      ]);
+      assert.equal(calls, 1);
+      assert.equal(first.polled + second.polled, 1);
+    } finally {
+      if (previous === undefined) delete process.env.COMMERCE_CATALOG_POLL_ENABLED;
+      else process.env.COMMERCE_CATALOG_POLL_ENABLED = previous;
+    }
   });
 
   it("consumes a commerce oauth nonce once for the session that started it", async () => {

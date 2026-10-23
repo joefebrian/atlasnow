@@ -594,8 +594,6 @@ async function rememberJob(opts: {
     data: {
       status: opts.status,
       lastError: scrubSecret(opts.message),
-      lockToken: "",
-      lockedAt: null,
       ...(opts.handle !== undefined ? { batchHandle: opts.handle } : {}),
       ...(opts.items ? { itemResults: JSON.stringify(opts.items).slice(0, 8000) } : {}),
       ...(opts.finished ? { finishedAt: new Date(), nextPollAt: null } : {}),
@@ -970,6 +968,26 @@ export async function requestCatalogSync(opts: {
   }
 
   message = scrubSecret(message);
+  let externalProductId = "";
+  if (opts.productId && product && status === "SUCCEEDED") {
+    const applied = await applyConfirmedMappings({
+      tenantId: opts.tenantId,
+      productId: opts.productId,
+      catalogId: jobCatalogId,
+      payloadHash: claim.job.payloadHash || decision.payloadHash,
+      publicUrl: jobPublicUrl,
+      mappings,
+      message,
+      when: new Date(),
+    });
+    if (!applied.applied) {
+      status = "FAILED";
+      stale = true;
+      message = STALE_BATCH_MESSAGE;
+    } else {
+      externalProductId = applied.externalProductId;
+    }
+  }
   const open = status === "SUBMITTED" || status === "PROCESSING";
   await rememberJob({
     jobId: claim.job.id,
@@ -982,21 +1000,8 @@ export async function requestCatalogSync(opts: {
     nextPollAt: open ? new Date(Date.now() + backoffMs(claim.job.pollAttempts)) : null,
   });
 
-  let externalProductId = "";
   const presentedStatus = stale ? "OUTDATED" : linkSyncStatus(status, decision.syncStatus);
-  if (opts.productId && product && status === "SUCCEEDED") {
-    externalProductId = await applyConfirmedMappings({
-      tenantId: opts.tenantId,
-      productId: opts.productId,
-      catalogId: jobCatalogId,
-      payloadHash: claim.job.payloadHash || decision.payloadHash,
-      publicUrl: jobPublicUrl,
-      mappings,
-      parentSku: product.sku,
-      message,
-      when: new Date(),
-    });
-  } else if (opts.productId && product) {
+  if (opts.productId && product && status !== "SUCCEEDED") {
     if (!stale) {
       const current = await prisma.commerceCatalogLink.findFirst({
         where: { productId: opts.productId, tenantId: opts.tenantId },
@@ -1057,58 +1062,113 @@ async function applyConfirmedMappings(opts: {
   payloadHash: string;
   publicUrl: string;
   mappings: Map<string, string>;
-  parentSku: string;
   message: string;
   when: Date;
-}) {
-  const parentId = opts.mappings.get(opts.parentSku) || "";
-  await prisma.commerceCatalogLink.updateMany({
-    where: { productId: opts.productId, tenantId: opts.tenantId },
-    data: {
-      syncStatus: "SYNCED",
-      lastError: opts.message,
-      lastAttemptAt: opts.when,
-      lastSyncedAt: opts.when,
-      externalCatalogId: opts.catalogId,
-      processedPayloadHash: opts.payloadHash,
-      processedPublicUrl: opts.publicUrl,
-      mappingCurrent: true,
-      ...(parentId ? { externalProductId: parentId, metaProductId: parentId } : {}),
-    },
-  });
-  const variants = await prisma.commerceVariant.findMany({
-    where: { productId: opts.productId, tenantId: opts.tenantId },
-    select: { id: true, sku: true },
-  });
-  for (const variant of variants) {
-    const metaProductId = opts.mappings.get(variant.sku);
-    if (!metaProductId) continue;
-    await prisma.commerceVariantMap.upsert({
-      where: { variantId: variant.id },
-      create: {
-        tenantId: opts.tenantId,
-        productId: opts.productId,
-        variantId: variant.id,
-        retailerId: variant.sku,
-        externalProductId: metaProductId,
-        metaProductId,
-        syncStatus: "SYNCED",
-        reviewStatus: "UNKNOWN",
-        mappingCurrent: true,
-        lastSyncedAt: opts.when,
-      },
-      update: {
-        retailerId: variant.sku,
-        externalProductId: metaProductId,
-        metaProductId,
-        syncStatus: "SYNCED",
-        mappingCurrent: true,
-        lastError: "",
-        lastSyncedAt: opts.when,
+}): Promise<{ applied: boolean; externalProductId: string }> {
+  return prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "CommerceProduct"
+      WHERE "id" = ${opts.productId} AND "tenantId" = ${opts.tenantId}
+      FOR UPDATE
+    `;
+    if (!locked.length) return { applied: false, externalProductId: "" };
+    const row = await tx.commerceProduct.findFirst({
+      where: { id: opts.productId, tenantId: opts.tenantId },
+      select: {
+        sku: true,
+        name: true,
+        description: true,
+        category: true,
+        imageUrl: true,
+        imageMime: true,
+        unitPriceIdr: true,
+        status: true,
+        availability: true,
+        catalogEligibility: true,
+        variants: { select: { id: true, sku: true, name: true, unitPriceIdr: true, status: true } },
       },
     });
-  }
-  return parentId;
+    const connection = await tx.commerceConnection.findUnique({
+      where: { tenantId: opts.tenantId },
+      select: { catalogId: true },
+    });
+    if (!row || !connection) return { applied: false, externalProductId: "" };
+    const current = catalogItems({
+      sku: row.sku,
+      name: row.name,
+      description: row.description,
+      category: row.category,
+      imageUrl: row.imageUrl,
+      hasImage: Boolean(row.imageMime),
+      unitPriceIdr: row.unitPriceIdr,
+      status: row.status,
+      availability: row.availability,
+      catalogEligibility: row.catalogEligibility,
+      variants: row.variants,
+    });
+    const retailerIds = current.map((item) => item.retailerId);
+    if (
+      connection.catalogId !== opts.catalogId ||
+      payloadHash(opts.catalogId, current, opts.publicUrl || null) !== opts.payloadHash ||
+      !retailerIds.length ||
+      !retailerIds.every((id) => opts.mappings.has(id))
+    ) {
+      return { applied: false, externalProductId: "" };
+    }
+    const parentId = opts.mappings.get(row.sku) || "";
+    const wrote = await tx.commerceCatalogLink.updateMany({
+      where: {
+        productId: opts.productId,
+        tenantId: opts.tenantId,
+        OR: [
+          { processedPayloadHash: "" },
+          { processedPayloadHash: opts.payloadHash },
+          { syncStatus: { not: "SYNCED" } },
+        ],
+      },
+      data: {
+        syncStatus: "SYNCED",
+        lastError: opts.message,
+        lastAttemptAt: opts.when,
+        lastSyncedAt: opts.when,
+        externalCatalogId: opts.catalogId,
+        processedPayloadHash: opts.payloadHash,
+        processedPublicUrl: opts.publicUrl,
+        mappingCurrent: true,
+        ...(parentId ? { externalProductId: parentId, metaProductId: parentId } : {}),
+      },
+    });
+    if (wrote.count !== 1) return { applied: false, externalProductId: "" };
+    for (const variant of row.variants) {
+      const metaProductId = opts.mappings.get(variant.sku);
+      if (!metaProductId) continue;
+      await tx.commerceVariantMap.upsert({
+        where: { variantId: variant.id },
+        create: {
+          tenantId: opts.tenantId,
+          productId: opts.productId,
+          variantId: variant.id,
+          retailerId: variant.sku,
+          externalProductId: metaProductId,
+          metaProductId,
+          syncStatus: "SYNCED",
+          reviewStatus: "UNKNOWN",
+          mappingCurrent: true,
+          lastSyncedAt: opts.when,
+        },
+        update: {
+          retailerId: variant.sku,
+          externalProductId: metaProductId,
+          metaProductId,
+          syncStatus: "SYNCED",
+          mappingCurrent: true,
+          lastError: "",
+          lastSyncedAt: opts.when,
+        },
+      });
+    }
+    return { applied: true, externalProductId: parentId };
+  });
 }
 
 async function closePolledJob(job: { id: string; tenantId: string; productId: string | null }, status: "FAILED", message: string) {
@@ -1150,7 +1210,7 @@ export async function resumeCatalogBatches(opts: { tenantId?: string; fetchImpl?
     });
     if (locked.count !== 1) continue;
     try {
-      results.push(await pollLockedJob(job, opts.fetchImpl, now));
+      results.push(await pollLockedJob(job, opts.fetchImpl, now, lockToken));
     } finally {
       await prisma.commerceSyncJob.updateMany({
         where: { id: job.id, lockToken },
@@ -1159,6 +1219,14 @@ export async function resumeCatalogBatches(opts: { tenantId?: string; fetchImpl?
     }
   }
   return results;
+}
+
+async function holdPollLock(jobId: string, lockToken: string) {
+  const held = await prisma.commerceSyncJob.updateMany({
+    where: { id: jobId, lockToken },
+    data: { lockedAt: new Date() },
+  });
+  return held.count === 1;
 }
 
 async function pollLockedJob(
@@ -1176,7 +1244,8 @@ async function pollLockedJob(
     status: string;
   },
   fetchImpl: FetchLike | undefined,
-  now: Date
+  now: Date,
+  lockToken: string
 ) {
   if (!job.productId || !job.catalogId || job.pollAttempts >= MAX_POLLS || now.getTime() - job.createdAt.getTime() > MAX_JOB_MS) {
     await closePolledJob(job, "FAILED", POLL_STOPPED_MESSAGE);
@@ -1192,9 +1261,9 @@ async function pollLockedJob(
     await closePolledJob(job, "FAILED", "Product not found");
     return { jobId: job.id, status: "FAILED" };
   }
-  const connection = await getCommerceConnection(job.tenantId);
   let report;
   try {
+    if (!(await holdPollLock(job.id, lockToken))) return { jobId: job.id, status: job.status };
     report = await checkBatchStatus({
       catalogId: job.catalogId,
       handle: job.batchHandle,
@@ -1217,7 +1286,13 @@ async function pollLockedJob(
     });
     return { jobId: job.id, status: "PROCESSING" };
   }
-  const items = catalogItems(product);
+  if (!(await holdPollLock(job.id, lockToken))) return { jobId: job.id, status: job.status };
+  const fresh = await loadSyncProduct(job.tenantId, job.productId);
+  if (!fresh) {
+    await closePolledJob(job, "FAILED", "Product not found");
+    return { jobId: job.id, status: "FAILED" };
+  }
+  const items = catalogItems(fresh);
   const classified = classifyBatchStatus(report);
   const found =
     classified === "SUCCEEDED"
@@ -1228,38 +1303,49 @@ async function pollLockedJob(
           fetchImpl,
         })
       : [];
+  if (!(await holdPollLock(job.id, lockToken))) return { jobId: job.id, status: job.status };
+  const current = await loadSyncProduct(job.tenantId, job.productId);
+  const currentConnection = await getCommerceConnection(job.tenantId);
+  const currentItems = current ? catalogItems(current) : [];
   const mergedItems = mergeValidation(storedValidation(job.itemResults), report.items);
   const outcome = batchSyncDecision({
     classified,
     validationErrorCount: validationErrorCount(mergedItems),
     invalidIds: report.invalidIds,
-    expectedRetailerIds: items.map((item) => item.retailerId),
+    expectedRetailerIds: currentItems.map((item) => item.retailerId),
     mappedRetailerIds: found.map((row) => row.retailerId),
     jobHash: job.payloadHash,
-    currentHash: payloadHash(job.catalogId, items, job.publicUrl || null),
+    currentHash: current ? payloadHash(job.catalogId, currentItems, job.publicUrl || null) : "",
     jobCatalogId: job.catalogId,
-    activeCatalogId: connection.catalogId,
+    activeCatalogId: currentConnection.catalogId,
   });
   if (outcome === "SYNC") {
     const mappings = new Map(found.map((row) => [row.retailerId, row.metaProductId]));
     const message = "Catalog batch processed. Meta review is separate from the offer status.";
-    await rememberJob({
-      jobId: job.id,
-      status: "SUCCEEDED",
-      message,
-      items: mergedItems,
-      finished: true,
-    });
-    await applyConfirmedMappings({
+    const applied = await applyConfirmedMappings({
       tenantId: job.tenantId,
       productId: job.productId,
       catalogId: job.catalogId,
       payloadHash: job.payloadHash,
       publicUrl: job.publicUrl,
       mappings,
-      parentSku: product.sku,
       message,
       when: now,
+    });
+    if (!applied.applied) {
+      await rememberJob({ jobId: job.id, status: "FAILED", message: STALE_BATCH_MESSAGE, items: mergedItems, finished: true });
+      await prisma.commerceCatalogLink.updateMany({
+        where: { productId: job.productId, tenantId: job.tenantId, syncStatus: { not: "SYNCED" } },
+        data: { syncStatus: "OUTDATED", lastError: STALE_BATCH_MESSAGE, lastAttemptAt: now },
+      });
+      return { jobId: job.id, status: "FAILED" };
+    }
+    await rememberJob({
+      jobId: job.id,
+      status: "SUCCEEDED",
+      message,
+      items: mergedItems,
+      finished: true,
     });
     return { jobId: job.id, status: "SUCCEEDED" };
   }
@@ -1269,7 +1355,7 @@ async function pollLockedJob(
       where: { productId: job.productId, tenantId: job.tenantId, syncStatus: { not: "SYNCED" } },
       data: { syncStatus: "OUTDATED", lastError: STALE_BATCH_MESSAGE, lastAttemptAt: now },
     });
-    if (job.catalogId !== connection.catalogId) await retireForeignCatalogMappings(job.tenantId, connection.catalogId);
+    if (job.catalogId !== currentConnection.catalogId) await retireForeignCatalogMappings(job.tenantId, currentConnection.catalogId);
     return { jobId: job.id, status: "FAILED" };
   }
   if (outcome === "REJECT") {

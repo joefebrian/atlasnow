@@ -5,6 +5,7 @@ import { commerceAuthSecret, decodeCommerceState, encodeCommerceState } from "@/
 import { connectionJson, presentConnection } from "@/lib/commerce/connection";
 import { batchBody, batchSyncDecision, catalogItems, decideCatalogSync, payloadHash, type SyncProduct } from "@/lib/commerce/catalog-sync";
 import { classifyBatchStatus, COMMERCE_GRAPH, listBusinesses, pushCatalogItems, scrubSecret } from "@/lib/commerce/meta-graph";
+import { commercePollLiveEnabled, runCommercePollTick } from "@/lib/commerce/poll-scheduler";
 
 const ready: SyncProduct = {
   sku: "WEEKDAY-PASS",
@@ -247,6 +248,30 @@ describe("commerce catalog sync gate", () => {
     assert.equal(pollRoute.includes("requestCatalogSync"), false);
     assert.equal(refusal.includes("publicUrl"), false);
     assert.equal(refusal.includes("liveSwitch"), false);
+    const internal = readFileSync(new URL("../../app/api/internal/commerce/poll/route.ts", import.meta.url), "utf8");
+    const boot = readFileSync(new URL("../../instrumentation.ts", import.meta.url), "utf8");
+    assert.match(internal, /COMMERCE_POLL_SECRET/);
+    assert.match(internal, /Bearer/);
+    assert.equal(internal.includes("requestCatalogSync"), false);
+    assert.equal(boot.includes("runCommercePollTick"), false);
+    assert.equal(boot.includes("COMMERCE_CATALOG_POLL_ENABLED"), false);
+  });
+
+  it("keeps the catalog poll tick off unless the poll switch is set", async () => {
+    assert.equal(commercePollLiveEnabled({}), false);
+    assert.equal(commercePollLiveEnabled({ COMMERCE_CATALOG_SYNC_ENABLED: "true" }), false);
+    assert.equal(commercePollLiveEnabled({ COMMERCE_CATALOG_POLL_ENABLED: "true" }), true);
+    const previous = process.env.COMMERCE_CATALOG_POLL_ENABLED;
+    delete process.env.COMMERCE_CATALOG_POLL_ENABLED;
+    const tick = await runCommercePollTick({
+      fetchImpl: (async () => {
+        throw new Error("poll tick called Meta while disabled");
+      }) as typeof fetch,
+    });
+    if (previous === undefined) delete process.env.COMMERCE_CATALOG_POLL_ENABLED;
+    else process.env.COMMERCE_CATALOG_POLL_ENABLED = previous;
+    assert.equal(tick.enabled, false);
+    assert.equal(tick.polled, 0);
   });
 
   it("refuses the development auth secret in production", () => {

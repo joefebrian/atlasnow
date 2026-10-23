@@ -4,7 +4,7 @@ Updated 2026-10-23. Source of truth for what is in the tree. A feature is listed
 
 ## Active slice
 
-Commerce Slice 2 — Meta Catalog connection. **Partial.** Do not start Slice 3 until this is reviewed.
+Commerce Slice 2 — Meta Catalog connection. **Internal complete.** Live catalog push is still off. Do not start Slice 3.
 
 Slice 1 (product master) is implemented and was accepted locally (21 tests). Slice 2 adds the connection manager and a gated sync path. Live Meta push is not on.
 
@@ -24,6 +24,8 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 - A price edit while a batch is still in flight leaves the product `OUTDATED`. The late Graph ids are not stored and the job is not `SUCCEEDED`.
 - Reconnecting, then selecting another catalog, keeps the old Meta ids in the database, sets `mappingCurrent` false, and the product list shows a blank external id with `OUTDATED`. The next push to the new catalog uses `CREATE`.
 - `POST /api/commerce/catalog/poll` resumes one due job under two overlapping calls. Eight polls, or a job older than two hours, ends `FAILED` without a Graph call. Validation errors, a status of `error`, a partial product lookup, and a stored validation error followed by a clean poll all stay off `SYNCED`. A confirmed worker poll writes the variant map. Review status stayed `UNKNOWN`.
+- A worker poll reloads the product after the Meta calls and writes mappings only inside a transaction that still sees the same payload hash, retailer ids, and catalog. A price edit while that response is delayed leaves the old Meta ids in place and does not mark the product `SYNCED`.
+- `POST /api/internal/commerce/poll` is the scheduler entry. It requires `COMMERCE_POLL_SECRET` and does not call Meta unless `COMMERCE_CATALOG_POLL_ENABLED=true`. That switch is unset. The app process does not start the tick. The sync switch does not turn polling on. A tick handles at most 5 jobs and logs counts only.
 - A new authorization clears the old catalog. Discovery of a different Meta business rejects the old catalog id. The connection does not stay Connected.
 - A token that loses `catalog_management` drops the catalog id and reports Permission error. A revoked token is not stored.
 - An OAuth nonce works once for the session key that created it. A different session key does not consume it.
@@ -44,7 +46,7 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 
 ## Tests
 
-2026-10-23, after the final hardening: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **46 passed, 0 failed**. `npx tsc --noEmit` passed. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
+2026-10-23, after the worker-race follow-up: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **49 passed, 0 failed**. `npx tsc --noEmit` passed. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
 
 `.github/workflows/commerce.yml` runs that typecheck, the unit files, and the database file against a Postgres 16 service. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. The workflow was added in `6a7df29`. Results appear on the pull request after GitHub Actions finishes.
 
