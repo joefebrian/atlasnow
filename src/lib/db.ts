@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 
-const PRISMA_REV = "commerce-import-1";
+const PRISMA_REV = "commerce-feed-1";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined; prismaRev?: string };
 
 function createPrisma() {

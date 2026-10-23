@@ -14,6 +14,7 @@ prisma/migrations/20261023233000_commerce_sync_hardening/migration.sql
 prisma/migrations/20261024100000_commerce_batch_poll/migration.sql
 prisma/migrations/20261024180000_commerce_orders/migration.sql
 prisma/migrations/20261024200000_commerce_catalog_import/migration.sql
+prisma/migrations/20261024220000_commerce_catalog_feed/migration.sql
 "
 
 for file in $files; do

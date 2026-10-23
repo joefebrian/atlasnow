@@ -50,6 +50,7 @@ export function presentCatalog(
     reviewStatus: knownReviewStatus(link?.reviewStatus),
     lastImportedAt: iso(link?.lastImportedAt),
     lastSyncedAt: iso(link?.lastSyncedAt),
+    source: link?.lastImportedAt ? ("META" as const) : ("ATLASNOW" as const),
     networkCalled: false as const,
   };
 }

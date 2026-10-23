@@ -38,6 +38,10 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 - Local Connect Meta redirects back with “Meta App ID / Secret not set”. No Graph call was made.
 - Every Graph failure and retry test used a fake `fetch`. None of them called `graph.facebook.com`.
 
+## Catalog file and publish preview (not live)
+
+The product master can preview a Meta CREATE or UPDATE and can build a catalog CSV. Neither path calls Graph. The live sync switch stays unset, and the live sync route still does not send. See `docs/COMMERCE_CATALOG_BIDIRECTIONAL.md` before any deploy.
+
 ## Meta catalog import (not live)
 
 A connected catalog can be listed and selected items copied into the product master when `COMMERCE_CATALOG_IMPORT_ENABLED=true`. The switch is unset. Import does not push to Meta. See `docs/COMMERCE_CATALOG_IMPORT.md` before any deploy.
@@ -58,6 +62,8 @@ Inbound WhatsApp `type=order` capture is implemented behind `COMMERCE_ORDER_CAPT
 2026-10-23, after the worker-race follow-up: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **49 passed, 0 failed**. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
 
 2026-10-24, catalog import: `npx tsx --test src/lib/commerce/catalog-import.test.ts` — **6 passed, 0 failed**. `npx tsx --test src/lib/commerce/catalog-import.db.test.ts` on localhost:5433 — **3 passed, 0 failed**. `npx tsc --noEmit` passed. No `items_batch` call was made. `COMMERCE_CATALOG_IMPORT_ENABLED` stays unset outside the database test.
+
+2026-10-24, catalog file and publish preview: `catalog-feed.test.ts` 7 passed, `catalog-publish.test.ts` 6 passed, `catalog-bidirectional.db.test.ts` 1 passed, `catalog-import.db.test.ts` 3 passed, `service.db.test.ts` 16 passed, and `tsc --noEmit` passed. No `items_batch` call was made by the file or the preview. `.github/workflows/commerce.yml` does not list the new tests. The GitHub token cannot edit that workflow. `COMMERCE_CATALOG_SYNC_ENABLED` stays unset. The local demo brand page rendered the catalog file section. Its export returned no file because a required link was missing, and its preview returned `networkCalled: false`.
 
 2026-10-24, order capture: `npx tsx --test src/lib/commerce/order-capture.test.ts` — **11 passed, 0 failed**. `npx tsx --test src/lib/commerce/order-capture.db.test.ts` on localhost:5433 — **4 passed, 0 failed**. `npx tsc --noEmit` passed. The Commerce page for the local demo brand rendered "Catalog orders", the empty state, and, with a fixture row that was deleted afterward, the reference, SKU, `IDR 28,780` estimate, review label, and "Not started". The orders API omitted the sender id. Anonymous `GET /api/commerce/orders` returned 401. No payment call was made.
 

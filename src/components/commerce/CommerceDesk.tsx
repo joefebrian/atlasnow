@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { ConnectionPanel } from "@/components/commerce/ConnectionPanel";
+import { CatalogFeedPanel } from "@/components/commerce/CatalogFeedPanel";
 import { MetaCatalogProducts } from "@/components/commerce/MetaCatalogProducts";
 import { OrdersInbox } from "@/components/commerce/OrdersInbox";
 import type { CommerceConnectionView } from "@/lib/commerce/connection";
@@ -30,6 +31,7 @@ export type CommerceProductView = {
   imageUrl: string | null;
   hasImage: boolean;
   unitPriceIdr: number;
+  publicUrl: string;
   status: string;
   availability: string;
   catalogEligibility: string;
@@ -45,6 +47,7 @@ export type CommerceProductView = {
     reviewStatus: string;
     lastImportedAt: string | null;
     lastSyncedAt: string | null;
+    source: "META" | "ATLASNOW";
   };
 };
 
@@ -55,6 +58,7 @@ type Draft = {
   category: string;
   imageUrl: string;
   unitPriceIdr: string;
+  publicUrl: string;
   availability: "AVAILABLE" | "UNAVAILABLE";
   catalogEligibility: "UNKNOWN" | "INELIGIBLE";
   catalogEligibilityNote: string;
@@ -71,6 +75,7 @@ const emptyDraft = (): Draft => ({
   category: "",
   imageUrl: "",
   unitPriceIdr: "",
+  publicUrl: "",
   availability: "AVAILABLE",
   catalogEligibility: "UNKNOWN",
   catalogEligibilityNote: "",
@@ -94,6 +99,7 @@ function draftFrom(product: CommerceProductView): Draft {
     category: product.category,
     imageUrl: product.imageUrl || "",
     unitPriceIdr: String(product.unitPriceIdr),
+    publicUrl: product.publicUrl || "",
     availability: product.availability === "UNAVAILABLE" ? "UNAVAILABLE" : "AVAILABLE",
     catalogEligibility: product.catalogEligibility === "INELIGIBLE" ? "INELIGIBLE" : "UNKNOWN",
     catalogEligibilityNote: product.catalogEligibilityNote,
@@ -296,6 +302,7 @@ export function CommerceDesk({
           description: draft.description,
           category: draft.category,
           imageUrl: draft.imageUrl,
+          publicUrl: draft.publicUrl,
           unitPriceIdr: price,
           status: "ACTIVE",
           availability: draft.availability,
@@ -380,13 +387,51 @@ export function CommerceDesk({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ tenantId, productId: product.id }),
       });
-      const body = (await response.json()) as { error?: string; message?: string; blockers?: string[]; networkCalled?: boolean };
+      const body = (await response.json()) as {
+        error?: string;
+        message?: string;
+        blockers?: string[];
+        networkCalled?: boolean;
+        wouldSend?: boolean;
+        hasSnapshot?: boolean;
+        source?: string;
+        reviewStatus?: string;
+        lastImportedAt?: string | null;
+        lastSyncedAt?: string | null;
+        diffs?: { field: string; imported: string; current: string; changed: boolean }[];
+        methods?: { retailerId: string; method: string }[];
+        acceptanceNote?: string;
+      };
       if (!response.ok) {
         setError(body.error || "Could not preview the catalog item");
         return;
       }
-      const lines = body.blockers?.length ? body.blockers : [body.message || "Nothing to send"];
-      setPreviewText(`${product.sku}: ${lines.join(" ")} No request was sent.`);
+      if (body.networkCalled || body.wouldSend) {
+        setError("Preview tried to send a catalog request. It was stopped.");
+        return;
+      }
+      const diffs = (body.diffs || []).filter((row) => row.changed);
+      const diffLine = !body.hasSnapshot
+        ? "Differences: no stored Meta copy."
+        : diffs.length
+          ? `Differences: ${diffs.map((row) => `${row.field} ${row.imported} → ${row.current}`).join("; ")}`
+          : "Differences: none.";
+      const methods = body.methods?.map((row) => `${row.retailerId} ${row.method}`).join(", ") || "none";
+      const when = (value?: string | null) => (value ? value.slice(0, 16).replace("T", " ") : "");
+      setPreviewText(
+        [
+          product.sku,
+          `Source: ${body.source === "META" ? "Imported from Meta" : "Created in AtlasNow"}`,
+          `Meta review: ${body.reviewStatus || "UNKNOWN"}`,
+          `Last imported: ${when(body.lastImportedAt) || "Not imported"}`,
+          `Last successful publish: ${when(body.lastSyncedAt) || "Not synced"}`,
+          diffLine,
+          `Simulated publish: ${methods}`,
+          body.blockers?.length ? body.blockers.join(" ") : body.message || "Nothing to send",
+          "No request was sent.",
+          body.acceptanceNote || "A Meta batch acceptance is not a Meta product approval.",
+        ].join("\n")
+      );
     } catch {
       setError("Could not preview the catalog item");
     } finally {
@@ -446,8 +491,9 @@ export function CommerceDesk({
           <ConnectionPanel tenantId={tenantId} canWrite={canWrite} initial={connection} />
           <OrdersInbox merchantName={merchantName} orders={orders} />
           <MetaCatalogProducts tenantId={tenantId} canWrite={canWrite} />
+          <CatalogFeedPanel tenantId={tenantId} canRead />
           {previewText ? (
-            <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" role="status">
+            <p className="mb-3 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" role="status">
               {previewText}
             </p>
           ) : null}
@@ -518,6 +564,8 @@ export function CommerceDesk({
                             {product.outlets.length === 0
                               ? "No outlets"
                               : `${product.outlets.length} of ${locations.length} outlets`}
+                            {" · "}
+                            {product.catalog.source === "META" ? "Imported from Meta" : "Created in AtlasNow"}
                             {" · Catalog "}
                             {syncLabel(product.catalog.syncStatus)}
                           </p>
@@ -645,6 +693,19 @@ export function CommerceDesk({
                     Remove photo
                   </button>
                 ) : null}
+                <label className="block text-sm text-slate-600">
+                  Public product URL
+                  <input
+                    className="an-input mt-1"
+                    placeholder="https://"
+                    value={draft.publicUrl}
+                    disabled={!canWrite}
+                    onChange={(event) => setDraft({ ...draft, publicUrl: event.target.value })}
+                  />
+                </label>
+                <p className="text-[12px] leading-relaxed text-slate-500">
+                  Meta requires this https link in a catalog file. Saving it does not send the product. Live catalog push stays off.
+                </p>
                 <details className="text-sm text-slate-600">
                   <summary className="cursor-pointer">Image URL, optional</summary>
                   <input
@@ -842,10 +903,11 @@ function Detail({
         <div>{product.status === "ARCHIVED" ? "Archived" : product.availability === "UNAVAILABLE" ? "Unavailable" : "Available"}</div>
         <div>{product.outlets.length} of {locationCount} outlets</div>
         <div>Catalog note: {product.catalogEligibility === "INELIGIBLE" ? "Not for catalog" : "Not reviewed"}</div>
+        <div>Source: {product.catalog.source === "META" ? "Imported from Meta" : "Created in AtlasNow"}</div>
         <div>Catalog sync: {syncLabel(product.catalog.syncStatus)}</div>
         <div>Meta review: {reviewLabel(product.catalog.reviewStatus)}</div>
         <div>Last imported: {product.catalog.lastImportedAt ? product.catalog.lastImportedAt.slice(0, 16).replace("T", " ") : "Not imported"}</div>
-        <div>Last synced: {product.catalog.lastSyncedAt ? product.catalog.lastSyncedAt.slice(0, 16).replace("T", " ") : "Not synced"}</div>
+        <div>Last successful publish: {product.catalog.lastSyncedAt ? product.catalog.lastSyncedAt.slice(0, 16).replace("T", " ") : "Not synced"}</div>
       </dl>
       {product.description ? <p className="text-sm text-slate-600">{product.description}</p> : null}
       {product.variants.length > 0 ? (

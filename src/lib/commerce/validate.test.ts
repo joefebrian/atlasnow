@@ -49,6 +49,10 @@ describe("commerce product validation", () => {
     assert.equal(parseProductInput({ ...base, unitPriceIdr: -1 }).ok, false);
     assert.equal(parseProductInput({ ...base, variants: [{ sku: "PLAY-001", name: "Same", unitPriceIdr: null }] }).ok, false);
     assert.equal(parseProductInput({ ...base, imageUrl: "http://cdn.example/p.jpg" }).ok, false);
+    assert.equal(parseProductInput({ ...base, publicUrl: "http://brand.example/p" }).ok, false);
+    const linked = parseProductInput({ ...base, publicUrl: "https://brand.example/p" });
+    assert.equal(linked.ok, true);
+    if (linked.ok) assert.equal(linked.value.publicUrl, "https://brand.example/p");
     assert.equal(parseProductInput({ ...base, name: "  " }).ok, false);
   });
 

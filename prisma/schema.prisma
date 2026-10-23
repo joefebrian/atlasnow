@@ -965,6 +965,9 @@ model CommerceProduct {
   imageMime              String    @default("")
   /// Whole rupiah. Not cents.
   unitPriceIdr           Int
+  /// Optional https product page. Empty until the merchant saves one.
+  /// The live sync route does not read this. The feed file and the publish preview do.
+  publicUrl              String    @default("")
   /// ACTIVE | ARCHIVED
   status                 String    @default("ACTIVE")
   /// AVAILABLE | UNAVAILABLE — internal offer state. Not catalog eligibility.
@@ -1056,6 +1059,8 @@ model CommerceCatalogLink {
   lastAttemptAt     DateTime?
   /// Set when a Meta item is copied into the product master. Not a catalog push.
   lastImportedAt    DateTime?
+  /// JSON fields copied from Meta at import. Product edits do not change it.
+  sourceSnapshot    String    @default("")
   lastSyncedAt      DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -1119,6 +1124,8 @@ model CommerceConnection {
   phoneMasked     String    @default("")
   catalogId       String    @default("")
   catalogName     String    @default("")
+  /// Meta catalog vertical from Find catalogs. Empty until that read returns one.
+  catalogVertical String    @default("")
   /// Comma-separated scope names returned by Meta. Not a token.
   grantedScopes   String    @default("")
   tokenEnc        String?

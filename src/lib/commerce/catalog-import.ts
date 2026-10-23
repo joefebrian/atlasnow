@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { importSnapshot } from "@/lib/commerce/catalog-publish";
 import { GraphError, listCatalogItems, type RemoteCatalogRow } from "@/lib/commerce/meta-graph";
 import { decryptSecret } from "@/lib/google/crypto";
 
@@ -315,6 +316,13 @@ async function createImportedProduct(tenantId: string, catalogId: string, item: 
           reviewStatus: item.mappedReview,
           mappingCurrent: true,
           lastImportedAt: new Date(),
+          sourceSnapshot: importSnapshot({
+            name: item.name.slice(0, 160),
+            description: item.description,
+            unitPriceIdr: item.unitPriceIdr,
+            availability: item.availability === "in stock" ? "AVAILABLE" : "UNAVAILABLE",
+            imageUrl: item.imageUrl,
+          }),
           lastError: "",
         },
       },

@@ -10,12 +10,12 @@ Writes: client admin and agency staff. Reads also include HQ marketing, HQ ops, 
 
 ## Data model
 
-- `CommerceProduct` — SKU, name, description, category, optional https image URL, uploaded image bytes, whole IDR price, `ACTIVE` or `ARCHIVED`, internal availability, catalog eligibility `UNKNOWN` or `INELIGIBLE`.
+- `CommerceProduct` — SKU, name, description, category, optional https image URL, optional https product link, uploaded image bytes, whole IDR price, `ACTIVE` or `ARCHIVED`, internal availability, catalog eligibility `UNKNOWN` or `INELIGIBLE`. The saved product link is for the catalog file and the publish preview. The live sync route does not read it.
 - `CommerceVariant` — own SKU and optional price. Unique with the product SKU inside the merchant, case-insensitive.
 - `CommerceProductOutlet` — outlet availability. This is not a Meta review.
 - `CommerceCatalogLink` — one row per product. `retailerId` is the SKU. `metaProductId` is written only after Graph confirms the item. `reviewStatus` stays `UNKNOWN` until Meta review says otherwise. `processedPayloadHash` is the last batch Meta finished with no item errors.
 - `CommerceVariantMap` — variant SKU to a Meta item. Unique retailer id and unique Meta product id per merchant. Review status is not copied from the batch result.
-- `CommerceConnection` — business, WABA, masked phone, catalog id, granted scope names. `tokenEnc` is AES-256-GCM. It is never selected into the browser view. A new authorization clears those asset ids until they are checked against the new token.
+- `CommerceConnection` — business, WABA, masked phone, catalog id, catalog vertical, granted scope names. `tokenEnc` is AES-256-GCM. It is never selected into the browser view. A new authorization clears those asset ids until they are checked against the new token. An empty vertical means the catalog file uses the commerce schema.
 - `CommerceOAuthNonce` — one-time login nonce bound to the session that started it. It is not a Meta token.
 - `CommerceSyncJob` — one row per merchant plus payload hash. Status `BLOCKED`, `SUBMITTED`, `PROCESSING`, `SUCCEEDED`, or `FAILED`. `batchHandle` is the Meta handle. A Graph 200 is `SUBMITTED`, not `SUCCEEDED`.
 - `CommerceSyncLog` — attempt history.
@@ -29,7 +29,9 @@ Writes: client admin and agency staff. Reads also include HQ marketing, HQ ops, 
 
 `GET /api/commerce/orders` and the Commerce page use the same tenant guard as the product list. The page shows reference, time, merchant, outlet when one outlet is known, masked customer, lines, the WhatsApp estimate, validation, and payment "Not started".
 
-`GET /api/commerce/catalog/products` reads the connected catalog with `GET /{catalog}/products` and a cursor. `POST` imports the selected retailer ids. Neither call posts `items_batch`. Import writes the Meta product id onto `CommerceCatalogLink`, sets `lastImportedAt`, and leaves `lastSyncedAt` empty. A SKU that already exists is returned as a conflict and is not changed. The switch is `COMMERCE_CATALOG_IMPORT_ENABLED`. It stays off.
+`GET /api/commerce/catalog/products` reads the connected catalog with `GET /{catalog}/products` and a cursor. `POST` imports the selected retailer ids. Neither call posts `items_batch`. Import writes the Meta product id onto `CommerceCatalogLink`, sets `lastImportedAt`, stores `sourceSnapshot`, and leaves `lastSyncedAt` empty. A SKU that already exists is returned as a conflict and is not changed. The switch is `COMMERCE_CATALOG_IMPORT_ENABLED`. It stays off.
+
+`POST /api/commerce/catalog/preview` compares the product master with `sourceSnapshot` and returns CREATE or UPDATE. It does not call Graph. UPDATE requires the stored retailer id, Meta product id, and catalog id to match. `POST /api/commerce/catalog/export` builds a commerce or local CSV from the product master. A missing required field returns the report and no file. The live sync route still refuses to send. `COMMERCE_CATALOG_SYNC_ENABLED` stays off. See `docs/COMMERCE_CATALOG_BIDIRECTIONAL.md`.
 
 ## APIs
 

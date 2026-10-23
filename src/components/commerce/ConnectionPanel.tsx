@@ -226,7 +226,11 @@ export function ConnectionPanel({
       ) : null}
       {connection.catalogId ? (
         <p className="text-[12px] text-slate-500">
-          Linked catalog {connection.catalogName || connection.catalogId}. Offer status stays separate from Meta review.
+          Linked catalog {connection.catalogName || connection.catalogId}.{" "}
+          {connection.catalogVertical
+            ? `Catalog type ${connection.catalogVertical}.`
+            : "Catalog type is not stored. A feed file uses the commerce schema until Find catalogs returns a type."}{" "}
+          Offer status stays separate from Meta review.
         </p>
       ) : null}
     </section>

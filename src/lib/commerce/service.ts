@@ -24,6 +24,7 @@ const productSelect = {
   imageUrl: true,
   imageMime: true,
   unitPriceIdr: true,
+  publicUrl: true,
   status: true,
   availability: true,
   catalogEligibility: true,
@@ -72,6 +73,7 @@ type ProductRow = {
   imageUrl: string | null;
   imageMime: string;
   unitPriceIdr: number;
+  publicUrl: string;
   status: string;
   availability: string;
   catalogEligibility: string;
@@ -109,6 +111,7 @@ export function presentProduct(row: ProductRow) {
     imageUrl: row.imageUrl,
     hasImage: Boolean(row.imageMime),
     unitPriceIdr: row.unitPriceIdr,
+    publicUrl: row.publicUrl,
     status: row.status,
     availability: row.availability,
     catalogEligibility: row.catalogEligibility === "INELIGIBLE" ? "INELIGIBLE" : "UNKNOWN",
@@ -197,6 +200,7 @@ async function writeProduct(
     category: input.category,
     imageUrl: input.imageUrl,
     unitPriceIdr: input.unitPriceIdr,
+    publicUrl: input.publicUrl || "",
     status: input.status,
     availability: input.availability,
     catalogEligibility: input.catalogEligibility,
@@ -310,7 +314,7 @@ async function writeProduct(
               lastError: "",
             },
             update: {
-              retailerId: input.sku,
+              ...(skuChanged ? {} : { retailerId: input.sku }),
               ...(outdated
                 ? {
                     syncStatus: "OUTDATED",

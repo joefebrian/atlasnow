@@ -139,12 +139,16 @@ export async function listBusinesses(token: string, fetchImpl: FetchLike = fetch
 export async function listCatalogs(businessId: string, token: string, fetchImpl: FetchLike = fetch) {
   const rows = await listEdge(
     `${encodeURIComponent(businessId)}/owned_product_catalogs`,
-    "id,name",
+    "id,name,vertical",
     token,
     fetchImpl
   );
   return rows
-    .map((row) => ({ id: String(row.id || ""), name: String(row.name || row.id || "") }))
+    .map((row) => ({
+      id: String(row.id || ""),
+      name: String(row.name || row.id || ""),
+      vertical: String(row.vertical || "").trim(),
+    }))
     .filter((row) => row.id);
 }
 
@@ -186,6 +190,7 @@ export async function pushCatalogItems(opts: {
   items: CatalogItem[];
   existingRetailerIds: Set<string>;
   link: string;
+  dataExtras?: Record<string, Record<string, string>>;
   fetchImpl?: FetchLike;
 }): Promise<{ handles: string[]; validation: ItemValidation[] }> {
   const fetchImpl = opts.fetchImpl || fetch;
@@ -196,7 +201,7 @@ export async function pushCatalogItems(opts: {
     body: JSON.stringify({
       access_token: opts.token,
       item_type: "PRODUCT_ITEM",
-      ...batchBody(opts.items, opts.existingRetailerIds, opts.link),
+      ...batchBody(opts.items, opts.existingRetailerIds, opts.link, opts.dataExtras),
     }),
     signal: AbortSignal.timeout(20000),
   });

@@ -22,6 +22,7 @@ export type SyncProduct = {
   imageUrl: string | null;
   hasImage: boolean;
   unitPriceIdr: number;
+  publicUrl?: string | null;
   status: string;
   availability: string;
   catalogEligibility: string;
@@ -273,7 +274,12 @@ export function decideCatalogSync(opts: {
   };
 }
 
-export function batchBody(items: CatalogItem[], existingRetailerIds: Set<string>, link: string) {
+export function batchBody(
+  items: CatalogItem[],
+  existingRetailerIds: Set<string>,
+  link: string,
+  extras?: Record<string, Record<string, string>>
+) {
   return {
     allow_upsert: true,
     requests: items.map((row) => ({
@@ -288,6 +294,7 @@ export function batchBody(items: CatalogItem[], existingRetailerIds: Set<string>
         currency: row.currency,
         link,
         ...(row.imageUrl ? { image_link: row.imageUrl } : {}),
+        ...(extras?.[row.retailerId] || {}),
       },
     })),
   };

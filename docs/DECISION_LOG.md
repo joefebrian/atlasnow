@@ -34,6 +34,10 @@ Connection tokens use the existing AES-256-GCM helper. APIs reject bodies that c
 
 A commerce order is paid through the merchant's own Xendit or Midtrans account. The money settles to the merchant. AtlasNow's software and credit fees stay on Rail A (IDR invoice) or, later, Rail B (Creem). Creem is not the shopper checkout. No commission rate is set. A payment URL visit is not `PAID`. Midtrans notifications are appended, not used to replace the merchant's callback. Xendit account webhook URLs are not overwritten. The design is `docs/COMMERCE_PAYMENTS_PRD.md`. No gateway call is built and the live switch stays off.
 
+## 2026-10-24 — Catalog file and publish preview do not send
+
+A merchant can download a Meta catalog file and preview CREATE or UPDATE. The file is withheld when a required field is missing. A local catalog needs one outlet address, latitude, and longitude. The preview does not call Graph. UPDATE is allowed only when the stored retailer id and Meta product id still match. A saved https product link is not read by the live sync route. `COMMERCE_CATALOG_SYNC_ENABLED` stays off. AtlasNow remains the source of truth after import. There is no automatic two-way sync. The proposal is `docs/COMMERCE_CATALOG_BIDIRECTIONAL.md`.
+
 ## 2026-10-24 — Meta catalog import copies items into the product master
 
 A merchant can read the connected Meta catalog and import selected items into AtlasNow. The product master stays canonical. An existing SKU is not overwritten. The Meta product id and retailer id are stored on the catalog link, with sync status `IMPORTED` and `lastImportedAt` set. `lastSyncedAt` stays empty because import does not push. Internal catalog eligibility stays `UNKNOWN` even when Meta review is approved. The read and the import run only when `COMMERCE_CATALOG_IMPORT_ENABLED=true`. That switch stays off. `COMMERCE_CATALOG_SYNC_ENABLED` stays off. The proposal is `docs/COMMERCE_CATALOG_IMPORT.md`.

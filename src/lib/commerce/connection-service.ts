@@ -24,6 +24,9 @@ import {
   type CatalogItem,
   type SyncProduct,
 } from "@/lib/commerce/catalog-sync";
+import { feedSchemaForVertical, localLocation } from "@/lib/commerce/catalog-feed";
+import { loadFeedOutlets } from "@/lib/commerce/catalog-export";
+import { publishMethods, simulatedCatalogPublish, updateRetailerIds } from "@/lib/commerce/catalog-publish";
 import {
   GraphError,
   batchFailureMessage,
@@ -51,6 +54,7 @@ const CLEARED_ASSETS = {
   phoneMasked: "",
   catalogId: "",
   catalogName: "",
+  catalogVertical: "",
 };
 
 function liveSyncEnabled() {
@@ -65,6 +69,7 @@ function asRecord(row: {
   phoneMasked: string;
   catalogId: string;
   catalogName: string;
+  catalogVertical?: string;
   grantedScopes: string;
   tokenEnc: string | null;
   lastError: string;
@@ -271,7 +276,9 @@ export async function discoverCommerceAssets(
           permissionError: missing.length > 0,
           lastError: missing.length ? `Missing ${missing.join(", ")}.` : "",
           lastCheckedAt: new Date(),
-          ...(missingScopes(inspection.scopes, CATALOG_SCOPES).length ? { catalogId: "", catalogName: "" } : {}),
+          ...(missingScopes(inspection.scopes, CATALOG_SCOPES).length
+            ? { catalogId: "", catalogName: "", catalogVertical: "" }
+            : {}),
           ...(missingScopes(inspection.scopes, WHATSAPP_SCOPES).length
             ? { wabaId: "", phoneNumberId: "", phoneMasked: "" }
             : {}),
@@ -307,6 +314,14 @@ export async function discoverCommerceAssets(
       return { ok: false as const, status: 400, error: "That Meta Business is not on this connection" };
     }
     const catalogs = selected ? await listCatalogs(selected, loaded.token, fetchImpl) : [];
+    const current = await prisma.commerceConnection.findUnique({ where: { tenantId }, select: { catalogId: true } });
+    const linkedCatalog = catalogs.find((catalog) => catalog.id === current?.catalogId);
+    if (current?.catalogId && linkedCatalog?.vertical) {
+      await prisma.commerceConnection.update({
+        where: { tenantId },
+        data: { catalogVertical: linkedCatalog.vertical.slice(0, 80) },
+      });
+    }
     const wabas = selected ? await listWabas(selected, loaded.token, fetchImpl) : [];
     const phones: { id: string; wabaId: string; wabaName: string; masked: string }[] = [];
     for (const waba of wabas) {
@@ -372,6 +387,7 @@ export async function linkCommerceAssets(
       businessName: business.name,
       catalogId: catalog.id,
       catalogName: catalog.name,
+      catalogVertical: catalog.vertical.slice(0, 80),
       wabaId: phone.wabaId,
       phoneNumberId: phone.id,
       phoneMasked: phone.masked,
@@ -417,6 +433,7 @@ async function loadSyncProduct(tenantId: string, productId: string): Promise<Syn
       imageUrl: true,
       imageMime: true,
       unitPriceIdr: true,
+      publicUrl: true,
       status: true,
       availability: true,
       catalogEligibility: true,
@@ -432,6 +449,7 @@ async function loadSyncProduct(tenantId: string, productId: string): Promise<Syn
     imageUrl: row.imageUrl,
     hasImage: Boolean(row.imageMime),
     unitPriceIdr: row.unitPriceIdr,
+    publicUrl: row.publicUrl,
     status: row.status,
     availability: row.availability,
     catalogEligibility: row.catalogEligibility,
@@ -445,22 +463,62 @@ export async function previewCatalogSync(tenantId: string, productId: string) {
     getCommerceConnection(tenantId),
   ]);
   if (!product) return { ok: false as const, status: 404, error: "Product not found" };
-  const decision = decideCatalogSync({
+  const [link, variantMaps, outlets] = await Promise.all([
+    prisma.commerceCatalogLink.findFirst({
+      where: { productId, tenantId },
+      select: {
+        retailerId: true,
+        externalProductId: true,
+        externalCatalogId: true,
+        metaProductId: true,
+        mappingCurrent: true,
+        reviewStatus: true,
+        sourceSnapshot: true,
+        lastImportedAt: true,
+        lastSyncedAt: true,
+      },
+    }),
+    prisma.commerceVariantMap.findMany({
+      where: { productId, tenantId },
+      select: { retailerId: true, externalProductId: true, metaProductId: true, mappingCurrent: true },
+    }),
+    loadFeedOutlets(tenantId, productId),
+  ]);
+  const plan = simulatedCatalogPublish({
     catalogState: connection.catalog.status,
     liveSwitch: connection.liveSyncEnabled,
     catalogId: connection.catalogId,
     product,
-    publicUrl: null,
+    storedPublicUrl: product.publicUrl || null,
+    vertical: connection.catalogVertical,
+    outlets,
+    parent: link,
+    variants: variantMaps,
+    snapshot: link?.sourceSnapshot || "",
+    reviewStatus: link?.reviewStatus || "UNKNOWN",
+    lastImportedAt: link?.lastImportedAt ? link.lastImportedAt.toISOString() : null,
+    lastSyncedAt: link?.lastSyncedAt ? link.lastSyncedAt.toISOString() : null,
   });
   return {
     ok: true as const,
     networkCalled: false as const,
-    liveSyncEnabled: connection.liveSyncEnabled,
-    syncStatus: decision.syncStatus,
-    message: decision.message,
-    blockers: decision.blockers,
-    items: decision.items,
-    reviewStatus: "UNKNOWN" as const,
+    liveSyncEnabled: plan.liveSyncEnabled,
+    syncStatus: plan.syncStatus,
+    message: plan.message,
+    blockers: plan.blockers,
+    items: plan.items,
+    reviewStatus: plan.reviewStatus,
+    methods: plan.methods,
+    batch: plan.batch,
+    diffs: plan.diffs,
+    hasSnapshot: plan.hasSnapshot,
+    source: plan.source,
+    lastImportedAt: plan.lastImportedAt,
+    lastSyncedAt: plan.lastSyncedAt,
+    mappings: plan.mappings,
+    wouldSend: false as const,
+    acceptanceNote: plan.acceptanceNote,
+    schemaNote: plan.schemaNote,
   };
 }
 
@@ -629,7 +687,59 @@ export async function requestCatalogSync(opts: {
     publicUrl,
   });
   const key = decision.payloadHash || `none:${opts.productId || "catalog"}`;
-  const canSend = decision.execute && Boolean(opts.productId && product && publicUrl?.startsWith("https://"));
+  const parentLink = opts.productId
+    ? await prisma.commerceCatalogLink.findFirst({
+        where: { productId: opts.productId, tenantId: opts.tenantId },
+        select: {
+          retailerId: true,
+          externalProductId: true,
+          externalCatalogId: true,
+          metaProductId: true,
+          mappingCurrent: true,
+        },
+      })
+    : null;
+  const variantMaps = opts.productId
+    ? await prisma.commerceVariantMap.findMany({
+        where: { productId: opts.productId, tenantId: opts.tenantId },
+        select: { retailerId: true, externalProductId: true, metaProductId: true, mappingCurrent: true },
+      })
+    : [];
+  const methods = product
+    ? publishMethods({
+        catalogId: connection.catalogId,
+        parentSku: product.sku,
+        variantSkus: product.variants.filter((row) => row.status !== "ARCHIVED" && row.sku).map((row) => row.sku),
+        parent: parentLink,
+        variants: variantMaps,
+      })
+    : [];
+  const methodBlockers = methods.filter((row) => row.reason).map((row) => row.reason);
+  const vertical = feedSchemaForVertical(connection.catalogVertical);
+  const localBlockers: string[] = [];
+  let dataExtras: Record<string, Record<string, string>> | undefined;
+  if (vertical.schema === "unsupported") localBlockers.push(vertical.note);
+  if (vertical.schema === "local" && opts.productId) {
+    const outlets = await loadFeedOutlets(opts.tenantId, opts.productId);
+    const located = localLocation(outlets);
+    if (!located.ok) localBlockers.push(located.message);
+    else {
+      dataExtras = {};
+      for (const item of decision.items) {
+        dataExtras[item.retailerId] = {
+          address: located.address,
+          latitude: located.latitude,
+          longitude: located.longitude,
+        };
+      }
+    }
+  }
+  const blockedMessage = !decision.execute ? decision.message : methodBlockers[0] || localBlockers[0] || decision.message;
+  const canSend =
+    decision.execute &&
+    Boolean(opts.productId && product && publicUrl?.startsWith("https://")) &&
+    methodBlockers.length === 0 &&
+    localBlockers.length === 0;
 
   if (!canSend) {
     const existing = await prisma.commerceSyncJob.findUnique({
@@ -709,7 +819,7 @@ export async function requestCatalogSync(opts: {
           data: {
             status: "BLOCKED",
             attempts,
-            lastError: decision.message,
+            lastError: blockedMessage,
             payloadHash: decision.payloadHash,
             finishedAt: new Date(),
           },
@@ -722,7 +832,7 @@ export async function requestCatalogSync(opts: {
             action: "UPSERT",
             status: "BLOCKED",
             attempts,
-            lastError: decision.message,
+            lastError: blockedMessage,
             payloadHash: decision.payloadHash,
             finishedAt: new Date(),
           },
@@ -737,7 +847,7 @@ export async function requestCatalogSync(opts: {
         where: { productId: opts.productId, tenantId: opts.tenantId },
         data: {
           syncStatus: stale ? "OUTDATED" : decision.syncStatus,
-          lastError: stale ? "Product details changed. Preview sync again before a live push." : decision.message,
+          lastError: stale ? "Product details changed. Preview sync again before a live push." : blockedMessage,
           lastAttemptAt: new Date(),
         },
       });
@@ -748,7 +858,7 @@ export async function requestCatalogSync(opts: {
         productId: opts.productId,
         action: "CATALOG_SYNC",
         outcome: decision.syncStatus,
-        message: decision.message,
+        message: blockedMessage,
       },
     });
     await writeAudit({
@@ -765,10 +875,10 @@ export async function requestCatalogSync(opts: {
         syncStatus: decision.syncStatus,
         externalProductId: "" as const,
         networkCalled: false,
-        message: decision.message,
+        message: blockedMessage,
       },
       items: decision.items as CatalogItem[],
-      blockers: decision.blockers,
+      blockers: [...decision.blockers, ...methodBlockers, ...localBlockers],
       jobId: job.id,
       retried: Boolean(existing),
     };
@@ -849,26 +959,14 @@ export async function requestCatalogSync(opts: {
     status = "FAILED";
     message = loaded.error;
   } else if (claim.mode === "push") {
-    const linkRow = await prisma.commerceCatalogLink.findFirst({
-      where: { productId: opts.productId || "", tenantId: opts.tenantId },
-      select: { externalProductId: true, retailerId: true, mappingCurrent: true },
-    });
-    const maps = await prisma.commerceVariantMap.findMany({
-      where: { productId: opts.productId || "", tenantId: opts.tenantId },
-      select: { retailerId: true, externalProductId: true, mappingCurrent: true },
-    });
-    const existingIds = new Set(
-      [linkRow, ...maps]
-        .filter((row) => row && row.mappingCurrent !== false && row.externalProductId)
-        .map((row) => row!.retailerId)
-    );
     try {
       const accepted = await pushCatalogItems({
         catalogId: connection.catalogId,
         token: loaded.token,
         items: decision.items,
-        existingRetailerIds: existingIds,
+        existingRetailerIds: updateRetailerIds(methods),
         link: publicUrl || "",
+        dataExtras,
         fetchImpl: opts.fetchImpl,
       });
       networkCalled = true;

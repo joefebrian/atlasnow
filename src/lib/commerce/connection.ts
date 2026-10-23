@@ -36,6 +36,7 @@ export type CommerceConnectionView = {
   phoneMasked: string;
   catalogId: string;
   catalogName: string;
+  catalogVertical: string;
   grantedScopes: string[];
   missingScopes: string[];
   lastError: string;
@@ -50,6 +51,7 @@ export type ConnectionRecord = {
   phoneMasked: string;
   catalogId: string;
   catalogName: string;
+  catalogVertical?: string;
   grantedScopes: string;
   tokenEnc: string | null;
   lastError: string;
@@ -142,6 +144,7 @@ export function presentConnection(row: ConnectionRecord | null, liveSyncEnabled:
     phoneMasked: row?.phoneMasked || "",
     catalogId: row?.catalogId || "",
     catalogName: row?.catalogName || "",
+    catalogVertical: row?.catalogVertical || "",
     grantedScopes: granted,
     missingScopes: missingScopes(granted, COMMERCE_META_SCOPES),
     lastError: row?.lastError || "",

@@ -32,6 +32,7 @@ export type ProductInput = {
   availability: Availability;
   catalogEligibility: CatalogEligibility;
   catalogEligibilityNote: string;
+  publicUrl?: string;
   variants: VariantInput[];
   outlets: OutletInput[];
 };
@@ -49,6 +50,20 @@ function parsePrice(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isInteger(value)) return null;
   if (value < 0 || value > MAX_PRICE) return null;
   return value;
+}
+
+function parsePublicUrl(value: unknown): { ok: true; publicUrl: string } | { ok: false; error: string } {
+  if (value == null || value === "") return { ok: true, publicUrl: "" };
+  if (typeof value !== "string") return { ok: false, error: "Product link must be an https URL" };
+  const url = value.trim();
+  if (!url) return { ok: true, publicUrl: "" };
+  if (url.length > 2000) return { ok: false, error: "Product link is too long" };
+  try {
+    if (new URL(url).protocol !== "https:") return { ok: false, error: "Product link must be an https URL" };
+  } catch {
+    return { ok: false, error: "Product link must be an https URL" };
+  }
+  return { ok: true, publicUrl: url };
 }
 
 function parseImage(value: unknown): { ok: true; imageUrl: string | null } | { ok: false; error: string } {
@@ -102,6 +117,8 @@ export function parseProductInput(raw: unknown): { ok: true; value: ProductInput
 
   const image = parseImage(raw.imageUrl);
   if (!image.ok) return image;
+  const link = parsePublicUrl(raw.publicUrl);
+  if (!link.ok) return link;
 
   if (raw.variants != null && !Array.isArray(raw.variants)) {
     return { ok: false, error: "Variants must be a list" };
@@ -163,6 +180,7 @@ export function parseProductInput(raw: unknown): { ok: true; value: ProductInput
       availability,
       catalogEligibility,
       catalogEligibilityNote: cleanText(raw.catalogEligibilityNote, 400),
+      publicUrl: link.publicUrl,
       variants,
       outlets,
     },
