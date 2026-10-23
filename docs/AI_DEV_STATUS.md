@@ -55,7 +55,7 @@ Inbound WhatsApp `type=order` capture is implemented behind `COMMERCE_ORDER_CAPT
 
 2026-10-24, order capture: `npx tsx --test src/lib/commerce/order-capture.test.ts` — **11 passed, 0 failed**. `npx tsx --test src/lib/commerce/order-capture.db.test.ts` on localhost:5433 — **4 passed, 0 failed**. `npx tsc --noEmit` passed. The Commerce page for the local demo brand rendered "Catalog orders", the empty state, and, with a fixture row that was deleted afterward, the reference, SKU, `IDR 28,780` estimate, review label, and "Not started". The orders API omitted the sender id. Anonymous `GET /api/commerce/orders` returned 401. No payment call was made.
 
-`.github/workflows/commerce.yml` runs that typecheck, the unit files, and the database file against a Postgres 16 service. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. The workflow was added in `6a7df29`. Results appear on the pull request after GitHub Actions finishes.
+`.github/workflows/commerce.yml` runs that typecheck, the older unit files, and `service.db.test.ts` against a Postgres 16 service. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. The workflow was added in `6a7df29`. The order-capture test files are not listed there yet. A push that edits `.github/workflows/commerce.yml` was refused because the GitHub token has no `workflow` scope. Run `order-capture.test.ts` and `order-capture.db.test.ts` locally until that file can be updated.
 
 Browser, demo brand, localhost: product list, detail, sync preview (“No request was sent”), checkout copy off, no token field. Network stayed on localhost except the Connect redirect back to Commerce.
 
