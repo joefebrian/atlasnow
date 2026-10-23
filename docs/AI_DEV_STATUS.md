@@ -55,6 +55,10 @@ No staging database is configured in this workspace. Server migrate has not been
 4. Products need an https image URL and a public product link. Ticket-like categories stay blocked.
 5. Leave the live-sync env switch off until a real permission check passes.
 
+## Git
+
+Branch `feature/commerce-meta-catalog`. Commit `c045788`. Not merged. Unrelated local work (inbox photos, public site) was left unstaged.
+
 ## Next
 
 Review this slice. Do not start checkout. After approval: founder Meta setup, then a server migration with backup. See `docs/COMMERCE_ARCHITECTURE.md` and `docs/DECISION_LOG.md`.
