@@ -33,7 +33,7 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 
 ## Tests
 
-2026-10-23: `tsc --noEmit` clean. Commerce, connection, and nav tests **28 passed, 0 failed**. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts`.
+2026-10-23, re-run before the draft pull request: commerce, connection, and nav tests **28 passed, 0 failed**. Typecheck was clean on the earlier run and was not repeated for this docs-only update. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts`.
 
 Browser, demo brand, localhost: product list, detail, sync preview (“No request was sent”), checkout copy off, no token field. Network stayed on localhost except the Connect redirect back to Commerce.
 
@@ -57,7 +57,7 @@ No staging database is configured in this workspace. Server migrate has not been
 
 ## Git
 
-Branch `feature/commerce-meta-catalog`. Feature commit `c045788`. Status note `16064a1`. Pull request https://github.com/joefebrian/atlasnow/pull/1. Not merged. Unrelated local work (inbox photos, public site) was left unstaged.
+Branch `feature/commerce-meta-catalog`. Feature commit `c045788`. Draft pull request https://github.com/joefebrian/atlasnow/pull/1 against `main`. Not merged. No server deploy. Unrelated local work (inbox photos, public site) stays unstaged.
 
 ## Next
 

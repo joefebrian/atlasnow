@@ -43,3 +43,4 @@ Sync builds a catalog batch (`CREATE` or `UPDATE`, price as `99000 IDR`, stock f
 - Postgres via Prisma.
 - Meta Graph and Facebook Login. Not connected in this environment.
 - No Xendit, Midtrans, Creem, or WhatsApp send on these routes.
+- This branch does not set `COMMERCE_CATALOG_SYNC_ENABLED`. Review happens on the draft pull request. Merging does not deploy and does not turn sync on.

@@ -34,6 +34,10 @@ Connection tokens use the existing AES-256-GCM helper. APIs reject bodies that c
 
 A saved product is not a sale. Commerce does not call a payment gateway and does not send WhatsApp. The HQ Cloud number is not registered or subscribed by this flow.
 
+## 2026-10-23 — Draft review before merge
+
+Commerce work is pushed to `feature/commerce-meta-catalog` and opened as a draft pull request against `main`. The agent does not merge, deploy, or set the live-sync switch. Approval is required first.
+
 ## 2026-10-23 — Handoff docs
 
 `docs/AI_DEV_STATUS.md`, `docs/COMMERCE_ARCHITECTURE.md`, and this file are the status pack for a reviewer. Update them at the end of a slice or when a blocker changes. Do not paste secrets into them.
