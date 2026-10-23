@@ -4,12 +4,14 @@ import { after, describe, it } from "node:test";
 import { prisma } from "@/lib/db";
 import type { ProductInput } from "@/lib/commerce/validate";
 import { encryptSecret } from "@/lib/google/crypto";
+import { catalogItems, payloadHash } from "@/lib/commerce/catalog-sync";
 import { consumeCommerceState, issueCommerceState } from "@/lib/commerce/meta-oauth";
 import {
   discoverCommerceAssets,
   getCommerceConnection,
   linkCommerceAssets,
   requestCatalogSync,
+  resumeCatalogBatches,
   saveCommerceToken,
 } from "@/lib/commerce/connection-service";
 import {
@@ -636,6 +638,389 @@ describe("commerce persistence", { skip: localDb() ? false : "local database onl
     assert.equal(JSON.stringify(saved).includes("EAA-revoked-token"), false);
     const row = await prisma.commerceConnection.findUnique({ where: { tenantId: seeded.tenantId } });
     assert.equal(row?.tokenEnc, null);
+  });
+
+  function syncedProductShape() {
+    return {
+      sku: "SYNC-OK",
+      name: "Day pass",
+      description: "Entry",
+      category: "Package",
+      imageUrl: "https://cdn.example/pass.jpg",
+      hasImage: false,
+      unitPriceIdr: 99000,
+      status: "ACTIVE" as const,
+      availability: "AVAILABLE" as const,
+      catalogEligibility: "UNKNOWN" as const,
+      variants: [{ sku: "SYNC-OK-W", name: "Weekend", unitPriceIdr: 120000, status: "ACTIVE" as const }],
+    };
+  }
+
+  it("does not apply a batch that finishes after the merchant changes the price", async () => {
+    const seeded = await connectedProduct("delay-price");
+    let editedDuringPoll = false;
+    const result = await requestCatalogSync({
+      tenantId: seeded.tenantId,
+      productId: seeded.product.id,
+      actorId: "missing-user",
+      liveSwitch: true,
+      publicUrl: "https://brand.example/pass",
+      fetchImpl: (async (url: RequestInfo | URL) => {
+        const href = String(url);
+        if (href.includes("/items_batch")) return json({ handles: ["handle-delay"], validation_status: [] });
+        if (href.includes("check_batch_request_status")) {
+          const edited = await updateCommerceProduct(
+            seeded.tenantId,
+            seeded.product.id,
+            {
+              sku: "SYNC-OK",
+              name: "Day pass",
+              description: "Entry",
+              category: "Package",
+              imageUrl: "https://cdn.example/pass.jpg",
+              unitPriceIdr: 150000,
+              status: "ACTIVE",
+              availability: "AVAILABLE",
+              catalogEligibility: "UNKNOWN",
+              catalogEligibilityNote: "",
+              variants: [{ sku: "SYNC-OK-W", name: "Weekend", unitPriceIdr: 160000, status: "ACTIVE" }],
+              outlets: seeded.product.outlets.map((outlet) => ({
+                locationId: outlet.locationId,
+                availability: outlet.availability === "UNAVAILABLE" ? ("UNAVAILABLE" as const) : ("AVAILABLE" as const),
+              })),
+            },
+            "missing-user",
+            seeded.product.updatedAt
+          );
+          assert.equal(edited.ok, true);
+          if (edited.ok) assert.equal(edited.product.catalog.syncStatus, "NOT_CONNECTED");
+          editedDuringPoll = true;
+          return json({
+            data: [{ handle: "handle-delay", status: "finished", errors_total_count: 0, ids_of_invalid_requests: [] }],
+          });
+        }
+        if (href.includes("/products")) {
+          return json({
+            data: [
+              { id: "meta-late", retailer_id: "SYNC-OK" },
+              { id: "meta-late-w", retailer_id: "SYNC-OK-W" },
+            ],
+          });
+        }
+        return json({ data: [] });
+      }) as typeof fetch,
+    });
+    assert.equal(editedDuringPoll, true);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.plan.syncStatus, "OUTDATED");
+    assert.equal(result.plan.externalProductId, "");
+    assert.equal(result.plan.networkCalled, true);
+    const link = await prisma.commerceCatalogLink.findFirst({ where: { productId: seeded.product.id } });
+    const job = await prisma.commerceSyncJob.findFirst({ where: { productId: seeded.product.id, batchHandle: "handle-delay" } });
+    assert.equal(link?.syncStatus, "OUTDATED");
+    assert.equal(link?.externalProductId, "");
+    assert.equal(link?.metaProductId, "");
+    assert.equal(link?.reviewStatus, "UNKNOWN");
+    assert.equal(link?.mappingCurrent, true);
+    assert.equal(job?.status, "FAILED");
+    assert.match(job?.lastError || "", /not applied/);
+    assert.notEqual(job?.status, "SUCCEEDED");
+  });
+
+  it("keeps historical Meta ids when the merchant selects a different catalog", async () => {
+    const seeded = await connectedProduct("catalog-switch");
+    const confirmed = await runSync(seeded.tenantId, seeded.product.id, "success");
+    assert.equal(confirmed.result.ok, true);
+    if (!confirmed.result.ok) return;
+    assert.equal(confirmed.result.plan.syncStatus, "SYNCED");
+    await saveCommerceToken({
+      tenantId: seeded.tenantId,
+      accessToken: "EAA-new-token",
+      expiresAt: null,
+      scopes: [],
+      actorId: "missing-user",
+      app,
+      fetchImpl: (async () => json({ data: { app_id: "app-test", is_valid: true, expires_at: 0, scopes } })) as typeof fetch,
+    });
+    const retired = await prisma.commerceCatalogLink.findFirst({ where: { productId: seeded.product.id } });
+    const retiredVariant = await prisma.commerceVariantMap.findFirst({ where: { productId: seeded.product.id } });
+    assert.equal(retired?.mappingCurrent, false);
+    assert.equal(retired?.syncStatus, "OUTDATED");
+    assert.equal(retired?.externalProductId, "meta-parent");
+    assert.equal(retired?.metaProductId, "meta-parent");
+    assert.equal(retired?.externalCatalogId, "cat-1");
+    assert.equal(retiredVariant?.mappingCurrent, false);
+    assert.equal(retiredVariant?.metaProductId, "meta-child");
+    const shown = (await listCommerceProducts(seeded.tenantId, "ACTIVE")).find((row) => row.id === seeded.product.id);
+    assert.equal(shown?.catalog.externalProductId, "");
+    assert.equal(shown?.catalog.syncStatus, "OUTDATED");
+    assert.equal(shown?.catalog.reviewStatus, "UNKNOWN");
+
+    const assets = (async (url: RequestInfo | URL) => {
+      const href = String(url);
+      if (href.includes("debug_token")) return json({ data: { app_id: "app-test", is_valid: true, expires_at: 0, scopes } });
+      if (href.includes("/me/businesses")) return json({ data: [{ id: "biz-2", name: "Second" }] });
+      if (href.includes("/biz-2/owned_product_catalogs")) return json({ data: [{ id: "cat-new", name: "New shop" }] });
+      if (href.includes("/biz-2/owned_whatsapp_business_accounts")) return json({ data: [{ id: "waba-2", name: "New WA" }] });
+      if (href.includes("/waba-2/phone_numbers")) return json({ data: [{ id: "phone-2", display_phone_number: "+62 812 0000 3333" }] });
+      return json({ data: [] });
+    }) as typeof fetch;
+    const linked = await linkCommerceAssets(
+      seeded.tenantId,
+      { businessId: "biz-2", catalogId: "cat-new", wabaId: "waba-2", phoneNumberId: "phone-2" },
+      "missing-user",
+      assets,
+      app
+    );
+    assert.equal(linked.ok, true);
+    const still = await prisma.commerceCatalogLink.findFirst({ where: { productId: seeded.product.id } });
+    assert.equal(still?.mappingCurrent, false);
+    assert.equal(still?.metaProductId, "meta-parent");
+    assert.equal(still?.externalCatalogId, "cat-1");
+
+    const methods: string[] = [];
+    let batchCatalog = "";
+    const pushed = await requestCatalogSync({
+      tenantId: seeded.tenantId,
+      productId: seeded.product.id,
+      actorId: "missing-user",
+      liveSwitch: true,
+      publicUrl: "https://brand.example/pass",
+      fetchImpl: (async (url: RequestInfo | URL, init?: RequestInit) => {
+        const href = String(url);
+        if (href.includes("/items_batch")) {
+          batchCatalog = href;
+          const body = JSON.parse(String(init?.body || "")) as { requests: { method: string }[] };
+          methods.push(...body.requests.map((row) => row.method));
+          return json({ handles: ["handle-new"], validation_status: [] });
+        }
+        if (href.includes("check_batch_request_status")) {
+          return json({ data: [{ handle: "handle-new", status: "started", errors_total_count: 0, ids_of_invalid_requests: [] }] });
+        }
+        return json({ data: [] });
+      }) as typeof fetch,
+    });
+    assert.equal(pushed.ok, true);
+    assert.match(batchCatalog, /\/cat-new\/items_batch/);
+    assert.deepEqual(methods, ["CREATE", "CREATE"]);
+    const afterPush = await prisma.commerceCatalogLink.findFirst({ where: { productId: seeded.product.id } });
+    assert.equal(afterPush?.metaProductId, "meta-parent");
+    assert.equal(afterPush?.externalCatalogId, "cat-1");
+    assert.equal(afterPush?.mappingCurrent, false);
+    assert.notEqual(afterPush?.syncStatus, "SYNCED");
+  });
+
+  async function openPollJob(opts: {
+    tenantId: string;
+    productId: string;
+    handle: string;
+    pollAttempts?: number;
+    payloadHash?: string;
+    itemResults?: string;
+    createdAt?: Date;
+  }) {
+    await prisma.commerceCatalogLink.updateMany({
+      where: { productId: opts.productId, tenantId: opts.tenantId },
+      data: { syncStatus: "SUBMITTED", reviewStatus: "UNKNOWN" },
+    });
+    return prisma.commerceSyncJob.create({
+      data: {
+        tenantId: opts.tenantId,
+        productId: opts.productId,
+        idempotencyKey: `${opts.handle}-${stamp}`,
+        action: "UPSERT",
+        status: "SUBMITTED",
+        attempts: 1,
+        payloadHash: opts.payloadHash || "pending-hash",
+        batchHandle: opts.handle,
+        catalogId: "cat-1",
+        publicUrl: "https://brand.example/pass",
+        pollAttempts: opts.pollAttempts ?? 0,
+        itemResults: opts.itemResults || "",
+        nextPollAt: new Date(Date.now() - 1000),
+        ...(opts.createdAt ? { createdAt: opts.createdAt } : {}),
+      },
+    });
+  }
+
+  it("polls a submitted batch from one worker and stops at the retry limit", async () => {
+    const locked = await connectedProduct("poll-lock");
+    await openPollJob({ tenantId: locked.tenantId, productId: locked.product.id, handle: "handle-lock" });
+    let calls = 0;
+    const fetchImpl = (async (url: RequestInfo | URL) => {
+      if (String(url).includes("check_batch_request_status")) {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return json({ data: [{ handle: "handle-lock", status: "started", errors_total_count: 0, ids_of_invalid_requests: [] }] });
+      }
+      return json({ data: [] });
+    }) as typeof fetch;
+    const [first, second] = await Promise.all([
+      resumeCatalogBatches({ tenantId: locked.tenantId, fetchImpl }),
+      resumeCatalogBatches({ tenantId: locked.tenantId, fetchImpl }),
+    ]);
+    assert.equal(calls, 1);
+    assert.equal(first.length + second.length, 1);
+    const job = await prisma.commerceSyncJob.findFirst({ where: { productId: locked.product.id } });
+    assert.equal(job?.status, "PROCESSING");
+    assert.equal(job?.pollAttempts, 1);
+    assert.equal(job?.lockToken, "");
+    assert.notEqual(job?.nextPollAt, null);
+    const link = await prisma.commerceCatalogLink.findFirst({ where: { productId: locked.product.id } });
+    assert.equal(link?.syncStatus, "PROCESSING");
+    assert.notEqual(link?.syncStatus, "SYNCED");
+
+    const expired = await connectedProduct("poll-expired");
+    let expiredCalls = 0;
+    await openPollJob({
+      tenantId: expired.tenantId,
+      productId: expired.product.id,
+      handle: "handle-expired",
+      pollAttempts: 8,
+    });
+    await openPollJob({
+      tenantId: expired.tenantId,
+      productId: expired.product.id,
+      handle: "handle-old",
+      createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+    });
+    const stopped = await resumeCatalogBatches({
+      tenantId: expired.tenantId,
+      fetchImpl: (async () => {
+        expiredCalls += 1;
+        return json({ data: [] });
+      }) as typeof fetch,
+    });
+    assert.equal(expiredCalls, 0);
+    assert.equal(stopped.length, 2);
+    assert.equal(stopped.every((row) => row.status === "FAILED"), true);
+    const rows = await prisma.commerceCatalogLink.findMany({ where: { productId: expired.product.id } });
+    assert.equal(rows.every((row) => row.syncStatus === "FAILED"), true);
+    assert.equal(rows.some((row) => row.syncStatus === "SYNCED"), false);
+  });
+
+  it("does not mark a polled batch synced on validation errors, status errors, or a partial lookup", async () => {
+    const validation = await connectedProduct("poll-validation");
+    await openPollJob({ tenantId: validation.tenantId, productId: validation.product.id, handle: "handle-validation" });
+    const validationRun = await resumeCatalogBatches({
+      tenantId: validation.tenantId,
+      fetchImpl: (async (url: RequestInfo | URL) => {
+        const href = String(url);
+        if (href.includes("/products")) return json({ data: [{ id: "meta-parent", retailer_id: "SYNC-OK" }, { id: "meta-child", retailer_id: "SYNC-OK-W" }] });
+        return json({
+          data: [{ handle: "handle-validation", status: "finished", errors_total_count: 1, errors: [{ id: "SYNC-OK", message: "bad price" }], ids_of_invalid_requests: ["SYNC-OK"] }],
+        });
+      }) as typeof fetch,
+    });
+    assert.equal(validationRun[0]?.status, "FAILED");
+    const validationLink = await prisma.commerceCatalogLink.findFirst({ where: { productId: validation.product.id } });
+    assert.equal(validationLink?.syncStatus, "FAILED");
+    assert.equal(validationLink?.reviewStatus, "UNKNOWN");
+    assert.notEqual(validationLink?.syncStatus, "SYNCED");
+
+    const statusError = await connectedProduct("poll-status");
+    await openPollJob({ tenantId: statusError.tenantId, productId: statusError.product.id, handle: "handle-status" });
+    let lookups = 0;
+    const statusRun = await resumeCatalogBatches({
+      tenantId: statusError.tenantId,
+      fetchImpl: (async (url: RequestInfo | URL) => {
+        if (String(url).includes("/products")) lookups += 1;
+        return json({ data: [{ handle: "handle-status", status: "error", errors_total_count: 0, ids_of_invalid_requests: [] }] });
+      }) as typeof fetch,
+    });
+    assert.equal(statusRun[0]?.status, "FAILED");
+    assert.equal(lookups, 0);
+    const statusLink = await prisma.commerceCatalogLink.findFirst({ where: { productId: statusError.product.id } });
+    assert.equal(statusLink?.syncStatus, "FAILED");
+
+    const partial = await connectedProduct("poll-partial-lookup");
+    await openPollJob({
+      tenantId: partial.tenantId,
+      productId: partial.product.id,
+      handle: "handle-partial",
+      payloadHash: payloadHash("cat-1", catalogItems(syncedProductShape()), "https://brand.example/pass"),
+    });
+    const partialRun = await resumeCatalogBatches({
+      tenantId: partial.tenantId,
+      fetchImpl: (async (url: RequestInfo | URL) => {
+        if (String(url).includes("/products")) return json({ data: [{ id: "meta-parent", retailer_id: "SYNC-OK" }] });
+        return json({ data: [{ handle: "handle-partial", status: "finished", errors_total_count: 0, ids_of_invalid_requests: [] }] });
+      }) as typeof fetch,
+    });
+    assert.equal(partialRun[0]?.status, "PROCESSING");
+    const partialLink = await prisma.commerceCatalogLink.findFirst({ where: { productId: partial.product.id } });
+    const partialJob = await prisma.commerceSyncJob.findFirst({ where: { productId: partial.product.id } });
+    assert.equal(partialLink?.syncStatus, "PROCESSING");
+    assert.equal(partialLink?.externalProductId, "");
+    assert.notEqual(partialJob?.status, "SUCCEEDED");
+
+    const stored = await connectedProduct("poll-stored-error");
+    await openPollJob({
+      tenantId: stored.tenantId,
+      productId: stored.product.id,
+      handle: "handle-stored",
+      payloadHash: payloadHash("cat-1", catalogItems(syncedProductShape()), "https://brand.example/pass"),
+      itemResults: JSON.stringify([{ retailerId: "SYNC-OK", errors: ["price was rejected"], warnings: [] }]),
+    });
+    const storedRun = await resumeCatalogBatches({
+      tenantId: stored.tenantId,
+      fetchImpl: (async (url: RequestInfo | URL) => {
+        if (String(url).includes("/products")) {
+          return json({
+            data: [
+              { id: "meta-parent", retailer_id: "SYNC-OK" },
+              { id: "meta-child", retailer_id: "SYNC-OK-W" },
+            ],
+          });
+        }
+        return json({ data: [{ handle: "handle-stored", status: "finished", errors_total_count: 0, ids_of_invalid_requests: [] }] });
+      }) as typeof fetch,
+    });
+    assert.equal(storedRun[0]?.status, "FAILED");
+    const storedLink = await prisma.commerceCatalogLink.findFirst({ where: { productId: stored.product.id } });
+    assert.equal(storedLink?.syncStatus, "FAILED");
+    assert.equal(storedLink?.externalProductId, "");
+    assert.notEqual(storedLink?.syncStatus, "SYNCED");
+  });
+
+  it("writes variant mappings when a worker confirms a finished batch", async () => {
+    const seeded = await connectedProduct("poll-success");
+    await openPollJob({
+      tenantId: seeded.tenantId,
+      productId: seeded.product.id,
+      handle: "handle-worker",
+      payloadHash: payloadHash("cat-1", catalogItems(syncedProductShape()), "https://brand.example/pass"),
+    });
+    let posts = 0;
+    const run = await resumeCatalogBatches({
+      tenantId: seeded.tenantId,
+      fetchImpl: (async (url: RequestInfo | URL, init?: RequestInit) => {
+        const href = String(url);
+        if (href.includes("/items_batch")) posts += 1;
+        if (href.includes("/products")) {
+          return json({
+            data: [
+              { id: "meta-parent", retailer_id: "SYNC-OK" },
+              { id: "meta-child", retailer_id: "SYNC-OK-W" },
+            ],
+          });
+        }
+        assert.equal(init?.method, undefined);
+        return json({ data: [{ handle: "handle-worker", status: "finished", errors_total_count: 0, ids_of_invalid_requests: [] }] });
+      }) as typeof fetch,
+    });
+    assert.equal(posts, 0);
+    assert.equal(run[0]?.status, "SUCCEEDED");
+    const link = await prisma.commerceCatalogLink.findFirst({ where: { productId: seeded.product.id } });
+    const variant = await prisma.commerceVariantMap.findFirst({ where: { productId: seeded.product.id } });
+    assert.equal(link?.syncStatus, "SYNCED");
+    assert.equal(link?.metaProductId, "meta-parent");
+    assert.equal(link?.mappingCurrent, true);
+    assert.equal(link?.reviewStatus, "UNKNOWN");
+    assert.equal(variant?.metaProductId, "meta-child");
+    assert.equal(variant?.mappingCurrent, true);
+    assert.equal(variant?.reviewStatus, "UNKNOWN");
   });
 
   it("consumes a commerce oauth nonce once for the session that started it", async () => {

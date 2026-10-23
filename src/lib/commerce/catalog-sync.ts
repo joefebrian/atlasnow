@@ -86,6 +86,29 @@ export function knownReviewStatus(status: string | undefined): string {
   return status && REVIEW_STATUSES.has(status) ? status : "UNKNOWN";
 }
 
+export type BatchSyncDecision = "SYNC" | "WAIT" | "REJECT" | "STALE";
+
+/** A finished batch is applied only when the payload, catalog, and item ids still match. */
+export function batchSyncDecision(opts: {
+  classified: "SUBMITTED" | "PROCESSING" | "SUCCEEDED" | "FAILED";
+  validationErrorCount: number;
+  invalidIds: string[];
+  expectedRetailerIds: string[];
+  mappedRetailerIds: string[];
+  jobHash: string;
+  currentHash: string;
+  jobCatalogId: string;
+  activeCatalogId: string;
+}): BatchSyncDecision {
+  if (opts.classified === "SUBMITTED" || opts.classified === "PROCESSING") return "WAIT";
+  if (opts.classified === "FAILED") return "REJECT";
+  if (opts.validationErrorCount > 0 || opts.invalidIds.length > 0) return "REJECT";
+  if (!opts.jobCatalogId || opts.jobCatalogId !== opts.activeCatalogId || opts.jobHash !== opts.currentHash) return "STALE";
+  const mapped = new Set(opts.mappedRetailerIds);
+  if (!opts.expectedRetailerIds.length || !opts.expectedRetailerIds.every((id) => mapped.has(id))) return "WAIT";
+  return "SYNC";
+}
+
 function item(opts: {
   retailerId: string;
   title: string;

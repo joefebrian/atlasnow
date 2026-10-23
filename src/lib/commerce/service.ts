@@ -57,6 +57,7 @@ const productSelect = {
       externalProductId: true,
       reviewStatus: true,
       lastSyncedAt: true,
+      mappingCurrent: true,
     },
   },
 };
@@ -92,6 +93,7 @@ type ProductRow = {
     externalProductId: string;
     reviewStatus: string;
     lastSyncedAt: Date | null;
+    mappingCurrent: boolean;
   } | null;
 };
 
@@ -253,7 +255,7 @@ async function writeProduct(
             syncStatus: true,
           },
         },
-        variantMaps: { select: { retailerId: true, externalProductId: true, metaProductId: true, syncStatus: true, reviewStatus: true, lastError: true, lastSyncedAt: true } },
+        variantMaps: { select: { retailerId: true, externalProductId: true, metaProductId: true, syncStatus: true, reviewStatus: true, mappingCurrent: true, lastError: true, lastSyncedAt: true } },
       },
     });
     if (!existing) return null;
@@ -334,6 +336,7 @@ async function writeProduct(
           metaProductId: prev.metaProductId,
           syncStatus: outdated && (prev.syncStatus === "SYNCED" || prev.externalProductId) ? "OUTDATED" : prev.syncStatus,
           reviewStatus: prev.reviewStatus,
+          mappingCurrent: prev.mappingCurrent,
           lastError: prev.lastError,
           lastSyncedAt: prev.lastSyncedAt,
         },
@@ -494,6 +497,7 @@ export async function ensureCommerceReadiness(tenantId: string) {
   return presentStoredReadiness(row);
 }
 
+/** Production entry. No public product URL is accepted, so this call cannot send a catalog batch. */
 export async function recordCatalogSyncRefusal(tenantId: string, productId: string | null, actorId: string) {
   const result = await requestCatalogSync({ tenantId, productId, actorId });
   if (!result.ok) return result;

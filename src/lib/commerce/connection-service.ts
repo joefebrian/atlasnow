@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { randomBytes } from "crypto";
 import { prisma } from "@/lib/db";
 import { writeAudit } from "@/lib/auth";
 import { decryptSecret, encryptSecret } from "@/lib/google/crypto";
@@ -16,7 +16,14 @@ import {
   type CommerceConnectionView,
   type ConnectionRecord,
 } from "@/lib/commerce/connection";
-import { decideCatalogSync, type CatalogItem, type SyncProduct } from "@/lib/commerce/catalog-sync";
+import {
+  batchSyncDecision,
+  catalogItems,
+  decideCatalogSync,
+  payloadHash,
+  type CatalogItem,
+  type SyncProduct,
+} from "@/lib/commerce/catalog-sync";
 import {
   GraphError,
   batchFailureMessage,
@@ -166,6 +173,7 @@ export async function saveCommerceToken(opts: {
       lastCheckedAt: new Date(),
     },
   });
+  await retireForeignCatalogMappings(opts.tenantId, "");
   await writeAudit({
     tenantId: opts.tenantId,
     actorId: opts.actorId,
@@ -175,6 +183,42 @@ export async function saveCommerceToken(opts: {
     meta: { scopes, permissionError, stored: storeToken },
   });
   return getCommerceConnection(opts.tenantId);
+}
+
+const PREVIOUS_CATALOG_MESSAGE =
+  "Stored item ids belong to a previous Meta catalog and are not used for the current catalog.";
+
+async function retireForeignCatalogMappings(tenantId: string, activeCatalogId: string) {
+  await prisma.commerceCatalogLink.updateMany({
+    where: {
+      tenantId,
+      mappingCurrent: true,
+      externalCatalogId: { not: "" },
+      ...(activeCatalogId ? { NOT: { externalCatalogId: activeCatalogId } } : {}),
+    },
+    data: {
+      mappingCurrent: false,
+      syncStatus: "OUTDATED",
+      lastError: PREVIOUS_CATALOG_MESSAGE,
+    },
+  });
+  const stale = await prisma.commerceCatalogLink.findMany({
+    where: { tenantId, mappingCurrent: false },
+    select: { productId: true },
+  });
+  if (!stale.length) return;
+  await prisma.commerceVariantMap.updateMany({
+    where: {
+      tenantId,
+      productId: { in: stale.map((row) => row.productId) },
+      mappingCurrent: true,
+    },
+    data: {
+      mappingCurrent: false,
+      syncStatus: "OUTDATED",
+      lastError: PREVIOUS_CATALOG_MESSAGE,
+    },
+  });
 }
 
 async function tokenFor(tenantId: string): Promise<{ token: string } | { error: string; status: number }> {
@@ -335,6 +379,7 @@ export async function linkCommerceAssets(
       lastCheckedAt: new Date(),
     },
   });
+  await retireForeignCatalogMappings(tenantId, catalog.id);
   await writeAudit({
     tenantId,
     actorId,
@@ -419,17 +464,62 @@ export async function previewCatalogSync(tenantId: string, productId: string) {
   };
 }
 
-function isUniqueConflict(error: unknown) {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
-}
-
 function linkSyncStatus(jobStatus: string, fallback: string) {
   if (jobStatus === "SUCCEEDED") return "SYNCED";
   if (jobStatus === "SUBMITTED" || jobStatus === "PROCESSING" || jobStatus === "FAILED") return jobStatus;
   return fallback;
 }
 
-async function claimCatalogJob(opts: { tenantId: string; productId: string | null; key: string; hash: string }) {
+const POLL_BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000];
+const MAX_POLLS = 8;
+const MAX_JOB_MS = 2 * 60 * 60 * 1000;
+const LOCK_MS = 60_000;
+const STALE_BATCH_MESSAGE = "This batch finished after the product or catalog changed. It was not applied.";
+const POLL_STOPPED_MESSAGE = "Catalog batch polling stopped before Meta confirmed it.";
+
+function backoffMs(attempt: number) {
+  return POLL_BACKOFF_MS[Math.min(Math.max(attempt, 0), POLL_BACKOFF_MS.length - 1)];
+}
+
+function validationErrorCount(items: ItemValidation[]) {
+  return items.reduce((sum, row) => sum + row.errors.length, 0);
+}
+
+function storedValidation(raw: string): ItemValidation[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as ItemValidation[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((row) => row && typeof row.retailerId === "string").map((row) => ({
+      retailerId: row.retailerId,
+      errors: Array.isArray(row.errors) ? row.errors.map(String) : [],
+      warnings: Array.isArray(row.warnings) ? row.warnings.map(String) : [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Keeps earlier item errors. A later clean status poll must not erase them. */
+function mergeValidation(prior: ItemValidation[], next: ItemValidation[]): ItemValidation[] {
+  const byId = new Map<string, ItemValidation>();
+  for (const row of [...prior, ...next]) {
+    const current = byId.get(row.retailerId) || { retailerId: row.retailerId, errors: [], warnings: [] };
+    current.errors.push(...row.errors);
+    current.warnings.push(...row.warnings);
+    byId.set(row.retailerId, current);
+  }
+  return [...byId.values()];
+}
+
+async function claimCatalogJob(opts: {
+  tenantId: string;
+  productId: string | null;
+  key: string;
+  hash: string;
+  catalogId: string;
+  publicUrl: string;
+}) {
   const existing = await prisma.commerceSyncJob.findUnique({
     where: { tenantId_idempotencyKey: { tenantId: opts.tenantId, idempotencyKey: opts.key } },
   });
@@ -447,31 +537,26 @@ async function claimCatalogJob(opts: { tenantId: string; productId: string | nul
     if (age < 20000) return { mode: "busy" as const, job: existing };
   }
   if (!existing) {
-    try {
-      const job = await prisma.commerceSyncJob.create({
-        data: {
-          tenantId: opts.tenantId,
-          productId: opts.productId,
-          idempotencyKey: opts.key,
-          action: "UPSERT",
-          status: "SUBMITTED",
-          attempts: 1,
-          lastError: "",
-          payloadHash: opts.hash,
-          batchHandle: "",
-          itemResults: "",
-        },
-      });
-      return { mode: "push" as const, job };
-    } catch (error) {
-      if (!isUniqueConflict(error)) throw error;
-      const winner = await prisma.commerceSyncJob.findUnique({
-        where: { tenantId_idempotencyKey: { tenantId: opts.tenantId, idempotencyKey: opts.key } },
-      });
-      if (!winner) throw new Error("Catalog sync claim was lost");
-      if (winner.batchHandle) return { mode: "poll" as const, job: winner };
-      return { mode: "busy" as const, job: winner };
-    }
+    const id = randomBytes(16).toString("hex");
+    const inserted = await prisma.$executeRaw`
+      INSERT INTO "CommerceSyncJob" (
+        "id", "tenantId", "productId", "idempotencyKey", "action", "status",
+        "attempts", "lastError", "payloadHash", "batchHandle", "itemResults",
+        "catalogId", "publicUrl", "pollAttempts", "lockToken", "createdAt", "updatedAt"
+      ) VALUES (
+        ${id}, ${opts.tenantId}, ${opts.productId}, ${opts.key}, ${"UPSERT"}, ${"SUBMITTED"},
+        ${1}, ${""}, ${opts.hash}, ${""}, ${""},
+        ${opts.catalogId}, ${opts.publicUrl}, ${0}, ${""}, NOW(), NOW()
+      )
+      ON CONFLICT ("tenantId", "idempotencyKey") DO NOTHING
+    `;
+    const winner = await prisma.commerceSyncJob.findUnique({
+      where: { tenantId_idempotencyKey: { tenantId: opts.tenantId, idempotencyKey: opts.key } },
+    });
+    if (!winner) throw new Error("Catalog sync claim was lost");
+    if (inserted === 1) return { mode: "push" as const, job: winner };
+    if (winner.batchHandle) return { mode: "poll" as const, job: winner };
+    return { mode: "busy" as const, job: winner };
   }
   const claimed = await prisma.commerceSyncJob.updateMany({
     where: { id: existing.id, status: existing.status, attempts: existing.attempts },
@@ -480,6 +565,8 @@ async function claimCatalogJob(opts: { tenantId: string; productId: string | nul
       attempts: { increment: 1 },
       batchHandle: "",
       payloadHash: opts.hash,
+      catalogId: opts.catalogId,
+      publicUrl: opts.publicUrl,
       finishedAt: null,
     },
   });
@@ -498,15 +585,26 @@ async function rememberJob(opts: {
   handle?: string;
   items?: ItemValidation[];
   finished?: boolean;
+  pollAttempts?: number;
+  nextPollAt?: Date | null;
 }) {
+  const open = opts.status === "SUBMITTED" || opts.status === "PROCESSING";
   await prisma.commerceSyncJob.update({
     where: { id: opts.jobId },
     data: {
       status: opts.status,
       lastError: scrubSecret(opts.message),
+      lockToken: "",
+      lockedAt: null,
       ...(opts.handle !== undefined ? { batchHandle: opts.handle } : {}),
       ...(opts.items ? { itemResults: JSON.stringify(opts.items).slice(0, 8000) } : {}),
-      ...(opts.finished ? { finishedAt: new Date() } : {}),
+      ...(opts.finished ? { finishedAt: new Date(), nextPollAt: null } : {}),
+      ...(open
+        ? {
+            pollAttempts: opts.pollAttempts,
+            nextPollAt: opts.nextPollAt === undefined ? new Date(Date.now() + backoffMs(opts.pollAttempts || 0)) : opts.nextPollAt,
+          }
+        : {}),
     },
   });
 }
@@ -683,6 +781,8 @@ export async function requestCatalogSync(opts: {
     productId: opts.productId,
     key,
     hash: decision.payloadHash,
+    catalogId: connection.catalogId,
+    publicUrl: publicUrl || "",
   });
   if (claim.mode === "done") {
     const link = opts.productId
@@ -743,6 +843,9 @@ export async function requestCatalogSync(opts: {
   let handle = claim.job.batchHandle;
   let itemResults: ItemValidation[] = [];
   let mappings = new Map<string, string>();
+  let stale = false;
+  const jobCatalogId = claim.job.catalogId || connection.catalogId;
+  const jobPublicUrl = claim.job.publicUrl || publicUrl || "";
 
   if ("error" in loaded) {
     status = "FAILED";
@@ -750,14 +853,16 @@ export async function requestCatalogSync(opts: {
   } else if (claim.mode === "push") {
     const linkRow = await prisma.commerceCatalogLink.findFirst({
       where: { productId: opts.productId || "", tenantId: opts.tenantId },
-      select: { externalProductId: true, retailerId: true },
+      select: { externalProductId: true, retailerId: true, mappingCurrent: true },
     });
     const maps = await prisma.commerceVariantMap.findMany({
       where: { productId: opts.productId || "", tenantId: opts.tenantId },
-      select: { retailerId: true, externalProductId: true },
+      select: { retailerId: true, externalProductId: true, mappingCurrent: true },
     });
     const existingIds = new Set(
-      [linkRow, ...maps].filter((row) => row && row.externalProductId).map((row) => row!.retailerId)
+      [linkRow, ...maps]
+        .filter((row) => row && row.mappingCurrent !== false && row.externalProductId)
+        .map((row) => row!.retailerId)
     );
     try {
       const accepted = await pushCatalogItems({
@@ -796,39 +901,65 @@ export async function requestCatalogSync(opts: {
   if ((status === "SUBMITTED" || claim.mode === "poll") && handle && status !== "FAILED" && !("error" in loaded)) {
     try {
       const report = await checkBatchStatus({
-        catalogId: connection.catalogId,
+        catalogId: jobCatalogId,
         handle,
         token: loaded.token,
         fetchImpl: opts.fetchImpl,
       });
       networkCalled = true;
-      itemResults = report.items.length ? report.items : itemResults;
+      itemResults = mergeValidation(itemResults, report.items);
       const classified = classifyBatchStatus(report);
-      if (classified === "SUCCEEDED") {
-        const found = await lookupCatalogProducts({
-          catalogId: connection.catalogId,
-          retailerIds: decision.items.map((item) => item.retailerId),
-          token: loaded.token,
-          fetchImpl: opts.fetchImpl,
-        });
+      const freshProduct = opts.productId ? await loadSyncProduct(opts.tenantId, opts.productId) : product;
+      const freshConnection = await getCommerceConnection(opts.tenantId);
+      const currentHash = freshProduct
+        ? payloadHash(jobCatalogId, catalogItems(freshProduct), jobPublicUrl || null)
+        : "";
+      const found =
+        classified === "SUCCEEDED"
+          ? await lookupCatalogProducts({
+              catalogId: jobCatalogId,
+              retailerIds: decision.items.map((item) => item.retailerId),
+              token: loaded.token,
+              fetchImpl: opts.fetchImpl,
+            })
+          : [];
+      const outcome = batchSyncDecision({
+        classified,
+        validationErrorCount: validationErrorCount(itemResults),
+        invalidIds: report.invalidIds,
+        expectedRetailerIds: decision.items.map((item) => item.retailerId),
+        mappedRetailerIds: found.map((row) => row.retailerId),
+        jobHash: claim.job.payloadHash || decision.payloadHash,
+        currentHash,
+        jobCatalogId,
+        activeCatalogId: freshConnection.catalogId,
+      });
+      if (outcome === "SYNC") {
         mappings = new Map(found.map((row) => [row.retailerId, row.metaProductId]));
-        const confirmed = decision.items.every((item) => mappings.get(item.retailerId));
-        if (confirmed) {
-          status = "SUCCEEDED";
-          message = "Catalog batch processed. Meta review is separate from the offer status.";
-        } else {
-          status = "PROCESSING";
-          message = "Meta finished the batch. Product ids are not confirmed yet.";
-        }
+        status = "SUCCEEDED";
+        message = "Catalog batch processed. Meta review is separate from the offer status.";
+      } else if (outcome === "STALE") {
+        stale = true;
+        status = "FAILED";
+        message = STALE_BATCH_MESSAGE;
+        if (jobCatalogId !== freshConnection.catalogId) await retireForeignCatalogMappings(opts.tenantId, freshConnection.catalogId);
+      } else if (outcome === "REJECT") {
+        status = "FAILED";
+        message =
+          validationErrorCount(itemResults) > 0
+            ? "Meta returned catalog validation errors. The batch was not marked synced."
+            : batchFailureMessage({ invalidIds: report.invalidIds, itemCount: decision.items.length });
       } else if (classified === "FAILED") {
         status = "FAILED";
         message = batchFailureMessage({ invalidIds: report.invalidIds, itemCount: decision.items.length });
       } else {
-        status = classified;
+        status = classified === "SUCCEEDED" ? "PROCESSING" : classified;
         message =
-          classified === "PROCESSING"
-            ? "Catalog batch is still processing. Meta review has not started."
-            : "Catalog batch submitted. Processing is not confirmed yet.";
+          classified === "SUCCEEDED"
+            ? "Meta finished the batch. Product ids are not confirmed yet."
+            : classified === "PROCESSING"
+              ? "Catalog batch is still processing. Meta review has not started."
+              : "Catalog batch submitted. Processing is not confirmed yet.";
       }
     } catch (error) {
       networkCalled = true;
@@ -839,6 +970,7 @@ export async function requestCatalogSync(opts: {
   }
 
   message = scrubSecret(message);
+  const open = status === "SUBMITTED" || status === "PROCESSING";
   await rememberJob({
     jobId: claim.job.id,
     status,
@@ -846,67 +978,44 @@ export async function requestCatalogSync(opts: {
     handle,
     items: itemResults,
     finished: status === "SUCCEEDED" || status === "FAILED",
+    pollAttempts: open ? claim.job.pollAttempts + 1 : claim.job.pollAttempts,
+    nextPollAt: open ? new Date(Date.now() + backoffMs(claim.job.pollAttempts)) : null,
   });
 
   let externalProductId = "";
-  if (opts.productId && product) {
-    const parentMetaId = mappings.get(product.sku) || "";
-    if (status === "SUCCEEDED" && parentMetaId) externalProductId = parentMetaId;
-    else {
+  const presentedStatus = stale ? "OUTDATED" : linkSyncStatus(status, decision.syncStatus);
+  if (opts.productId && product && status === "SUCCEEDED") {
+    externalProductId = await applyConfirmedMappings({
+      tenantId: opts.tenantId,
+      productId: opts.productId,
+      catalogId: jobCatalogId,
+      payloadHash: claim.job.payloadHash || decision.payloadHash,
+      publicUrl: jobPublicUrl,
+      mappings,
+      parentSku: product.sku,
+      message,
+      when: new Date(),
+    });
+  } else if (opts.productId && product) {
+    if (!stale) {
       const current = await prisma.commerceCatalogLink.findFirst({
         where: { productId: opts.productId, tenantId: opts.tenantId },
-        select: { externalProductId: true },
+        select: { externalProductId: true, mappingCurrent: true },
       });
-      externalProductId = current?.externalProductId || "";
+      externalProductId = current?.mappingCurrent === false ? "" : current?.externalProductId || "";
     }
     await prisma.commerceCatalogLink.updateMany({
-      where: { productId: opts.productId, tenantId: opts.tenantId },
+      where: {
+        productId: opts.productId,
+        tenantId: opts.tenantId,
+        ...(stale ? { syncStatus: { not: "SYNCED" } } : {}),
+      },
       data: {
-        syncStatus: linkSyncStatus(status, decision.syncStatus),
+        syncStatus: presentedStatus,
         lastError: message,
         lastAttemptAt: new Date(),
-        ...(status === "SUCCEEDED"
-          ? {
-              lastSyncedAt: new Date(),
-              externalCatalogId: connection.catalogId,
-              processedPayloadHash: decision.payloadHash,
-              processedPublicUrl: publicUrl || "",
-              ...(externalProductId ? { externalProductId, metaProductId: externalProductId } : {}),
-            }
-          : {}),
       },
     });
-    if (status === "SUCCEEDED") {
-      const variants = await prisma.commerceVariant.findMany({
-        where: { productId: opts.productId, tenantId: opts.tenantId },
-        select: { id: true, sku: true },
-      });
-      for (const variant of variants) {
-        const metaProductId = mappings.get(variant.sku);
-        if (!metaProductId) continue;
-        await prisma.commerceVariantMap.upsert({
-          where: { variantId: variant.id },
-          create: {
-            tenantId: opts.tenantId,
-            productId: opts.productId,
-            variantId: variant.id,
-            retailerId: variant.sku,
-            externalProductId: metaProductId,
-            metaProductId,
-            syncStatus: "SYNCED",
-            reviewStatus: "UNKNOWN",
-            lastSyncedAt: new Date(),
-          },
-          update: {
-            retailerId: variant.sku,
-            externalProductId: metaProductId,
-            metaProductId,
-            syncStatus: "SYNCED",
-            lastSyncedAt: new Date(),
-          },
-        });
-      }
-    }
   }
 
   await prisma.commerceSyncLog.create({
@@ -914,7 +1023,7 @@ export async function requestCatalogSync(opts: {
       tenantId: opts.tenantId,
       productId: opts.productId,
       action: "CATALOG_SYNC",
-      outcome: linkSyncStatus(status, decision.syncStatus),
+      outcome: presentedStatus,
       message,
     },
   });
@@ -929,7 +1038,7 @@ export async function requestCatalogSync(opts: {
   return {
     ok: true as const,
     plan: {
-      syncStatus: linkSyncStatus(status, decision.syncStatus),
+      syncStatus: presentedStatus,
       externalProductId,
       networkCalled,
       message,
@@ -939,4 +1048,265 @@ export async function requestCatalogSync(opts: {
     jobId: claim.job.id,
     retried: claim.mode !== "push",
   };
+}
+
+async function applyConfirmedMappings(opts: {
+  tenantId: string;
+  productId: string;
+  catalogId: string;
+  payloadHash: string;
+  publicUrl: string;
+  mappings: Map<string, string>;
+  parentSku: string;
+  message: string;
+  when: Date;
+}) {
+  const parentId = opts.mappings.get(opts.parentSku) || "";
+  await prisma.commerceCatalogLink.updateMany({
+    where: { productId: opts.productId, tenantId: opts.tenantId },
+    data: {
+      syncStatus: "SYNCED",
+      lastError: opts.message,
+      lastAttemptAt: opts.when,
+      lastSyncedAt: opts.when,
+      externalCatalogId: opts.catalogId,
+      processedPayloadHash: opts.payloadHash,
+      processedPublicUrl: opts.publicUrl,
+      mappingCurrent: true,
+      ...(parentId ? { externalProductId: parentId, metaProductId: parentId } : {}),
+    },
+  });
+  const variants = await prisma.commerceVariant.findMany({
+    where: { productId: opts.productId, tenantId: opts.tenantId },
+    select: { id: true, sku: true },
+  });
+  for (const variant of variants) {
+    const metaProductId = opts.mappings.get(variant.sku);
+    if (!metaProductId) continue;
+    await prisma.commerceVariantMap.upsert({
+      where: { variantId: variant.id },
+      create: {
+        tenantId: opts.tenantId,
+        productId: opts.productId,
+        variantId: variant.id,
+        retailerId: variant.sku,
+        externalProductId: metaProductId,
+        metaProductId,
+        syncStatus: "SYNCED",
+        reviewStatus: "UNKNOWN",
+        mappingCurrent: true,
+        lastSyncedAt: opts.when,
+      },
+      update: {
+        retailerId: variant.sku,
+        externalProductId: metaProductId,
+        metaProductId,
+        syncStatus: "SYNCED",
+        mappingCurrent: true,
+        lastError: "",
+        lastSyncedAt: opts.when,
+      },
+    });
+  }
+  return parentId;
+}
+
+async function closePolledJob(job: { id: string; tenantId: string; productId: string | null }, status: "FAILED", message: string) {
+  await rememberJob({ jobId: job.id, status, message, finished: true });
+  if (!job.productId) return;
+  await prisma.commerceCatalogLink.updateMany({
+    where: {
+      productId: job.productId,
+      tenantId: job.tenantId,
+      syncStatus: { in: ["SUBMITTED", "PROCESSING"] },
+    },
+    data: { syncStatus: "FAILED", lastError: scrubSecret(message), lastAttemptAt: new Date() },
+  });
+}
+
+/** Continues batches that were already accepted. Does not start a new catalog push. */
+export async function resumeCatalogBatches(opts: { tenantId?: string; fetchImpl?: FetchLike; now?: Date; limit?: number } = {}) {
+  const now = opts.now ?? new Date();
+  const due = await prisma.commerceSyncJob.findMany({
+    where: {
+      ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
+      status: { in: ["SUBMITTED", "PROCESSING"] },
+      batchHandle: { not: "" },
+      OR: [{ nextPollAt: null }, { nextPollAt: { lte: now } }],
+    },
+    orderBy: { nextPollAt: "asc" },
+    take: opts.limit ?? 10,
+  });
+  const results: { jobId: string; status: string }[] = [];
+  for (const job of due) {
+    const lockToken = randomBytes(8).toString("hex");
+    const locked = await prisma.commerceSyncJob.updateMany({
+      where: {
+        id: job.id,
+        status: { in: ["SUBMITTED", "PROCESSING"] },
+        OR: [{ lockToken: "" }, { lockedAt: { lt: new Date(now.getTime() - LOCK_MS) } }],
+      },
+      data: { lockToken, lockedAt: now },
+    });
+    if (locked.count !== 1) continue;
+    try {
+      results.push(await pollLockedJob(job, opts.fetchImpl, now));
+    } finally {
+      await prisma.commerceSyncJob.updateMany({
+        where: { id: job.id, lockToken },
+        data: { lockToken: "", lockedAt: null },
+      });
+    }
+  }
+  return results;
+}
+
+async function pollLockedJob(
+  job: {
+    id: string;
+    tenantId: string;
+    productId: string | null;
+    payloadHash: string;
+    batchHandle: string;
+    itemResults: string;
+    catalogId: string;
+    publicUrl: string;
+    pollAttempts: number;
+    createdAt: Date;
+    status: string;
+  },
+  fetchImpl: FetchLike | undefined,
+  now: Date
+) {
+  if (!job.productId || !job.catalogId || job.pollAttempts >= MAX_POLLS || now.getTime() - job.createdAt.getTime() > MAX_JOB_MS) {
+    await closePolledJob(job, "FAILED", POLL_STOPPED_MESSAGE);
+    return { jobId: job.id, status: "FAILED" };
+  }
+  const loaded = await tokenFor(job.tenantId);
+  if ("error" in loaded) {
+    await closePolledJob(job, "FAILED", loaded.error);
+    return { jobId: job.id, status: "FAILED" };
+  }
+  const product = await loadSyncProduct(job.tenantId, job.productId);
+  if (!product) {
+    await closePolledJob(job, "FAILED", "Product not found");
+    return { jobId: job.id, status: "FAILED" };
+  }
+  const connection = await getCommerceConnection(job.tenantId);
+  let report;
+  try {
+    report = await checkBatchStatus({
+      catalogId: job.catalogId,
+      handle: job.batchHandle,
+      token: loaded.token,
+      fetchImpl,
+    });
+  } catch (error) {
+    const attempts = job.pollAttempts + 1;
+    const message = error instanceof Error ? error.message : "Catalog batch status failed";
+    if (attempts >= MAX_POLLS) {
+      await closePolledJob(job, "FAILED", message);
+      return { jobId: job.id, status: "FAILED" };
+    }
+    await rememberJob({
+      jobId: job.id,
+      status: job.status === "SUBMITTED" ? "SUBMITTED" : "PROCESSING",
+      message,
+      pollAttempts: attempts,
+      nextPollAt: new Date(now.getTime() + backoffMs(attempts)),
+    });
+    return { jobId: job.id, status: "PROCESSING" };
+  }
+  const items = catalogItems(product);
+  const classified = classifyBatchStatus(report);
+  const found =
+    classified === "SUCCEEDED"
+      ? await lookupCatalogProducts({
+          catalogId: job.catalogId,
+          retailerIds: items.map((item) => item.retailerId),
+          token: loaded.token,
+          fetchImpl,
+        })
+      : [];
+  const mergedItems = mergeValidation(storedValidation(job.itemResults), report.items);
+  const outcome = batchSyncDecision({
+    classified,
+    validationErrorCount: validationErrorCount(mergedItems),
+    invalidIds: report.invalidIds,
+    expectedRetailerIds: items.map((item) => item.retailerId),
+    mappedRetailerIds: found.map((row) => row.retailerId),
+    jobHash: job.payloadHash,
+    currentHash: payloadHash(job.catalogId, items, job.publicUrl || null),
+    jobCatalogId: job.catalogId,
+    activeCatalogId: connection.catalogId,
+  });
+  if (outcome === "SYNC") {
+    const mappings = new Map(found.map((row) => [row.retailerId, row.metaProductId]));
+    const message = "Catalog batch processed. Meta review is separate from the offer status.";
+    await rememberJob({
+      jobId: job.id,
+      status: "SUCCEEDED",
+      message,
+      items: mergedItems,
+      finished: true,
+    });
+    await applyConfirmedMappings({
+      tenantId: job.tenantId,
+      productId: job.productId,
+      catalogId: job.catalogId,
+      payloadHash: job.payloadHash,
+      publicUrl: job.publicUrl,
+      mappings,
+      parentSku: product.sku,
+      message,
+      when: now,
+    });
+    return { jobId: job.id, status: "SUCCEEDED" };
+  }
+  if (outcome === "STALE") {
+    await rememberJob({ jobId: job.id, status: "FAILED", message: STALE_BATCH_MESSAGE, items: report.items, finished: true });
+    await prisma.commerceCatalogLink.updateMany({
+      where: { productId: job.productId, tenantId: job.tenantId, syncStatus: { not: "SYNCED" } },
+      data: { syncStatus: "OUTDATED", lastError: STALE_BATCH_MESSAGE, lastAttemptAt: now },
+    });
+    if (job.catalogId !== connection.catalogId) await retireForeignCatalogMappings(job.tenantId, connection.catalogId);
+    return { jobId: job.id, status: "FAILED" };
+  }
+  if (outcome === "REJECT") {
+    const message =
+      validationErrorCount(report.items) > 0
+        ? "Meta returned catalog validation errors. The batch was not marked synced."
+        : batchFailureMessage({ invalidIds: report.invalidIds, itemCount: items.length });
+    await closePolledJob(job, "FAILED", message);
+    return { jobId: job.id, status: "FAILED" };
+  }
+  const attempts = job.pollAttempts + 1;
+  if (attempts >= MAX_POLLS) {
+    await closePolledJob(job, "FAILED", POLL_STOPPED_MESSAGE);
+    return { jobId: job.id, status: "FAILED" };
+  }
+  const nextStatus = classified === "SUCCEEDED" || classified === "PROCESSING" ? "PROCESSING" : "SUBMITTED";
+  const waitMessage =
+    classified === "SUCCEEDED"
+      ? "Meta finished the batch. Product ids are not confirmed yet."
+      : classified === "PROCESSING"
+        ? "Catalog batch is still processing. Meta review has not started."
+        : "Catalog batch submitted. Processing is not confirmed yet.";
+  await rememberJob({
+    jobId: job.id,
+    status: nextStatus,
+    message: waitMessage,
+    items: mergedItems,
+    pollAttempts: attempts,
+    nextPollAt: new Date(now.getTime() + backoffMs(attempts)),
+  });
+  await prisma.commerceCatalogLink.updateMany({
+    where: {
+      productId: job.productId,
+      tenantId: job.tenantId,
+      syncStatus: { in: ["SUBMITTED", "PROCESSING"] },
+    },
+    data: { syncStatus: nextStatus, lastError: waitMessage, lastAttemptAt: now },
+  });
+  return { jobId: job.id, status: nextStatus };
 }

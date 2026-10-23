@@ -36,12 +36,14 @@ export function presentCatalog(
     externalProductId?: string;
     reviewStatus?: string;
     lastSyncedAt?: Date | string | null;
+    mappingCurrent?: boolean;
   } | null,
   sku: string
 ) {
+  const historical = link?.mappingCurrent === false;
   return {
-    syncStatus: knownSyncStatus(link?.syncStatus),
-    externalProductId: link?.externalProductId || "",
+    syncStatus: historical ? "OUTDATED" : knownSyncStatus(link?.syncStatus),
+    externalProductId: historical ? "" : link?.externalProductId || "",
     retailerId: link?.retailerId || sku,
     lastError: link?.lastError || "",
     reviewStatus: knownReviewStatus(link?.reviewStatus),

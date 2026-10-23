@@ -1046,6 +1046,8 @@ model CommerceCatalogLink {
   processedPayloadHash String @default("")
   /// Public product URL included in that confirmed payload.
   processedPublicUrl   String @default("")
+  /// False when the stored Meta ids belong to a catalog that is no longer selected.
+  mappingCurrent       Boolean @default(true)
   lastError         String    @default("")
   lastAttemptAt     DateTime?
   lastSyncedAt      DateTime?
@@ -1070,6 +1072,8 @@ model CommerceVariantMap {
   metaProductId     String    @default("")
   syncStatus        String    @default("NOT_CONNECTED")
   reviewStatus      String    @default("UNKNOWN")
+  /// False when the stored Meta ids belong to a catalog that is no longer selected.
+  mappingCurrent    Boolean   @default(true)
   lastError         String    @default("")
   lastSyncedAt      DateTime?
   createdAt         DateTime  @default(now())
@@ -1139,6 +1143,15 @@ model CommerceSyncJob {
   batchHandle    String    @default("")
   /// Per-item validation JSON. Never a token.
   itemResults    String    @default("")
+  /// Catalog the batch was sent to. Compared again before a result is applied.
+  catalogId      String    @default("")
+  /// Public URL included in that batch.
+  publicUrl      String    @default("")
+  pollAttempts   Int       @default(0)
+  nextPollAt     DateTime?
+  lockedAt       DateTime?
+  /// Worker claim. Empty when the job is free.
+  lockToken      String    @default("")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   finishedAt     DateTime?
@@ -1148,6 +1161,7 @@ model CommerceSyncJob {
 
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId, status])
+  @@index([status, nextPollAt])
 }
 
 /// One-time commerce OAuth nonce. Bound to the session that started the login. The value is not a Meta token.

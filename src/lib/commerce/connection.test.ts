@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { readFileSync } from "node:fs";
 import { commerceAuthSecret, decodeCommerceState, encodeCommerceState } from "@/lib/commerce/meta-oauth";
 import { connectionJson, presentConnection } from "@/lib/commerce/connection";
-import { batchBody, catalogItems, decideCatalogSync, payloadHash, type SyncProduct } from "@/lib/commerce/catalog-sync";
+import { batchBody, batchSyncDecision, catalogItems, decideCatalogSync, payloadHash, type SyncProduct } from "@/lib/commerce/catalog-sync";
 import { classifyBatchStatus, COMMERCE_GRAPH, listBusinesses, pushCatalogItems, scrubSecret } from "@/lib/commerce/meta-graph";
 
 const ready: SyncProduct = {
@@ -203,6 +203,50 @@ describe("commerce catalog sync gate", () => {
     const inbox = readFileSync(new URL("../meta/oauth.ts", import.meta.url), "utf8");
     assert.match(inbox, /graph\.facebook\.com\/v21\.0/);
     assert.equal(inbox.includes("catalog_management"), false);
+  });
+
+  it("applies a finished batch only when the payload, catalog, and item ids still match", () => {
+    const readyDecision = {
+      classified: "SUCCEEDED" as const,
+      validationErrorCount: 0,
+      invalidIds: [] as string[],
+      expectedRetailerIds: ["WEEKDAY-PASS"],
+      mappedRetailerIds: ["WEEKDAY-PASS"],
+      jobHash: "hash-1",
+      currentHash: "hash-1",
+      jobCatalogId: "cat-1",
+      activeCatalogId: "cat-1",
+    };
+    assert.equal(batchSyncDecision(readyDecision), "SYNC");
+    assert.equal(batchSyncDecision({ ...readyDecision, classified: "PROCESSING" }), "WAIT");
+    assert.equal(batchSyncDecision({ ...readyDecision, classified: "SUBMITTED" }), "WAIT");
+    assert.equal(batchSyncDecision({ ...readyDecision, classified: "FAILED" }), "REJECT");
+    assert.equal(batchSyncDecision({ ...readyDecision, validationErrorCount: 1 }), "REJECT");
+    assert.equal(batchSyncDecision({ ...readyDecision, invalidIds: ["WEEKDAY-PASS"] }), "REJECT");
+    assert.equal(batchSyncDecision({ ...readyDecision, mappedRetailerIds: [] }), "WAIT");
+    assert.equal(batchSyncDecision({ ...readyDecision, expectedRetailerIds: [] }), "WAIT");
+    assert.equal(batchSyncDecision({ ...readyDecision, currentHash: "hash-2" }), "STALE");
+    assert.equal(batchSyncDecision({ ...readyDecision, activeCatalogId: "cat-2" }), "STALE");
+    assert.equal(batchSyncDecision({ ...readyDecision, jobCatalogId: "" }), "STALE");
+    assert.equal(
+      batchSyncDecision({ ...readyDecision, currentHash: "hash-2", mappedRetailerIds: [] }),
+      "STALE"
+    );
+  });
+
+  it("keeps the production sync route from sending a public product URL", () => {
+    const syncRoute = readFileSync(new URL("../../app/api/commerce/catalog/sync/route.ts", import.meta.url), "utf8");
+    const pollRoute = readFileSync(new URL("../../app/api/commerce/catalog/poll/route.ts", import.meta.url), "utf8");
+    const service = readFileSync(new URL("./service.ts", import.meta.url), "utf8");
+    const refusal = service.slice(service.indexOf("export async function recordCatalogSyncRefusal"));
+    assert.match(syncRoute, /recordCatalogSyncRefusal/);
+    assert.equal(syncRoute.includes("publicUrl"), false);
+    assert.equal(syncRoute.includes("liveSwitch"), false);
+    assert.match(pollRoute, /resumeCatalogBatches/);
+    assert.match(pollRoute, /"publicUrl" in body/);
+    assert.equal(pollRoute.includes("requestCatalogSync"), false);
+    assert.equal(refusal.includes("publicUrl"), false);
+    assert.equal(refusal.includes("liveSwitch"), false);
   });
 
   it("refuses the development auth secret in production", () => {

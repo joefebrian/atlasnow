@@ -41,7 +41,15 @@ Discovery lists businesses with Graph cursors, capped at 10 pages. Catalogs, WAB
 
 The OAuth state nonce is stored once, tied to the session cookie hash, and rejected on reuse. Production refuses to sign that state with the development `AUTH_SECRET` fallback. Token debug checks validity, app id, scopes, and expiry. Error text strips `EAA…` values before they are stored or redirected.
 
-Sync builds a catalog batch (`CREATE` or `UPDATE`, price as `99000 IDR`, stock from internal availability). The payload hash includes the public URL and the attributes sent to Meta. The call runs only when the catalog state is Connected, `COMMERCE_CATALOG_SYNC_ENABLED=true`, and the product has no blockers (archived, ineligible, ticket-like category, missing https image, missing public URL). Otherwise the job is `BLOCKED` and `networkCalled` is false. Two overlapping calls claim one job row. A price, name, description, image, availability, variant, or public URL change marks a previously processed product `OUTDATED` and keeps the external id.
+Sync builds a catalog batch (`CREATE` or `UPDATE`, price as `99000 IDR`, stock from internal availability). The payload hash includes the public URL and the attributes sent to Meta. The call runs only when the catalog state is Connected, `COMMERCE_CATALOG_SYNC_ENABLED=true`, and the product has no blockers (archived, ineligible, ticket-like category, missing https image, missing public URL). Otherwise the job is `BLOCKED` and `networkCalled` is false. Two overlapping calls insert one job row with `ON CONFLICT DO NOTHING`, so the losing call does not post a second batch.
+
+`POST /api/commerce/catalog/sync` does not read a public product URL from the browser. `recordCatalogSyncRefusal` calls the sync function without one, so that route cannot send a batch. Do not add a client URL field to bypass this. A validated https product URL has to exist on the server before a batch can be posted.
+
+Before a finished batch is stored as synced, the worker compares the job's payload hash and catalog id with the product and the catalog selected now. A mismatch is not applied. The product stays `OUTDATED` when it was not already synced by a newer payload, and the late Graph ids are not written. Validation errors, a status of `error`, and a product lookup that is missing a retailer id cannot become `SYNCED`.
+
+`POST /api/commerce/catalog/poll` resumes `SUBMITTED` and `PROCESSING` jobs that already have a handle. It does not start a push and it rejects a public URL. Backoff is 15s, 30s, 1m, 2m, 5m, 10m, then 15m. Polling stops after 8 attempts or 2 hours. A worker sets `lockToken` for 60 seconds so two pollers do not check the same job.
+
+Changing or reconnecting to a different Meta catalog sets `mappingCurrent` false on stored links. The external ids stay in the database. The product screen shows no external id and `OUTDATED` until a batch for the selected catalog is confirmed. A later push to the new catalog uses `CREATE` for those historical ids. A price change on the same catalog keeps the mapping current and marks the offer `OUTDATED`.
 
 ## External dependencies
 

@@ -20,6 +20,7 @@ export async function POST(request: Request) {
   if (!guard.ok) return guard.response;
 
   const productId = typeof body.productId === "string" && body.productId ? body.productId : null;
+  // A public product URL is not read from this request. The sync gate stays shut until the server has one.
   const result = await recordCatalogSyncRefusal(guard.tenantId, productId, guard.session.userId);
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({

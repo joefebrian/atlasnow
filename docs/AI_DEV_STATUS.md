@@ -19,8 +19,11 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 - A stored token is absent from the connection JSON. A request body that contains an access token is rejected. Graph error text is stored with `EAA…` removed. This was checked with a fake error string, not a live token.
 - Commerce is on the default menu for brand admin, HQ marketing, HQ ops, and regional. Cashiers do not see it.
 - Catalog batch states with a fake `fetch`: accepted (`SUBMITTED` plus a stored handle), pending (`PROCESSING`), partial item failure, complete failure, and success only after a finished status and product-id lookup. Meta review stayed `UNKNOWN` in each case. A second call did not post the batch again.
-- Two overlapping sync calls produced one `items_batch` post. The unique-constraint error in the test log is the losing claim. It is caught.
+- Two overlapping sync calls produced one `items_batch` post. The losing claim uses `ON CONFLICT DO NOTHING` and the test log did not show a Prisma unique-constraint error.
 - Three failed posts stop. The fourth call does not call the network.
+- A price edit while a batch is still in flight leaves the product `OUTDATED`. The late Graph ids are not stored and the job is not `SUCCEEDED`.
+- Reconnecting, then selecting another catalog, keeps the old Meta ids in the database, sets `mappingCurrent` false, and the product list shows a blank external id with `OUTDATED`. The next push to the new catalog uses `CREATE`.
+- `POST /api/commerce/catalog/poll` resumes one due job under two overlapping calls. Eight polls, or a job older than two hours, ends `FAILED` without a Graph call. Validation errors, a status of `error`, a partial product lookup, and a stored validation error followed by a clean poll all stay off `SYNCED`. A confirmed worker poll writes the variant map. Review status stayed `UNKNOWN`.
 - A new authorization clears the old catalog. Discovery of a different Meta business rejects the old catalog id. The connection does not stay Connected.
 - A token that loses `catalog_management` drops the catalog id and reports Permission error. A revoked token is not stored.
 - An OAuth nonce works once for the session key that created it. A different session key does not consume it.
@@ -41,7 +44,9 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 
 ## Tests
 
-2026-10-23, after the review fixes: commerce, connection, validation, and nav tests **39 passed, 0 failed**. `npx tsc --noEmit` passed. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again. No GitHub Actions workflow is configured. `gh pr checks` reported no checks.
+2026-10-23, after the final hardening: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **46 passed, 0 failed**. `npx tsc --noEmit` passed. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
+
+`.github/workflows/commerce.yml` is written locally. It runs that typecheck, the unit files, and the database file against a Postgres 16 service. It is not on the branch yet: the GitHub token can push the repo but cannot add a workflow file without the `workflow` scope. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. GitHub Actions has not run.
 
 Browser, demo brand, localhost: product list, detail, sync preview (“No request was sent”), checkout copy off, no token field. Network stayed on localhost except the Connect redirect back to Commerce.
 
@@ -53,17 +58,20 @@ Applied on localhost:5433 only:
 - `20261023180000_commerce_image_sku`
 - `20261023210000_commerce_catalog_connection`
 - `20261023233000_commerce_sync_hardening` — `processedPayloadHash`, `processedPublicUrl`, `batchHandle`, `itemResults`, `CommerceOAuthNonce`
+- `20261024100000_commerce_batch_poll` — `mappingCurrent`, `catalogId`, `publicUrl`, `pollAttempts`, `nextPollAt`, `lockedAt`, `lockToken`
 
-`prisma migrate status` before deploy showed only `20261023233000_commerce_sync_hardening` pending. `migrate deploy` applied that file on localhost:5433. A schema diff also showed unrelated loyalty-index and broadcast-id drift. That drift was not applied.
+`migrate deploy` applied `20261024100000_commerce_batch_poll` on localhost:5433. The same five commerce migrations, with the rest of the migration history, applied on a disposable Postgres 16 at `127.0.0.1:5434`. That container was removed. There is no staging database. Server migrate has not been run.
 
-Rollback for this migration, if the columns must come back out: drop `CommerceOAuthNonce`, then drop `CommerceSyncJob.batchHandle`, `CommerceSyncJob.itemResults`, `CommerceCatalogLink.processedPayloadHash`, and `CommerceCatalogLink.processedPublicUrl`. Do not drop product rows. There is no staging database. Server migrate has not been run.
+`prisma migrate diff` from that disposable database to `schema.prisma` did not ask for commerce changes. It still wants to drop `LoyaltyBirthdayWaSend_tenantId_voucherCode_idx` and `LoyaltyRedemption_tenantId_voucherCode_idx`, set `BroadcastFeeConfig.id` default to `default`, and rename a `LoyaltyRedemption` unique index. Those statements were not applied and were not turned into a migration. `scripts/verify-commerce-migrations.sh` checks that the five commerce SQL files do not mention Loyalty or Broadcast.
+
+Rollback for the poll migration, if those columns must come back out: drop `CommerceSyncJob_status_nextPollAt_idx`, then drop `CommerceSyncJob.catalogId`, `publicUrl`, `pollAttempts`, `nextPollAt`, `lockedAt`, and `lockToken`, then drop `CommerceCatalogLink.mappingCurrent` and `CommerceVariantMap.mappingCurrent`. Do not drop product rows or the stored external ids. Earlier rollback remains: drop `CommerceOAuthNonce`, then drop `batchHandle`, `itemResults`, `processedPayloadHash`, and `processedPublicUrl`.
 
 ## Blockers before live sync
 
 1. Meta App ID and secret in Settings → API.
 2. Register `{APP_BASE}/api/commerce/meta/callback` on the Meta app.
 3. Founder adds and publishes `catalog_management`.
-4. Products need an https image URL and a public product link. Ticket-like categories stay blocked.
+4. Products need an https image URL and a public product link that the server already trusts. The production sync route does not accept that URL from the client. Ticket-like categories stay blocked.
 5. Leave the live-sync env switch off until a real permission check passes.
 
 ## Git
@@ -72,4 +80,4 @@ Branch `feature/commerce-meta-catalog`. Draft pull request https://github.com/jo
 
 ## Next
 
-Review the hardening on the draft pull request. Do not merge. Do not start checkout. After approval: founder Meta setup, then a server migration with backup. See `docs/COMMERCE_ARCHITECTURE.md` and `docs/DECISION_LOG.md`.
+Review the final hardening on the draft pull request. Do not merge. Do not start checkout. After approval: founder Meta setup, then a server migration with backup. Leave the loyalty and broadcast diff alone. See `docs/COMMERCE_ARCHITECTURE.md` and `docs/DECISION_LOG.md`.

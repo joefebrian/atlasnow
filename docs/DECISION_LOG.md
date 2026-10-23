@@ -46,6 +46,26 @@ Commerce work is pushed to `feature/commerce-meta-catalog` and opened as a draft
 
 A new commerce authorization drops the stored business, catalog, WABA, and phone. They are saved again only when the new token's discovery list contains them. A catalog from the previous business cannot stay Connected.
 
+## 2026-10-23 — A late batch does not overwrite a changed product
+
+A finished batch is applied only when its payload hash, catalog id, and retailer ids still match the merchant's current product and selected catalog. A price edit during processing leaves the product `OUTDATED`. Meta ids from that late batch are not stored.
+
+## 2026-10-23 — A different catalog does not inherit the old item ids
+
+Reconnect and catalog link keep the old `externalProductId` and `metaProductId` rows. `mappingCurrent` becomes false, so those ids are not shown as the current catalog and are not sent as `UPDATE`. The screen shows `OUTDATED` until the new catalog confirms its own items.
+
+## 2026-10-23 — The production sync route has no public URL input
+
+`POST /api/commerce/catalog/sync` cannot send. The server does not accept a product URL on that route. Live send stays behind the server switch plus a validated https product URL that the server already has. Do not bypass that gate.
+
+## 2026-10-23 — Catalog polling does not depend on an open browser
+
+`POST /api/commerce/catalog/poll` continues batches that were already submitted. It uses backoff, an 8-poll cap, a 2-hour age cap, and a row lock. It does not post a new batch.
+
+## 2026-10-23 — Loyalty and broadcast drift stays out of this branch
+
+After the commerce migrations, the schema diff still wants to drop two voucher indexes and set a default on `BroadcastFeeConfig.id`. That drift is not part of commerce. It was not generated into a migration and it was not applied.
+
 ## 2026-10-23 — Handoff docs
 
 `docs/AI_DEV_STATUS.md`, `docs/COMMERCE_ARCHITECTURE.md`, and this file are the status pack for a reviewer. Update them at the end of a slice or when a blocker changes. Do not paste secrets into them.
