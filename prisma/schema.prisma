@@ -87,6 +87,15 @@ model Tenant {
   broadcastSends      BroadcastSend[]
   loyaltyGoEvents     LoyaltyGoEvent[]
   wabaPhones          WabaPhone[]
+  commerceProducts    CommerceProduct[]
+  commerceVariants    CommerceVariant[]
+  commerceOutlets     CommerceProductOutlet[]
+  commerceCatalogLinks CommerceCatalogLink[]
+  commerceSyncLogs    CommerceSyncLog[]
+  commerceReadiness   CommerceReadiness?
+  commerceConnection  CommerceConnection?
+  commerceVariantMaps CommerceVariantMap[]
+  commerceSyncJobs    CommerceSyncJob[]
 
   @@index([type, status])
   @@index([agencyId])
@@ -222,6 +231,7 @@ model Location {
   loyaltyRedeems      LoyaltyRedemption[]
   memberSignups       LoyaltyMember[]     @relation("MemberSignupLocation")
   loyaltyGoEvents     LoyaltyGoEvent[]
+  commerceOutlets     CommerceProductOutlet[]
 
   @@index([tenantId, status])
   @@index([tenantId, city])
@@ -935,4 +945,211 @@ model WabaOutbound {
   createdAt     DateTime @default(now())
 
   @@index([phoneNumberId])
+}
+
+/// Merchant product master. AtlasNow is the source of truth. Not a Meta catalog row.
+/// Price is whole IDR. Catalog eligibility is not availability and is not a sale.
+model CommerceProduct {
+  id                     String    @id @default(cuid())
+  tenantId               String
+  sku                    String
+  name                   String
+  description            String    @default("")
+  category               String    @default("")
+  imageUrl               String?
+  /// Uploaded product photo. Not returned in list queries.
+  imageData              Bytes?
+  imageMime              String    @default("")
+  /// Whole rupiah. Not cents.
+  unitPriceIdr           Int
+  /// ACTIVE | ARCHIVED
+  status                 String    @default("ACTIVE")
+  /// AVAILABLE | UNAVAILABLE — internal offer state. Not catalog eligibility.
+  availability           String    @default("AVAILABLE")
+  /// UNKNOWN | INELIGIBLE. This slice never stores ELIGIBLE.
+  catalogEligibility     String    @default("UNKNOWN")
+  catalogEligibilityNote String    @default("")
+  archivedAt             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  variants    CommerceVariant[]
+  outlets     CommerceProductOutlet[]
+  catalogLink CommerceCatalogLink?
+  variantMaps CommerceVariantMap[]
+  syncLogs    CommerceSyncLog[]
+  syncJobs    CommerceSyncJob[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId, status])
+}
+
+model CommerceVariant {
+  id           String   @id @default(cuid())
+  tenantId     String
+  productId    String
+  sku          String
+  name         String
+  /// Null inherits the product price.
+  unitPriceIdr Int?
+  /// ACTIVE | ARCHIVED
+  status       String   @default("ACTIVE")
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant  Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product CommerceProduct      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  catalogMap CommerceVariantMap?
+
+  @@unique([tenantId, sku])
+  @@index([productId])
+}
+
+/// Outlet assignment. A product with no rows is not offered at any outlet.
+model CommerceProductOutlet {
+  id           String   @id @default(cuid())
+  tenantId     String
+  productId    String
+  locationId   String
+  /// AVAILABLE | UNAVAILABLE
+  availability String   @default("AVAILABLE")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product  CommerceProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  location Location        @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, locationId])
+  @@index([tenantId, locationId])
+}
+
+/// Product-level Meta catalog mapping. retailerId is the AtlasNow SKU.
+/// reviewStatus is Meta's review, not the internal offer status.
+model CommerceCatalogLink {
+  id                String    @id @default(cuid())
+  tenantId          String
+  productId         String    @unique
+  externalProductId String    @default("")
+  externalCatalogId String    @default("")
+  /// Graph product id. Empty until Meta returns one.
+  metaProductId     String    @default("")
+  retailerId        String
+  /// NOT_CONNECTED | BLOCKED | PREVIEWED | PENDING | SYNCED | FAILED | OUTDATED
+  syncStatus        String    @default("NOT_CONNECTED")
+  /// UNKNOWN | PENDING | APPROVED | REJECTED. Never copied from availability.
+  reviewStatus      String    @default("UNKNOWN")
+  lastError         String    @default("")
+  lastAttemptAt     DateTime?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product CommerceProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, retailerId])
+  @@index([tenantId, syncStatus])
+}
+
+/// Variant SKU mapped to its own Meta catalog item. One retailer id per merchant.
+model CommerceVariantMap {
+  id                String    @id @default(cuid())
+  tenantId          String
+  productId         String
+  variantId         String    @unique
+  retailerId        String
+  externalProductId String    @default("")
+  metaProductId     String    @default("")
+  syncStatus        String    @default("NOT_CONNECTED")
+  reviewStatus      String    @default("UNKNOWN")
+  lastError         String    @default("")
+  lastSyncedAt      DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product CommerceProduct  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant CommerceVariant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, retailerId])
+  @@index([productId])
+}
+
+model CommerceSyncLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  productId String?
+  action    String
+  outcome   String
+  message   String
+  createdAt DateTime @default(now())
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product CommerceProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
+
+/// Merchant Meta catalog connection. The access token stays encrypted and is never sent to the browser.
+model CommerceConnection {
+  id              String    @id @default(cuid())
+  tenantId        String    @unique
+  businessId      String    @default("")
+  businessName    String    @default("")
+  wabaId          String    @default("")
+  phoneNumberId   String    @default("")
+  phoneMasked     String    @default("")
+  catalogId       String    @default("")
+  catalogName     String    @default("")
+  /// Comma-separated scope names returned by Meta. Not a token.
+  grantedScopes   String    @default("")
+  tokenEnc        String?
+  tokenExpiresAt  DateTime?
+  lastError       String    @default("")
+  permissionError Boolean   @default(false)
+  lastCheckedAt   DateTime?
+  disconnectedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// One row per merchant + payload. A repeated sync returns this row instead of sending twice.
+model CommerceSyncJob {
+  id             String    @id @default(cuid())
+  tenantId       String
+  productId      String?
+  idempotencyKey String
+  action         String
+  /// BLOCKED | SUCCEEDED | FAILED
+  status         String
+  attempts       Int       @default(0)
+  lastError      String    @default("")
+  payloadHash    String    @default("")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  finishedAt     DateTime?
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product CommerceProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, status])
+}
+
+/// Payment flags only. Checkout stays off. This row is not a Meta connection.
+model CommerceReadiness {
+  id                   String   @id @default(cuid())
+  tenantId             String   @unique
+  whatsappStatus       String   @default("NOT_CONNECTED")
+  catalogStatus        String   @default("NOT_CONNECTED")
+  paymentStatus        String   @default("NOT_CONNECTED")
+  paymentProviderLabel String   @default("")
+  updatedAt            DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }

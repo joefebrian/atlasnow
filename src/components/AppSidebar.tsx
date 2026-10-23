@@ -44,7 +44,7 @@ function navItemActive(pathname: string, href: string) {
 const NAV_GROUPS: { key: keyof Messages["nav"]["groups"]; hrefs: string[] }[] = [
   { key: "platform", hrefs: ["/agencies", "/agencies/follow-up", "/support", "/billing", "/activity"] },
   { key: "admin", hrefs: ["/clients", "/clients/follow-up"] },
-  { key: "work", hrefs: ["/control-tower", "/conversations", "/broadcast", "/leakage-queue"] },
+  { key: "work", hrefs: ["/control-tower", "/conversations", "/broadcast", "/commerce", "/leakage-queue"] },
   { key: "people", hrefs: ["/customers", "/loyalty"] },
   { key: "reputation", hrefs: ["/reputation"] },
   { key: "places", hrefs: ["/locations"] },

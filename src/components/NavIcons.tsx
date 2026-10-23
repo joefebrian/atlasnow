@@ -90,6 +90,13 @@ export function NavIcon({ name, className = "h-4 w-4" }: { name: string; classNa
           <path d="M8 21h8M12 17v4" strokeLinecap="round" />
         </svg>
       );
+    case "bag":
+      return (
+        <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="M6 8h12l-1 12H7L6 8Z" strokeLinejoin="round" />
+          <path d="M9 8V7a3 3 0 0 1 6 0v1" strokeLinecap="round" />
+        </svg>
+      );
     case "settings":
       return (
         <svg className={c} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
@@ -125,6 +132,7 @@ export const NAV_ICON_KEY: Record<string, string> = {
   "/channels": "chat",
   "/conversations": "chat",
   "/broadcast": "broadcast",
+  "/commerce": "bag",
   "/customers": "clients",
   "/loyalty": "star",
   "/action-center": "check",

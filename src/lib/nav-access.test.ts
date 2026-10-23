@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { canSeeNavHref, canSeeSettingsHref, homePathForNav, pathAllowedForNav } from "./nav-access";
+import { canSeeNavHref, canSeeSettingsHref, defaultHrefsForRole, homePathForNav, MENU_CHOICES, pathAllowedForNav } from "./nav-access";
 
 describe("nav access", () => {
   it("sends the cashier to Loyalty only", () => {
@@ -50,6 +50,19 @@ describe("nav access", () => {
     assert.equal(canSeeSettingsHref(ctx, "/settings/sprints"), true);
     assert.equal(canSeeSettingsHref(ctx, "/settings/broadcast"), true);
     assert.equal(homePathForNav(ctx), "/clients");
+  });
+
+  it("shows Commerce to brand admin and hides it from the cashier", () => {
+    const admin = { role: "CLIENT_ADMIN", mode: "brand", isAgencyStaff: false, isPlatformAdmin: false };
+    const branch = { role: "BRANCH", mode: "brand", isAgencyStaff: false, isPlatformAdmin: false };
+    assert.equal(MENU_CHOICES.some((choice) => choice.href === "/commerce"), true);
+    assert.equal(defaultHrefsForRole("CLIENT_ADMIN").includes("/commerce"), true);
+    assert.equal(defaultHrefsForRole("HQ_OPS").includes("/commerce"), true);
+    assert.equal(defaultHrefsForRole("BRANCH").includes("/commerce"), false);
+    assert.equal(canSeeNavHref(admin, "/commerce"), true);
+    assert.equal(pathAllowedForNav(admin, "/commerce"), true);
+    assert.equal(canSeeNavHref(branch, "/commerce"), false);
+    assert.equal(pathAllowedForNav(branch, "/commerce"), false);
   });
 
   it("keeps Invoice print on platform Super Admin only", () => {
