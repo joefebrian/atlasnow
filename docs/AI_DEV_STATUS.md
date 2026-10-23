@@ -46,7 +46,7 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 
 2026-10-23, after the final hardening: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **46 passed, 0 failed**. `npx tsc --noEmit` passed. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
 
-`.github/workflows/commerce.yml` is written locally. It runs that typecheck, the unit files, and the database file against a Postgres 16 service. It is not on the branch yet: the GitHub token can push the repo but cannot add a workflow file without the `workflow` scope. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. GitHub Actions has not run.
+`.github/workflows/commerce.yml` runs that typecheck, the unit files, and the database file against a Postgres 16 service. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. The workflow was added in `6a7df29`. Results appear on the pull request after GitHub Actions finishes.
 
 Browser, demo brand, localhost: product list, detail, sync preview (“No request was sent”), checkout copy off, no token field. Network stayed on localhost except the Connect redirect back to Commerce.
 
