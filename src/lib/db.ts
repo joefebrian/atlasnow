@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 
-const PRISMA_REV = "commerce-catalog-4";
+const PRISMA_REV = "commerce-orders-1";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined; prismaRev?: string };
 
 function createPrisma() {
@@ -26,7 +26,8 @@ function getPrisma(): PrismaClient {
     typeof (existing as { contactMessage?: unknown }).contactMessage !== "undefined" &&
     typeof (existing as { commerceProduct?: unknown }).commerceProduct !== "undefined" &&
     typeof (existing as { commerceConnection?: unknown }).commerceConnection !== "undefined" &&
-    typeof (existing as { commerceOAuthNonce?: unknown }).commerceOAuthNonce !== "undefined";
+    typeof (existing as { commerceOAuthNonce?: unknown }).commerceOAuthNonce !== "undefined" &&
+    typeof (existing as { commerceOrder?: unknown }).commerceOrder !== "undefined";
   if (ok) {
     return existing;
   }

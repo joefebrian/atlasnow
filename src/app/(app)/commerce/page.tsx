@@ -3,6 +3,7 @@ import { readSession } from "@/lib/auth";
 import { canReadCommerce, canWriteCommerce } from "@/lib/commerce/access";
 import { emptyConnection } from "@/lib/commerce/connection";
 import { getCommerceConnection } from "@/lib/commerce/connection-service";
+import { listCommerceOrders } from "@/lib/commerce/order-capture";
 import {
   ensureCommerceReadiness,
   listCommerceProducts,
@@ -29,13 +30,14 @@ export default async function CommercePage({ searchParams }: Props) {
 
   const allowed = selectedClientId ? await canAccessTenant(session, selectedClientId) : false;
   const tenantId = allowed ? selectedClientId : null;
-  const [products, locations, connection] = tenantId
+  const [products, locations, connection, orders] = tenantId
     ? await Promise.all([
         listCommerceProducts(tenantId, "ALL"),
         listStoreLocations(tenantId),
         ensureCommerceReadiness(tenantId).then(() => getCommerceConnection(tenantId)),
+        listCommerceOrders(tenantId),
       ])
-    : [[], [], emptyConnection()];
+    : [[], [], emptyConnection(), []];
 
   return (
     <CommerceDesk
@@ -47,6 +49,8 @@ export default async function CommercePage({ searchParams }: Props) {
       locations={locations}
       connection={connection}
       commerceError={typeof commerceError === "string" ? commerceError.slice(0, 180) : ""}
+      merchantName={clients.find((row) => row.id === tenantId)?.name ?? ""}
+      orders={orders}
     />
   );
 }

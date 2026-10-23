@@ -38,15 +38,22 @@ Slice 1 (product master) is implemented and was accepted locally (21 tests). Sli
 - Local Connect Meta redirects back with “Meta App ID / Secret not set”. No Graph call was made.
 - Every Graph failure and retry test used a fake `fetch`. None of them called `graph.facebook.com`.
 
+## Milestone C — order capture (not live)
+
+Inbound WhatsApp `type=order` capture is implemented behind `COMMERCE_ORDER_CAPTURE_ENABLED`. The switch is unset, so production does not store orders. A verified signature is required. The order status is `PENDING_PAYMENT` and the payment status is `NOT_INITIATED`. See `docs/COMMERCE_ORDER_CAPTURE.md` before any deploy.
+
 ## Not built
 
-- WhatsApp checkout, cart webhook, payment gateway, revenue. The payment design is `docs/COMMERCE_PAYMENTS_PRD.md` (2026-10-24). It is not implemented. `COMMERCE_PAYMENTS_ENABLED` is unset.
+- Payment links, gateway calls, tickets, and revenue. The payment design is `docs/COMMERCE_PAYMENTS_PRD.md` (2026-10-24). It is not implemented. `COMMERCE_PAYMENTS_ENABLED` is unset.
+- Live order capture. `COMMERCE_ORDER_CAPTURE_ENABLED` is unset. Do not turn it on until the deployment proposal is accepted.
 - Production catalog sync. `COMMERCE_CATALOG_SYNC_ENABLED` is unset.
 - `catalog_management` on the live Meta app (App ID 1551959122621683). Do not add it until the founder publishes that scope.
 
 ## Tests
 
-2026-10-23, after the worker-race follow-up: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **49 passed, 0 failed**. `npx tsc --noEmit` passed. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
+2026-10-23, after the worker-race follow-up: `npx tsx --test` on `connection.test.ts`, `validate.test.ts`, `nav-access.test.ts`, and `service.db.test.ts` — **49 passed, 0 failed**. Full app suite was not re-run. An older unrelated failure remains in `src/lib/conversations/portfolio.test.ts` and was not run again.
+
+2026-10-24, order capture: `npx tsx --test src/lib/commerce/order-capture.test.ts` — **11 passed, 0 failed**. `npx tsx --test src/lib/commerce/order-capture.db.test.ts` on localhost:5433 — **4 passed, 0 failed**. `npx tsc --noEmit` passed. The Commerce page for the local demo brand rendered "Catalog orders", the empty state, and, with a fixture row that was deleted afterward, the reference, SKU, `IDR 28,780` estimate, review label, and "Not started". The orders API omitted the sender id. Anonymous `GET /api/commerce/orders` returned 401. No payment call was made.
 
 `.github/workflows/commerce.yml` runs that typecheck, the unit files, and the database file against a Postgres 16 service. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. The workflow was added in `6a7df29`. Results appear on the pull request after GitHub Actions finishes.
 
@@ -61,10 +68,11 @@ Applied on localhost:5433 only:
 - `20261023210000_commerce_catalog_connection`
 - `20261023233000_commerce_sync_hardening` — `processedPayloadHash`, `processedPublicUrl`, `batchHandle`, `itemResults`, `CommerceOAuthNonce`
 - `20261024100000_commerce_batch_poll` — `mappingCurrent`, `catalogId`, `publicUrl`, `pollAttempts`, `nextPollAt`, `lockedAt`, `lockToken`
+- `20261024180000_commerce_orders` — `CommerceOrder`, `CommerceOrderLine`. Local only until the order-capture deploy is approved. Production entrypoint applies pending migrations on boot, so this file must not ship in a production image before that approval.
 
 `migrate deploy` applied `20261024100000_commerce_batch_poll` on localhost:5433. The same five commerce migrations, with the rest of the migration history, applied on a disposable Postgres 16 at `127.0.0.1:5434`. That container was removed. There is no staging database. Server migrate has not been run.
 
-`prisma migrate diff` from that disposable database to `schema.prisma` did not ask for commerce changes. It still wants to drop `LoyaltyBirthdayWaSend_tenantId_voucherCode_idx` and `LoyaltyRedemption_tenantId_voucherCode_idx`, set `BroadcastFeeConfig.id` default to `default`, and rename a `LoyaltyRedemption` unique index. Those statements were not applied and were not turned into a migration. `scripts/verify-commerce-migrations.sh` checks that the five commerce SQL files do not mention Loyalty or Broadcast.
+`prisma migrate diff` from that disposable database to `schema.prisma` did not ask for commerce changes. It still wants to drop `LoyaltyBirthdayWaSend_tenantId_voucherCode_idx` and `LoyaltyRedemption_tenantId_voucherCode_idx`, set `BroadcastFeeConfig.id` default to `default`, and rename a `LoyaltyRedemption` unique index. Those statements were not applied and were not turned into a migration. `scripts/verify-commerce-migrations.sh` checks that the commerce SQL files do not mention Loyalty or Broadcast.
 
 Rollback for the poll migration, if those columns must come back out: drop `CommerceSyncJob_status_nextPollAt_idx`, then drop `CommerceSyncJob.catalogId`, `publicUrl`, `pollAttempts`, `nextPollAt`, `lockedAt`, and `lockToken`, then drop `CommerceCatalogLink.mappingCurrent` and `CommerceVariantMap.mappingCurrent`. Do not drop product rows or the stored external ids. Earlier rollback remains: drop `CommerceOAuthNonce`, then drop `batchHandle`, `itemResults`, `processedPayloadHash`, and `processedPublicUrl`.
 
@@ -82,4 +90,4 @@ Branch `feature/commerce-meta-catalog`. Draft pull request https://github.com/jo
 
 ## Next
 
-Review the final hardening on the draft pull request. Do not merge. Do not start checkout. After approval: founder Meta setup, then a server migration with backup. Leave the loyalty and broadcast diff alone. See `docs/COMMERCE_ARCHITECTURE.md` and `docs/DECISION_LOG.md`.
+Review Milestone C on the draft pull request. Do not merge. Do not deploy. Do not set `COMMERCE_ORDER_CAPTURE_ENABLED`. Do not start payment automation. The deploy steps are in `docs/COMMERCE_ORDER_CAPTURE.md`.

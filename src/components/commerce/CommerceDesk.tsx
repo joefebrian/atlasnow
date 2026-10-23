@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { ConnectionPanel } from "@/components/commerce/ConnectionPanel";
+import { OrdersInbox } from "@/components/commerce/OrdersInbox";
 import type { CommerceConnectionView } from "@/lib/commerce/connection";
+import type { CommerceOrderView } from "@/lib/commerce/order-parse";
 
 type Variant = {
   sku: string;
@@ -120,6 +122,8 @@ type Props = {
   locations: Location[];
   connection: CommerceConnectionView;
   commerceError: string;
+  merchantName: string;
+  orders: CommerceOrderView[];
 };
 
 function stateLabel(status: string) {
@@ -173,7 +177,18 @@ function reviewLabel(status: string) {
   }
 }
 
-export function CommerceDesk({ tenantId, canWrite, isAgency, brands, products, locations, connection, commerceError }: Props) {
+export function CommerceDesk({
+  tenantId,
+  canWrite,
+  isAgency,
+  brands,
+  products,
+  locations,
+  connection,
+  commerceError,
+  merchantName,
+  orders,
+}: Props) {
   const router = useRouter();
   const [mode, setMode] = useState<"list" | "edit" | "detail">("list");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -386,7 +401,7 @@ export function CommerceDesk({ tenantId, canWrite, isAgency, brands, products, l
       <PageHeader
         eyebrow="Commerce"
         title="Products"
-        description="Product master for this brand. WhatsApp checkout, payment, and Meta catalog sync are off."
+        description="Product master and WhatsApp catalog orders for this brand. Payment is not started. Catalog sync stays off."
       />
 
       {isAgency ? (
@@ -425,6 +440,7 @@ export function CommerceDesk({ tenantId, canWrite, isAgency, brands, products, l
           </div>
           <p className="mb-4 text-[13px] text-slate-500">This page does not show revenue. A saved product is not a sale.</p>
           <ConnectionPanel tenantId={tenantId} canWrite={canWrite} initial={connection} />
+          <OrdersInbox merchantName={merchantName} orders={orders} />
           {previewText ? (
             <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700" role="status">
               {previewText}

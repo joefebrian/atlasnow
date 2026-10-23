@@ -20,6 +20,14 @@ Writes: client admin and agency staff. Reads also include HQ marketing, HQ ops, 
 - `CommerceSyncJob` — one row per merchant plus payload hash. Status `BLOCKED`, `SUBMITTED`, `PROCESSING`, `SUCCEEDED`, or `FAILED`. `batchHandle` is the Meta handle. A Graph 200 is `SUBMITTED`, not `SUCCEEDED`.
 - `CommerceSyncLog` — attempt history.
 - `CommerceReadiness` — payment flags only. Checkout stays off. A saved flag is not shown as a live payment connection.
+- `CommerceOrder` — one inbound WhatsApp catalog order. Status stays `PENDING_PAYMENT`. Payment status stays `NOT_INITIATED`. `waMessageId` is unique, so a webhook retry does not create a second order. `estimatedTotal` is the WhatsApp sum. `masterTotalIdr` is set only when every line matches the product master.
+- `CommerceOrderLine` — SKU, quantity, catalog estimate, and master price. Validation is `MATCHED`, `UNKNOWN_SKU`, `PRICE_MISMATCH`, or `REVIEW`.
+
+## Order capture
+
+`POST /api/webhooks/whatsapp` still verifies `X-Hub-Signature-256` and still runs inbox ingest. Order capture is a second step. It runs only when the app secret is set, the signature matches, and `COMMERCE_ORDER_CAPTURE_ENABLED=true`. An empty app secret still follows the existing inbox path and does not store an order. The merchant row must match `wabaId`, `phoneNumberId`, and `catalogId` on a connection that is not disconnected. Any other combination is ignored. The sender id is stored on the order and is not written to logs or the orders list. The list shows a masked customer reference.
+
+`GET /api/commerce/orders` and the Commerce page use the same tenant guard as the product list. The page shows reference, time, merchant, outlet when one outlet is known, masked customer, lines, the WhatsApp estimate, validation, and payment "Not started".
 
 ## APIs
 
@@ -30,6 +38,8 @@ Connection: `GET /api/commerce/connection`, `GET .../start`, `GET /api/commerce/
 Catalog: `POST /api/commerce/catalog/preview`, `POST /api/commerce/catalog/sync`.
 
 `GET /api/commerce/readiness` reports channels. Payment is always not connected.
+
+Orders: `GET /api/commerce/orders`. There is no payment route.
 
 ## Meta
 
