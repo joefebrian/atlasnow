@@ -57,7 +57,7 @@ No staging database is configured in this workspace. Server migrate has not been
 
 ## Git
 
-Branch `feature/commerce-meta-catalog`. Commit `c045788`. Not merged. Unrelated local work (inbox photos, public site) was left unstaged.
+Branch `feature/commerce-meta-catalog`. Feature commit `c045788`. Status note `16064a1`. Pull request https://github.com/joefebrian/atlasnow/pull/1. Not merged. Unrelated local work (inbox photos, public site) was left unstaged.
 
 ## Next
 
