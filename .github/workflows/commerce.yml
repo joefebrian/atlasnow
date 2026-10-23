@@ -1,0 +1,50 @@
+name: commerce
+
+on:
+  pull_request:
+  push:
+    branches: [main, feature/commerce-meta-catalog]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      - run: npx tsx --test src/lib/commerce/connection.test.ts src/lib/commerce/validate.test.ts src/lib/nav-access.test.ts
+
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: atlasnow
+          POSTGRES_PASSWORD: atlasnow
+          POSTGRES_DB: atlasnow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlasnow -d atlasnow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://atlasnow:atlasnow@localhost:5432/atlasnow
+      AUTH_SECRET: ci-commerce-test-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: npx tsx --test src/lib/commerce/service.db.test.ts
