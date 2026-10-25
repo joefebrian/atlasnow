@@ -36,6 +36,7 @@ import type {
   StoredExternalRef,
   StoredAggregate,
   StoredEvent,
+  StoredIdempotency,
   StoredInflight,
   StoredIntent,
   StoredPolicyEvidence,
@@ -73,6 +74,8 @@ export function signPolicyAttestation(
 export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): CommercePersistence {
   let state = options.snapshot ? cloneSnapshot(options.snapshot) : emptySnapshot();
   const policyValidatorKey = options.policyValidatorKey ?? "";
+  normalizeLoadedSnapshot(state);
+  sanitizePolicyEvidence(state, policyValidatorKey);
   const ports = {} as CommercePersistence;
 
   ports.intents = {
@@ -469,13 +472,30 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
           requestHash: input.requestHash,
           status: "PENDING_RESOLUTION",
           transactionRef: input.transactionRef,
+          outcomeCode: null,
           version: 1,
         });
       } else {
         idem.status = "PENDING_RESOLUTION";
+        idem.transactionRef = input.transactionRef;
+        idem.outcomeCode = null;
         idem.version += 1;
       }
-      const row: StoredInflight = { ...input, absenceVerified: false, version: 1 };
+      const row: StoredInflight = {
+        tenantId: input.tenantId,
+        locationId: input.locationId,
+        providerId: input.providerId,
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+        slotKey: input.slotKey,
+        transactionRef: input.transactionRef,
+        merchantConfirmed: input.merchantConfirmed ?? false,
+        experience: input.experience ?? "WHATSAPP_CATALOG",
+        category: input.category ?? "GENERAL_GOODS",
+        absenceVerified: false,
+        adoptBookingRef: null,
+        version: 1,
+      };
       state.inflight.push(row);
       return ok(row, false);
     },
@@ -493,6 +513,92 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
         return fail("RECONCILIATION_REQUIRED", "Provider absence is not authoritative for a new create.");
       }
       row.absenceVerified = true;
+      row.version += 1;
+      return ok(row, false);
+    },
+    claim(actor, input) {
+      const denied = requireActor(actor, input.tenantId, input.locationId, "write");
+      if (denied) return denied;
+      if (!input.idempotencyKey.trim() || !input.requestHash.trim() || !input.transactionRef.trim()) {
+        return fail("INVALID", "A claim needs a key, a hash, and a transaction id.");
+      }
+      const existing = state.idempotency.find(
+        (item) => item.tenantId === input.tenantId && item.scope === "RESERVE" && item.idempotencyKey === input.idempotencyKey,
+      );
+      if (existing) {
+        if (existing.requestHash !== input.requestHash) return fail("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.");
+        return ok(existing, true);
+      }
+      const row: StoredIdempotency = {
+        tenantId: input.tenantId,
+        scope: "RESERVE",
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+        status: "IN_PROGRESS",
+        transactionRef: input.transactionRef,
+        outcomeCode: null,
+        version: 1,
+      };
+      state.idempotency.push(row);
+      return ok(row, false);
+    },
+    finishDenied(actor, input) {
+      const denied = requireActor(actor, input.tenantId, input.locationId, "write");
+      if (denied) return denied;
+      if (!input.outcomeCode.trim()) return fail("INVALID", "A denial needs an outcome code.");
+      const existing = state.idempotency.find(
+        (item) => item.tenantId === input.tenantId && item.scope === "RESERVE" && item.idempotencyKey === input.idempotencyKey,
+      );
+      if (existing && existing.requestHash !== input.requestHash) {
+        return fail("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.");
+      }
+      if (existing?.status === "PENDING_RESOLUTION") {
+        return fail("RECONCILIATION_REQUIRED", "An unresolved reservation cannot be closed as a denial.");
+      }
+      if (existing?.status === "COMPLETED" && existing.transactionRef) {
+        return fail("IDEMPOTENCY_CONFLICT", "This key already completed a reservation.");
+      }
+      if (existing?.status === "COMPLETED" && existing.outcomeCode === input.outcomeCode) return ok(existing, true);
+      if (existing) {
+        existing.status = "COMPLETED";
+        existing.outcomeCode = input.outcomeCode;
+        existing.transactionRef = null;
+        existing.version += 1;
+        return ok(existing, false);
+      }
+      const row: StoredIdempotency = {
+        tenantId: input.tenantId,
+        scope: "RESERVE",
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+        status: "COMPLETED",
+        transactionRef: null,
+        outcomeCode: input.outcomeCode,
+        version: 1,
+      };
+      state.idempotency.push(row);
+      return ok(row, false);
+    },
+    noteFound(actor, tenantId, idempotencyKey, found) {
+      const row = findInflight(state, tenantId, idempotencyKey);
+      if (!row) return tenantMiss(actor, tenantId, "write", "Inflight reservation not found.");
+      const denied = requireActor(actor, tenantId, row.locationId, "write");
+      if (denied) return denied;
+      if (found.providerId !== row.providerId || found.locationId !== row.locationId) {
+        return fail("SCOPE_MISMATCH", "A found booking must come from the original provider and location.");
+      }
+      if (!found.bookingRef.trim()) return fail("INVALID", "A found booking needs a reference.");
+      row.adoptBookingRef = found.bookingRef;
+      row.version += 1;
+      return ok(row, false);
+    },
+    clearAbsence(actor, tenantId, idempotencyKey) {
+      const row = findInflight(state, tenantId, idempotencyKey);
+      if (!row) return tenantMiss(actor, tenantId, "write", "Inflight reservation not found.");
+      const denied = requireActor(actor, tenantId, row.locationId, "write");
+      if (denied) return denied;
+      if (!row.absenceVerified) return ok(row, true);
+      row.absenceVerified = false;
       row.version += 1;
       return ok(row, false);
     },
@@ -525,8 +631,10 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
     markApplied(actor, tenantId, dedupeKey) {
       const row = state.webhooks.find((item) => item.dedupeKey === dedupeKey && item.tenantId === tenantId);
       if (!row) return tenantMiss(actor, tenantId, "write", "Webhook event not found.");
-      const denied = requireActor(actor, tenantId, null, "write");
-      if (denied && denied.code !== "LOCATION_FORBIDDEN") return denied;
+      const connection = state.connections.find((item) => item.connectionId === row.connectionId && item.tenantId === tenantId);
+      if (!connection) return fail("NOT_FOUND", "Webhook connection not found.");
+      const denied = requireActor(actor, tenantId, connection.locationId, "write");
+      if (denied) return denied;
       if (row.status === "APPLIED") return ok(row, true);
       row.status = "APPLIED";
       row.version += 1;
@@ -659,6 +767,7 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
           status: "UNVERIFIED",
           reference: submission.reference.trim(),
           validatedBy: null,
+          integrity: null,
           version: (current?.version ?? 0) + 1,
         };
         replaceEvidence(state, row);
@@ -675,6 +784,14 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
         status: submission.outcome,
         reference: submission.reference.trim(),
         validatedBy: submission.processId.trim(),
+        integrity: signPolicyAttestation(policyValidatorKey, {
+          tenantId,
+          offeringCategory: scope.offeringCategory,
+          experience: scope.experience,
+          processId: submission.processId.trim(),
+          reference: submission.reference.trim(),
+          outcome: submission.outcome,
+        }),
         version: (current?.version ?? 0) + 1,
       };
       replaceEvidence(state, row);
@@ -819,7 +936,8 @@ function openReservation(state: PersistenceSnapshot, draft: ReservationDraft): P
     if (inflight.providerId !== draft.providerId || inflight.locationId !== draft.locationId) {
       return fail("SCOPE_MISMATCH", "Retry stays on the original provider and location.");
     }
-    if (!inflight.absenceVerified && idem?.status === "PENDING_RESOLUTION") {
+    const adopting = inflight.adoptBookingRef != null && inflight.adoptBookingRef === draft.bookingRef;
+    if (!inflight.absenceVerified && idem?.status === "PENDING_RESOLUTION" && !adopting) {
       return fail("RECONCILIATION_REQUIRED", "The original reservation is still unresolved.");
     }
   }
@@ -884,6 +1002,7 @@ function openReservation(state: PersistenceSnapshot, draft: ReservationDraft): P
   if (idem) {
     idem.status = "COMPLETED";
     idem.transactionRef = draft.transactionRef;
+    idem.outcomeCode = null;
     idem.version += 1;
   } else {
     state.idempotency.push({
@@ -893,6 +1012,7 @@ function openReservation(state: PersistenceSnapshot, draft: ReservationDraft): P
       requestHash: draft.requestHash,
       status: "COMPLETED",
       transactionRef: draft.transactionRef,
+      outcomeCode: null,
       version: 1,
     });
   }
@@ -1292,6 +1412,59 @@ function emptySnapshot(): PersistenceSnapshot {
 
 function cloneSnapshot(snapshot: PersistenceSnapshot): PersistenceSnapshot {
   return structuredClone(snapshot);
+}
+
+function normalizeLoadedSnapshot(state: PersistenceSnapshot): void {
+  for (const row of state.idempotency) {
+    if (row.outcomeCode === undefined) row.outcomeCode = null;
+  }
+  for (const row of state.inflight) {
+    if (row.adoptBookingRef === undefined) row.adoptBookingRef = null;
+    if (row.merchantConfirmed === undefined) row.merchantConfirmed = false;
+    if (row.experience === undefined) row.experience = "WHATSAPP_CATALOG";
+    if (row.category === undefined) row.category = "GENERAL_GOODS";
+  }
+  for (const row of state.policyEvidence) {
+    if (row.integrity === undefined) row.integrity = null;
+  }
+}
+
+/**
+ * A loaded snapshot may not declare Meta approval.
+ * validatedBy counts only when it matches the validator key's seal.
+ * An empty key strips every verified row. The key is not stored in the snapshot.
+ */
+function sanitizePolicyEvidence(state: PersistenceSnapshot, key: string): void {
+  for (const row of state.policyEvidence) {
+    if (!row.validatedBy) {
+      row.integrity = null;
+      if (row.status === "VERIFIED") row.status = "UNVERIFIED";
+      continue;
+    }
+    const expected = key
+      ? signPolicyAttestation(key, {
+          tenantId: row.tenantId,
+          offeringCategory: row.offeringCategory,
+          experience: row.experience,
+          processId: row.validatedBy,
+          reference: row.reference,
+          outcome: row.status,
+        })
+      : "";
+    if (!key || !sealsMatch(expected, row.integrity)) {
+      row.status = "UNVERIFIED";
+      row.validatedBy = null;
+      row.integrity = null;
+    }
+  }
+}
+
+function sealsMatch(expected: string, actual: string | null): boolean {
+  if (!actual) return false;
+  const left = Buffer.from(expected);
+  const right = Buffer.from(actual);
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
 }
 
 function sortSnapshot(snapshot: PersistenceSnapshot): PersistenceSnapshot {

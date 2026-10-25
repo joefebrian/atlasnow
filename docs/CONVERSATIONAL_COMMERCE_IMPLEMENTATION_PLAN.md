@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **M0 through M1B.1 design and in-memory ports.** Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document. M1C is not authorized.
+Status: **M0 through M1C in memory.** M1C wires the orchestrator through the ports. Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document.
 
 ## Stack
 
@@ -110,7 +110,7 @@ All of these stay true after M1A:
 
 ## M1B — persistence design
 
-M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. The M1A.2 orchestrator still owns its own maps. M1B.1 corrects copies, provider-mode checks, scoped policy evidence, connection-scoped webhook identity, composite location keys in the sketch, and the concurrency simulation. M1C is not authorized.
+M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. M1B.1 corrects copies, provider-mode checks, scoped policy evidence, connection-scoped webhook identity, composite location keys in the sketch, and the concurrency simulation. M1C moves the orchestrator onto those ports and removes the private maps as a second writer. It still does not add SQL, a route, or a gateway.
 
 The slice that was recommended, still without a production migration:
 
@@ -133,9 +133,9 @@ Still not in M1B unless a later approval says so:
 
 Rejected as the next step: a localhost migration. The production image applies migrations on boot, and a folder that lands in an image is no longer local.
 
-## Open before M1C
+## Open before a SQL adapter
 
-Settled for M1B, and still not a migration:
+Settled through M1C, and still not a migration:
 
 - Payments-PRD words stay mapped as they were: `DISPUTED` → `CHARGEBACK`, `NOT_INITIATED` → `NOT_STARTED`. Unpaid `CANCELLED` stays `FAILED` on the catalog map. Conversational `EXPIRED` and `FAILED` change only after an authoritative provider read
 - The first booking vendor stays unnamed. Mocks only
@@ -145,7 +145,6 @@ Settled for M1B, and still not a migration:
 
 Still open:
 
-- Wire the M1A.2 orchestrator through the ports without changing its tests
 - Choose KMS or the existing AES-256-GCM helper before any real credential row
 - Choose a legal retention interval before storing one
 - Decide whether a chargeback blocks a later capture. Today only `PAID` and `PARTIALLY_REFUNDED` block a second capture

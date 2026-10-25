@@ -1,6 +1,6 @@
 # Conversational commerce persistence (M1B)
 
-Status: **design and in-memory ports only.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. The M1A.2 orchestrator is not rewired onto these ports. M1C is not authorized.
+Status: **design and in-memory ports.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. M1C runs the orchestrator through those ports and the in-memory adapter. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. No gateway client. A SQL adapter is not authorized.
 
 The runnable contract is `src/lib/conversational-commerce/ports.ts` and `memory-store.ts`. This document is the table sketch a reviewer can reject before any SQL is added.
 
@@ -27,6 +27,30 @@ Catalog commerce already owns `CommerceConnection`, `CommerceOrder`, and the pay
 Repository results are defensive copies. A caller cannot change a stored booking, ledger, or connection by mutating a read, list, replay, or write result. `runAtomic` is the in-memory stand-in for one database transaction. `exportSnapshot` plus JSON parse is the restart test. `settleConcurrent` copies the first snapshot, then inserts a later reservation or payment only as a whole unit. A rejected unit leaves no transaction, booking, idempotency row, event, or reference behind. It does not field-merge rows that already existed, and it does not prove that arbitrary SQL commits atomically.
 
 Processing is **at-least-once with idempotent effects**. This design does not claim exactly-once delivery to a booking vendor, a gateway, or Meta.
+
+## Orchestrator on the ports (M1C)
+
+`CommercePersistence` is the source of truth. `OrchestratorState` exposes `bookings`, `transactions`, `ledgers`, and `paymentAttempts` as a read-only snapshot view for the existing tests. Those maps are not a second writer.
+
+`reserve` uses five stages. Provider I/O stays outside `runAtomic`.
+
+1. Validate the actor, the phone-correlation rule, fail-closed policy, the registry, and provider capabilities.
+2. Atomically claim the idempotency key. A second call with the same key does not call the provider again.
+3. Call the mock provider.
+4. Atomically persist the booking, or record `PENDING_RESOLUTION` when the provider times out.
+5. Resolve an unknown outcome only through the original provider and location. Authoritative absence allows one retry. A found booking is adopted. A terminal provider state fails the transaction. Human release does not authorize another create.
+
+A provider-issued booking reference is copied from the mock result. The command cannot supply one. External checkout never opens a reservation. A manual connection cannot store an authoritative reference.
+
+`createOrchestratorState()` seeds one attested fixture for the M1A harness: tenant `tenant-a`, category `GENERAL_GOODS`, surface `WHATSAPP_CATALOG`. It does not copy `approvalEvidence` from the command. An injected store is not seeded. On load, `validatedBy` is kept only when `integrity` matches the in-process validator key. A forged snapshot cannot grant approval. The key is not part of the snapshot. This seal is not a Meta signature.
+
+Real offer-specific Meta exceptions need another row keyed by offering id. The current row is one merchant, one offering category, and one commerce surface. That column is not added here. YOLA FUN stays NO-GO.
+
+`payments.applyEvent` is privileged. `recordPayment` verifies the caller proof first and is the only orchestration entry. It does not accept a caller-built `VerifiedPaymentEvent`. There is no gateway HTTP client.
+
+`markApplied` requires write permission on the webhook connection's own tenant and location. Tenant-wide write is not enough for an outlet connection. Webhook dedupe stays `connectionId:eventId`. No webhook route is mounted.
+
+A crash between the idempotency claim and the provider result stays unresolved. The next call does not invent a second booking. Restart reloads the snapshot, and reconciliation still uses the original provider.
 
 ## Candidate tables
 

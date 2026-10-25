@@ -163,6 +163,8 @@ export type StoredIdempotency = {
   requestHash: string;
   status: IdempotencyStatus;
   transactionRef: string | null;
+  /** Denial remembered without a booking. Null when the row is still open or a booking completed. */
+  outcomeCode: string | null;
   version: number;
 };
 
@@ -174,7 +176,13 @@ export type StoredInflight = {
   requestHash: string;
   slotKey: string;
   transactionRef: string;
+  /** Original command flag. Reconciliation retries the same provider request. */
+  merchantConfirmed: boolean;
+  experience: CustomerExperience;
+  category: OfferingCategory;
   absenceVerified: boolean;
+  /** Set only when lookup found this provider booking. It is not proof of absence. */
+  adoptBookingRef: string | null;
   version: number;
 };
 
@@ -227,6 +235,12 @@ export type StoredPolicyEvidence = {
   reference: string;
   /** Set only when an authorized process attestation matched. A caller enum leaves this null. */
   validatedBy: string | null;
+  /**
+   * HMAC of the attested fields, keyed by the in-process validator.
+   * A snapshot that sets validatedBy without this seal is downgraded on load.
+   * This is not a Meta signature.
+   */
+  integrity: string | null;
   version: number;
 };
 
@@ -377,6 +391,11 @@ export interface PaymentRepository {
       expectedAmountIdr: number;
     },
   ): PortResult<StoredAttempt>;
+  /**
+   * Privileged. The event must already be a VerifiedPaymentEvent produced inside this process.
+   * Orchestration verifies the caller proof first and must not accept a caller-built event as proof.
+   * This method does not re-check an HMAC and it is not a gateway client.
+   */
   applyEvent(actor: Actor, event: VerifiedPaymentEvent): PortResult<{ ledger: PaymentLedger; effect: PaymentEffect; netRevenueIdr: number }>;
   reconcileTerminal(
     actor: Actor,
@@ -405,8 +424,38 @@ export interface IdempotencyRepository {
       requestHash: string;
       slotKey: string;
       transactionRef: string;
+      merchantConfirmed?: boolean;
+      experience?: CustomerExperience;
+      category?: OfferingCategory;
     },
   ): PortResult<StoredInflight>;
+  /** Registers the key before the provider call. Does not create a transaction or an inflight row. */
+  claim(
+    actor: Actor,
+    input: {
+      tenantId: string;
+      locationId: string;
+      providerId: string;
+      idempotencyKey: string;
+      requestHash: string;
+      slotKey: string;
+      transactionRef: string;
+    },
+  ): PortResult<StoredIdempotency>;
+  /** Remembers a denial. Does not create a booking or a transaction. */
+  finishDenied(
+    actor: Actor,
+    input: { tenantId: string; locationId: string; idempotencyKey: string; requestHash: string; outcomeCode: string },
+  ): PortResult<StoredIdempotency>;
+  /** Binds an unresolved inflight row to a booking the original provider already returned. */
+  noteFound(
+    actor: Actor,
+    tenantId: string,
+    idempotencyKey: string,
+    found: { providerId: string; locationId: string; bookingRef: string },
+  ): PortResult<StoredInflight>;
+  /** Clears a proven absence after that one retry times out again. */
+  clearAbsence(actor: Actor, tenantId: string, idempotencyKey: string): PortResult<StoredInflight>;
   noteAbsence(actor: Actor, tenantId: string, idempotencyKey: string, claim: AbsenceClaim): PortResult<StoredInflight>;
 }
 

@@ -2,9 +2,9 @@
 
 Updated 2026-10-26. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
 
-## Conversational commerce M0 through M1B.1
+## Conversational commerce M0 through M1C
 
-In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. M1B.1 copies repository results, binds a reservation to the registered provider mode, scopes policy evidence and webhook identity, and specifies composite location foreign keys. The Prisma schema is unchanged. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
+In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. M1B.1 copies repository results, binds a reservation to the registered provider mode, scopes policy evidence and webhook identity, and specifies composite location foreign keys. M1C runs the orchestrator through those ports. The orchestrator no longer keeps a second copy of bookings, payments, or idempotency. The Prisma schema is unchanged. Not deployed. No migration. No route. No gateway. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
 
 Working in unit tests only:
 
@@ -44,11 +44,19 @@ M1B.1, in unit tests only:
 - Two non-conflicting reservations both keep their transaction, booking, idempotency row, and event. A losing slot does not leave its transaction behind
 - `settleConcurrent` does not claim to prove arbitrary atomic SQL. Composite location keys are documented and not migrated
 
-Not built: SQL tables, a Prisma adapter, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender.
+M1C, in unit tests only:
+
+- Reserve, replay, timeout, and recovery go through the in-memory ports. Provider calls stay outside the atomic write
+- The same idempotency key cannot create a second booking. An unknown provider result stays `PENDING_RESOLUTION` and is resolved only with the original provider
+- Payment attempts and ledger events go through the payment port. A forged notice never becomes a ledger event. Refunds and chargebacks do not change the booking
+- Webhook apply requires the connection's location. A snapshot without the policy seal cannot grant commerce approval
+- The default orchestrator seeds one attested goods-and-catalog fixture for older tests. It does not approve any other scope
+
+Not built: SQL tables, a Prisma adapter, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender, offer-specific Meta exception rows.
 
 Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md`, `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`, and the companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
 
-Do not merge this into PR #1. Do not merge PR #2. Do not start M1C until a separate review.
+Do not merge this into PR #1. Do not merge PR #2. Do not add a SQL adapter, a route, or a gateway until a separate review.
 
 ## Active slice
 

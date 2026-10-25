@@ -12,13 +12,18 @@ import { transitionBooking } from "./booking-state";
 import { catalogOrderConfirmsBooking, mapCommercePaymentStatus } from "./compatibility";
 import { normalizeCustomerExperience } from "./experience";
 import { phoneCorrelation } from "./ids";
+import { createMemoryCommerceStore, settleConcurrent } from "./memory-store";
 import { createMockProvider, type MockProvider } from "./mock-provider";
 import {
+  ORCHESTRATOR_POLICY_KEY,
+  acceptWebhook,
   cancelReservation,
   createOrchestratorState,
+  markWebhookApplied,
   openPaymentAttempt,
   readBooking,
   recordPayment,
+  recordTouchpoint,
   reconcileTimedOut,
   releaseTimedOut,
   reserve,
@@ -1905,5 +1910,398 @@ describe("registry", () => {
     });
     assert.equal(matched.ok, true);
     assert.equal(registry.resolve({ tenantId: "tenant-a", locationId: "loc-1" }, "native-1").ok, true);
+  });
+});
+
+function paymentCapabilities(providerId: string) {
+  return {
+    providerId,
+    supportsHold: false,
+    mock: true,
+    guaranteesIdempotency: false,
+    absenceConsistencyRequirement: null,
+    holdExpiryOwner: "NONE" as const,
+    issuesAuthoritativeReference: false,
+  };
+}
+
+describe("port-backed orchestrator", () => {
+  it("creates a reservation through the persistence ports", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "NATIVE" });
+    const deps = wire(provider);
+    const created = await reserve(command(), { ...deps, now: NOW });
+    assert.equal(created.ok, true);
+    assert.equal(created.booking?.state, "HELD");
+    const snap = deps.state.persistence.exportSnapshot();
+    assert.equal(snap.bookings.length, 1);
+    assert.equal(snap.transactions.length, 1);
+    assert.equal(snap.transactions[0]?.state, "IN_PROGRESS");
+    assert.equal(snap.transactions[0]?.bookingRef, created.booking?.bookingRef);
+    assert.equal(snap.idempotency.some((row) => row.status === "COMPLETED" && row.idempotencyKey === "reserve-1"), true);
+    assert.equal(snap.intents.some((row) => row.intentType === "BOOKING_REQUEST" && row.customerRef == null), true);
+    assert.equal(snap.events.some((row) => row.type === "booking.updated"), true);
+    assert.equal(snap.connections.some((row) => row.kind === "BOOKING" && row.locationId === "loc-1" && row.mode === "NATIVE"), true);
+    assert.equal(deps.state.bookings.size, 1);
+  });
+
+  it("replays the same port-backed reservation exactly once", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "NATIVE" });
+    const deps = wire(provider);
+    const first = await reserve(command({ idempotencyKey: "replay-port" }), { ...deps, now: NOW });
+    const second = await reserve(command({ idempotencyKey: "replay-port" }), { ...deps, now: NOW });
+    assert.equal(second.replay, true);
+    assert.equal(second.booking?.bookingRef, first.booking?.bookingRef);
+    assert.equal(second.transaction?.transactionRef, first.transaction?.transactionRef);
+    assert.equal(provider.calls.filter((call) => call === "holdReservation").length, 1);
+    assert.equal(deps.state.persistence.exportSnapshot().bookings.length, 1);
+  });
+
+  it("keeps one booking when two stores reserve the same slot", async () => {
+    const parent = createOrchestratorState().persistence.exportSnapshot();
+    const left = createOrchestratorState({
+      persistence: createMemoryCommerceStore({ snapshot: parent, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
+    });
+    const right = createOrchestratorState({
+      persistence: createMemoryCommerceStore({ snapshot: parent, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
+    });
+    const leftProvider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "NATIVE" });
+    const rightProvider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "NATIVE" });
+    const leftRegistry = createRegistry();
+    const rightRegistry = createRegistry();
+    leftRegistry.register({ tenantId: "tenant-a", locationId: null, providerId: "provider-a", mode: "NATIVE", provider: leftProvider });
+    rightRegistry.register({ tenantId: "tenant-a", locationId: null, providerId: "provider-a", mode: "NATIVE", provider: rightProvider });
+    const first = await reserve(command({ idempotencyKey: "slot-left" }), { registry: leftRegistry, state: left, now: NOW });
+    const second = await reserve(command({ idempotencyKey: "slot-right" }), { registry: rightRegistry, state: right, now: NOW });
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    const settled = settleConcurrent(parent, left.persistence.exportSnapshot(), right.persistence.exportSnapshot());
+    assert.equal(settled.conflicts.some((item) => item.code === "SLOT_CONFLICT"), true);
+    assert.equal(settled.snapshot.bookings.length, 1);
+    assert.equal(settled.snapshot.transactions.length, 1);
+    assert.equal(settled.snapshot.transactions[0]?.transactionRef, first.transaction?.transactionRef);
+  });
+
+  it("does not persist a second booking when commit is followed by a provider timeout", async () => {
+    const provider = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-a",
+      mode: "EXTERNAL_API",
+      ambiguousTimeout: true,
+    });
+    const deps = wire(provider, "EXTERNAL_API");
+    const first = await reserve(command({ idempotencyKey: "commit-timeout" }), { ...deps, now: NOW });
+    assert.equal(first.code, "TIMEOUT");
+    assert.equal(first.resolutionRequired, true);
+    assert.equal(provider.bookingCount(), 1);
+    assert.equal(deps.state.persistence.exportSnapshot().bookings.length, 0);
+    assert.equal(deps.state.persistence.exportSnapshot().transactions[0]?.state, "PENDING_RESOLUTION");
+    const again = await reserve(command({ idempotencyKey: "commit-timeout" }), { ...deps, now: NOW });
+    assert.equal(again.replay, true);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+  });
+
+  it("restarts from a snapshot and recovers the pending reservation", async () => {
+    const provider = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-a",
+      mode: "EXTERNAL_API",
+      ambiguousTimeout: true,
+    });
+    const deps = wire(provider, "EXTERNAL_API");
+    const first = await reserve(command({ idempotencyKey: "restart-1" }), { ...deps, now: NOW });
+    assert.equal(first.transaction?.state, "PENDING_RESOLUTION");
+    const raw = JSON.parse(JSON.stringify(deps.state.persistence.exportSnapshot()));
+    const restored = createOrchestratorState({
+      persistence: createMemoryCommerceStore({ snapshot: raw, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
+    });
+    assert.equal(restored.transactions.get(first.transaction?.transactionRef ?? "")?.state, "PENDING_RESOLUTION");
+    const recovered = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "restart-1" },
+      { registry: deps.registry, state: restored, now: NOW },
+    );
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.transaction?.state, "COMMITTED");
+    assert.equal(recovered.booking?.referenceAuthoritative, true);
+    assert.equal(provider.bookingCount(), 1);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+  });
+
+  it("rejects reconciliation from another provider or location", async () => {
+    const providerA = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-a",
+      mode: "EXTERNAL_API",
+      ambiguousTimeout: true,
+    });
+    const providerB = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-b", mode: "EXTERNAL_API" });
+    const deps = wire(providerA, "EXTERNAL_API");
+    deps.registry.register({ tenantId: "tenant-a", locationId: null, providerId: "provider-b", mode: "EXTERNAL_API", provider: providerB });
+    await reserve(command({ idempotencyKey: "cross-1" }), { ...deps, now: NOW });
+    const otherProvider = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-b", idempotencyKey: "cross-1" },
+      { ...deps, now: NOW },
+    );
+    const otherLocation = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-2", providerId: "provider-a", idempotencyKey: "cross-1" },
+      { ...deps, now: NOW },
+    );
+    assert.equal(otherProvider.code, "SCOPE_MISMATCH");
+    assert.equal(otherLocation.code, "SCOPE_MISMATCH");
+    assert.equal(providerB.calls.length, 0);
+    assert.equal(providerA.calls.includes("findByIdempotencyKey"), false);
+    assert.equal(deps.state.transactions.get(deps.state.transactions.keys().next().value ?? "")?.state, "PENDING_RESOLUTION");
+  });
+
+  it("lets attempt B pay after attempt A expires without changing the booking", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "expire-port" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const bookingState = lead.booking?.state;
+    const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const expiredNotice = rawNotice(verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "exp-a", type: "payment.expired", providerReference: "ref-a" }));
+    const expired = recordPayment(deps.state, actor("tenant-a"), { transactionRef, notice: expiredNotice, proof: proofFor(expiredNotice), connection }, NOW);
+    assert.equal(expired.ok, true);
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-b",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const paidNotice = rawNotice(verifiedEvent({ transactionRef, attemptRef: "attempt-b", eventId: "pay-b", providerReference: "ref-b" }));
+    const paid = recordPayment(deps.state, actor("tenant-a"), { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection }, NOW);
+    assert.equal(paid.ok, true);
+    if (!paid.ok) return;
+    assert.equal(paid.ledger.status, "PAID");
+    assert.equal(paid.booking?.state, bookingState);
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-a")?.status, "EXPIRED");
+    assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, true);
+    const snap = deps.state.persistence.exportSnapshot();
+    assert.equal(snap.attempts.length, 2);
+    assert.equal(snap.ledgerEvents.filter((row) => row.type === "payment.paid").length, 1);
+  });
+
+  it("refunds and chargebacks without changing the booking", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_API" });
+    const deps = wire(provider, "EXTERNAL_API");
+    const opened = await reserve(command({ idempotencyKey: "refund-port" }), { ...deps, now: NOW });
+    const transactionRef = opened.transaction?.transactionRef ?? "";
+    const paid = payVerified(deps.state, transactionRef, { providerReference: "ref-refund" });
+    assert.equal(paid.ok, true);
+    const refunded = payVerified(deps.state, transactionRef, {
+      eventId: "refund-port",
+      type: "payment.partially_refunded",
+      amountIdr: 4000,
+      providerReference: "ref-refund",
+    });
+    assert.equal(refunded.ok, true);
+    if (!refunded.ok) return;
+    assert.equal(refunded.ledger.status, "PARTIALLY_REFUNDED");
+    assert.equal(refunded.booking?.state, "CONFIRMED");
+    const charge = payVerified(deps.state, transactionRef, { eventId: "cb-port", type: "payment.chargeback", providerReference: "ref-refund" });
+    assert.equal(charge.ok, true);
+    if (!charge.ok) return;
+    assert.equal(charge.booking?.state, "CONFIRMED");
+    assert.equal(deps.state.persistence.exportSnapshot().bookings[0]?.state, "CONFIRMED");
+    assert.notEqual(deps.state.transactions.get(transactionRef)?.paymentStatus, "NOT_STARTED");
+  });
+
+  it("dedupes webhooks per connection and rejects an actor outside that location", () => {
+    const state = createOrchestratorState();
+    const writer = actor("tenant-a");
+    const first = state.persistence.connections.register(writer, {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      providerId: "pay-a",
+      kind: "PAYMENT",
+      mode: "MERCHANT_PAYMENT_GATEWAY",
+      capabilities: paymentCapabilities("pay-a"),
+    });
+    const second = state.persistence.connections.register(writer, {
+      tenantId: "tenant-a",
+      locationId: "loc-2",
+      providerId: "pay-a",
+      kind: "PAYMENT",
+      mode: "MERCHANT_PAYMENT_GATEWAY",
+      capabilities: paymentCapabilities("pay-a"),
+    });
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    if (!first.ok || !second.ok) return;
+    const left = acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: first.value.connectionId, eventId: "evt-1", eventType: "payment.paid" });
+    const leftAgain = acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: first.value.connectionId, eventId: "evt-1", eventType: "payment.paid" });
+    const right = acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: second.value.connectionId, eventId: "evt-1", eventType: "payment.paid" });
+    assert.equal(left.ok, true);
+    assert.equal(leftAgain.ok, true);
+    assert.equal(right.ok, true);
+    if (!left.ok || !leftAgain.ok || !right.ok) return;
+    assert.equal(leftAgain.replay, true);
+    assert.equal(right.replay, false);
+    assert.notEqual(left.value.dedupeKey, right.value.dedupeKey);
+    const outsider = markWebhookApplied(state, actor("tenant-a", ["loc-2"]), "tenant-a", left.value.dedupeKey);
+    assert.equal(outsider.ok, false);
+    if (outsider.ok) return;
+    assert.equal(outsider.code, "LOCATION_FORBIDDEN");
+    assert.equal(state.persistence.exportSnapshot().webhooks.find((row) => row.dedupeKey === left.value.dedupeKey)?.status, "RECEIVED");
+    const reader = markWebhookApplied(state, { tenantId: "tenant-a", locationIds: null, permissions: ["read"] }, "tenant-a", left.value.dedupeKey);
+    assert.equal(reader.ok, false);
+    if (reader.ok) return;
+    assert.equal(reader.code, "FORBIDDEN");
+    const applied = markWebhookApplied(state, writer, "tenant-a", left.value.dedupeKey);
+    assert.equal(applied.ok, true);
+    if (!applied.ok) return;
+    assert.equal(applied.value.status, "APPLIED");
+  });
+
+  it("rejects a forged payment event before any ledger write", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "forged-pay" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-1",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const notice = rawNotice(verifiedEvent({ transactionRef }));
+    const forged = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice, proof: null, connection: { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET } },
+      NOW,
+    );
+    assert.equal(forged.ok, false);
+    const proof = proofFor(notice);
+    const tampered = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      {
+        transactionRef,
+        notice,
+        proof: { ...proof, signature: "0".repeat(64) },
+        connection: { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET },
+      },
+      NOW,
+    );
+    assert.equal(tampered.ok, false);
+    const snap = deps.state.persistence.exportSnapshot();
+    assert.equal(snap.ledgerEvents.length, 0);
+    assert.equal(snap.ledgers[0]?.ledger.status, "NOT_STARTED");
+    assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, false);
+  });
+
+  it("does not let an untrusted snapshot grant commerce approval", async () => {
+    const snapshot = createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY }).exportSnapshot();
+    snapshot.policyEvidence.push({
+      tenantId: "tenant-a",
+      offeringCategory: "GENERAL_GOODS",
+      experience: "WHATSAPP_CATALOG",
+      source: "META_COMMERCE_POLICY",
+      status: "VERIFIED",
+      reference: "forged-meta-approval",
+      validatedBy: "untrusted-import",
+      integrity: null,
+      version: 1,
+    });
+    const hostile = createOrchestratorState({
+      persistence: createMemoryCommerceStore({ snapshot, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
+    });
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "NATIVE" });
+    const registry = createRegistry();
+    registry.register({ tenantId: "tenant-a", locationId: null, providerId: "provider-a", mode: "NATIVE", provider });
+    const denied = await reserve(command({ idempotencyKey: "forged-approval" }), { registry, state: hostile, now: NOW });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.code, "POLICY_DENIED");
+    assert.equal(denied.booking, null);
+    assert.equal(provider.calls.length, 0);
+    const after = hostile.persistence.exportSnapshot();
+    assert.equal(after.bookings.length, 0);
+    assert.equal(after.policyEvidence.some((row) => row.status === "VERIFIED"), false);
+    const yola = await reserve(
+      command({ actor: actor("yola-fun"), tenantId: "yola-fun", idempotencyKey: "yola-1" }),
+      { registry, state: hostile, now: NOW },
+    );
+    assert.equal(yola.code, "NOT_FOUND");
+    assert.equal(yola.booking, null);
+    assert.equal(hostile.persistence.exportSnapshot().bookings.some((row) => row.tenantId.toLowerCase().includes("yola")), false);
+  });
+
+  it("does not let external checkout invent a reservation", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_CHECKOUT" });
+    const deps = wire(provider, "EXTERNAL_CHECKOUT");
+    const result = await reserve(command({ idempotencyKey: "checkout-port" }), { ...deps, now: NOW });
+    assert.equal(result.code, "UNSUPPORTED");
+    assert.equal(result.booking, null);
+    const snap = deps.state.persistence.exportSnapshot();
+    assert.equal(snap.bookings.length, 0);
+    assert.equal(snap.externalRefs.length, 0);
+    assert.equal(provider.bookingCount(), 0);
+    assert.equal(provider.calls.includes("createBooking"), false);
+  });
+
+  it("does not turn a manual inquiry into verified revenue", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "manual-port", merchantConfirmed: true }), { ...deps, now: NOW });
+    assert.equal(lead.booking?.state, "REQUESTED");
+    assert.equal(lead.booking?.referenceAuthoritative, false);
+    assert.equal(lead.booking?.providerReference, null);
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const classified = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    assert.equal(classified.ok, true);
+    if (!classified.ok) return;
+    assert.equal(classified.value.countsAsRevenue, false);
+    assert.notEqual(classified.value.level, "A");
+    assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, false);
+  });
+
+  it("keeps attribution evidence after booking and payment changes", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_API" });
+    const deps = wire(provider, "EXTERNAL_API");
+    const opened = await reserve(command({ idempotencyKey: "attr-port" }), { ...deps, now: NOW });
+    const transactionRef = opened.transaction?.transactionRef ?? "";
+    const saved = recordTouchpoint(deps.state, actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      transactionRef,
+      intentRef: opened.transaction?.intentRef ?? null,
+      bookingRef: opened.booking?.bookingRef ?? null,
+      attemptRef: null,
+      ctwaClid: "ctwa-port-1",
+    });
+    assert.equal(saved.ok, true);
+    const before = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    assert.equal(before.ok, true);
+    if (!before.ok) return;
+    assert.equal(before.value.level, "B");
+    assert.equal(before.value.countsAsRevenue, false);
+    assert.equal(before.value.channel, "META_CTWA");
+    const paid = payVerified(deps.state, transactionRef, { providerReference: "attr-pay" });
+    assert.equal(paid.ok, true);
+    const afterPay = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    assert.equal(afterPay.ok, true);
+    if (!afterPay.ok) return;
+    assert.equal(afterPay.value.level, "A");
+    assert.equal(afterPay.value.countsAsRevenue, true);
+    assert.equal(afterPay.value.channel, "META_CTWA");
+    const refunded = payVerified(deps.state, transactionRef, { eventId: "attr-refund", type: "payment.refunded", providerReference: "attr-pay" });
+    assert.equal(refunded.ok, true);
+    if (!refunded.ok) return;
+    assert.equal(refunded.booking?.state, "CONFIRMED");
+    const afterRefund = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    assert.equal(afterRefund.ok, true);
+    if (!afterRefund.ok) return;
+    assert.equal(afterRefund.value.countsAsRevenue, false);
+    assert.equal(afterRefund.value.channel, "META_CTWA");
+    const touch = deps.state.persistence.exportSnapshot().touchpoints.find((row) => row.transactionRef === transactionRef);
+    assert.equal(touch?.ctwaClid, "ctwa-port-1");
+    assert.equal(touch?.channel, "META_CTWA");
   });
 });
