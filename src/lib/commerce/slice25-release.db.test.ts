@@ -81,7 +81,8 @@ function stageApp() {
   cpSync(path.join(process.cwd(), "public"), path.join(app, "public"), { recursive: true });
   symlinkSync(path.join(process.cwd(), "node_modules"), path.join(app, "node_modules"));
   for (const name of ["package.json", "tsconfig.json", "next.config.ts", "postcss.config.mjs", "next-env.d.ts"]) {
-    cpSync(path.join(process.cwd(), name), path.join(app, name));
+    const from = path.join(process.cwd(), name);
+    if (existsSync(from)) cpSync(from, path.join(app, name));
   }
   return app;
 }
@@ -125,10 +126,11 @@ describe("slice 2.5 release database", { skip: localDb() ? false : "local databa
     const sliceUrl = withDatabase(base, DB_NAME);
     const slice = new PrismaClient({ datasources: { db: { url: sliceUrl } } });
     const schemaDir = mkdtempSync(path.join(tmpdir(), "atlasnow-slice25-prisma-"));
-    const appDir = stageApp();
+    let appDir = "";
     const logs = { text: "" };
     let server: ChildProcess | null = null;
     try {
+      appDir = stageApp();
       await admin.$queryRawUnsafe(
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid()`
       );
@@ -316,7 +318,7 @@ describe("slice 2.5 release database", { skip: localDb() ? false : "local databa
       await admin.$executeRawUnsafe(`DROP DATABASE IF EXISTS "${DB_NAME}"`).catch(() => undefined);
       await admin.$disconnect().catch(() => undefined);
       rmSync(schemaDir, { recursive: true, force: true });
-      rmSync(appDir, { recursive: true, force: true });
+      if (appDir) rmSync(appDir, { recursive: true, force: true });
     }
   });
 });
