@@ -1,6 +1,28 @@
 # AtlasNow development status
 
-Updated 2026-10-23. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
+Updated 2026-10-25. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
+
+## Conversational commerce M0 and M1A
+
+In-memory orchestrator foundation on `feature/conversational-commerce-m1a`. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch.
+
+Working in unit tests only:
+
+- Booking and transaction transition checks, including a rejected hold when the provider cannot reserve
+- Tenant and location denials that do not return the other merchant's booking
+- Four mock providers: native hold, external API, external checkout handoff, manual inquiry
+- Slot conflict, idempotent replay, timeout without a second create, and a missing external reference
+- Payment duplicates, out-of-order notices, partial and full refunds, and unverified evidence
+- Confirmed booking with unpaid payment, and paid payment with an unconfirmed booking
+- Unknown Meta eligibility fails closed. A Flow does not confirm a booking
+- Missing attribution ids are not invented. Aggregated Search or Maps counts are not a person
+- Existing catalog order constants still map. This module does not import Prisma or call Graph
+
+Not built: tables, webhooks, Flows, gateway calls, native inventory, UI, feature flags.
+
+Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md` and the five companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
+
+Do not merge this into PR #1. Do not start persistence until a separate review.
 
 ## Active slice
 

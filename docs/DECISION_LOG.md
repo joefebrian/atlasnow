@@ -98,6 +98,10 @@ The poll worker loads the product again after `check_batch_request_status` and t
 
 `POST /api/internal/commerce/poll` accepts a bearer `COMMERCE_POLL_SECRET` and polls only when `COMMERCE_CATALOG_POLL_ENABLED=true`. Both are unset. The server process does not start a timer. The row lock stays with the worker until that tick returns.
 
+## 2026-10-25 — Conversational commerce starts as a separate orchestrator
+
+Catalog commerce stays the product master and the Meta catalog projection. Booking, payment, and attribution are a new module, `src/lib/conversational-commerce/`, with no table and no route. `CommerceConnection` is not a booking connection. `CommerceOrder` is not the booking state machine and is still absent in production. A phone number is not a correlation key. Unknown WhatsApp eligibility fails closed. A Flow submission is not a confirmed booking. Verified payment and booking confirmation move separately. AtlasNow is not the merchant of record. No gateway is called. The work is stacked on `feature/commerce-meta-catalog` in its own branch and draft PR. PR #1 stays unmerged. The contracts are the six conversational-commerce documents under `docs/`.
+
 ## 2026-10-23 — Handoff docs
 
 `docs/AI_DEV_STATUS.md`, `docs/COMMERCE_ARCHITECTURE.md`, and this file are the status pack for a reviewer. Update them at the end of a slice or when a blocker changes. Do not paste secrets into them.

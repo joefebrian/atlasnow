@@ -73,3 +73,7 @@ Changing or reconnecting to a different Meta catalog sets `mappingCurrent` false
 - Meta Graph and Facebook Login. Not connected in this environment.
 - No Xendit, Midtrans, Creem, or WhatsApp send on these routes. The payments PRD does not add those calls.
 - This branch does not set `COMMERCE_CATALOG_SYNC_ENABLED`. Review happens on the draft pull request. Merging does not deploy and does not turn sync on.
+
+## Conversational commerce
+
+A second layer plans bookings and payments without using these tables. It lives in `src/lib/conversational-commerce/` and is documented in `docs/CONVERSATIONAL_COMMERCE_PRD.md`. `CommerceProduct` stays the goods master. `CommerceCatalogLink` stays the Meta item map. `CommerceConnection` stays the catalog login. `CommerceOrder` stays the unreleased catalog-order capture. None of those models gained a column in this layer. The orchestrator keeps booking state and payment state apart, rejects unknown transactional eligibility, and does not call Graph, a gateway, or Prisma. No migration folder was added. Do not turn on sync, poll, order capture, or payments from that work.
