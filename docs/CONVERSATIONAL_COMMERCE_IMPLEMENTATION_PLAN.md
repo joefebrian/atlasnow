@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **stop after M0, M1A, and M1A.1 contract hardening.** Do not start persistence, webhooks, Flows, payments, UI, or deploy from this document.
+Status: **stop after M0, M1A, M1A.1, and M1A.2 contract corrections.** Do not start persistence, webhooks, Flows, payments, UI, or deploy from this document.
 
 ## Stack
 
@@ -46,6 +46,8 @@ Included:
 - Action-level read and write checks. This is not production RBAC
 
 M1A.1 hardens the M1A contracts. A timeout stays `PENDING_RESOLUTION` until lookup, a terminal provider state, or a documented idempotency guarantee. A human release does not authorize a second booking. Payment requires a signed proof matched to a stored attempt. Experience and event pairs are validated. Webhook replay uses the delivery timestamp. Registry mode must match the adapter. A non-empty approval string is not Meta approval.
+
+M1A.2 binds that lookup to the original provider, location, and request hash. Another provider cannot prove absence. Payment attempts keep separate ledgers, and the transaction status is derived from those ledgers. The internal payment HMAC is not a gateway webhook signature.
 
 Excluded:
 

@@ -2,9 +2,9 @@
 
 Updated 2026-10-25. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
 
-## Conversational commerce M0, M1A, and M1A.1
+## Conversational commerce M0, M1A, M1A.1, and M1A.2
 
-In-memory orchestrator foundation on `feature/conversational-commerce-m1a`. M1A.1 hardens contracts. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
+In-memory orchestrator foundation on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
 
 Working in unit tests only:
 
@@ -13,7 +13,8 @@ Working in unit tests only:
 - Read and write are separate actions. This is not production RBAC
 - Four mock providers: native hold, external API, external checkout handoff, manual inquiry
 - Slot conflict, idempotent replay, and a missing external reference
-- A timeout stays `PENDING_RESOLUTION`. Human release does not authorize a second booking. Lookup adopts a reservation the provider committed before timing out. A non-authoritative empty lookup does not retry
+- A timeout stays `PENDING_RESOLUTION`. Human release does not authorize a second booking. Lookup uses the original provider, location, and request hash. Another provider cannot prove absence. A recovered booking must match the original slot
+- Each payment attempt has its own ledger. A repeated attempt id cannot change amount, provider, or transaction. An expired attempt does not block a later paid attempt. A refund cannot move to a different attempt. Duplicate events do not add revenue. A blank provider reference cannot verify payment. The internal HMAC is not a gateway webhook signature
 - Payment duplicates, out-of-order notices, and partial and full refunds
 - An evidence label, a bad signature, or a mismatched tenant, provider, attempt, amount, currency, or provider reference does not mark a transaction paid
 - Confirmed booking with unpaid payment, and paid payment with an unconfirmed booking

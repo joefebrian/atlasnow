@@ -101,10 +101,10 @@ There is no HTTP route.
 |---|---|
 | `reserve` | Action `write`, policy, tenant check, idempotency, then hold or create |
 | `releaseTimedOut` | Acknowledges a timeout. Returns `RECONCILIATION_REQUIRED`. Does not delete the inflight key |
-| `reconcileTimedOut` | Lookup, terminal close, or one guaranteed retry. Does not create a second reservation |
+| `reconcileTimedOut` | Lookup on the original provider, location, key, and request hash. A different provider or location is `SCOPE_MISMATCH` and stays pending |
 | `cancelReservation` | Provider cancel. Payment ledger unchanged |
-| `openPaymentAttempt` | Stores the expected amount and provider for one attempt |
-| `recordPayment` | Verifies a raw notice against that attempt, then applies the internal event. Booking state unchanged |
+| `openPaymentAttempt` | Stores one attempt. The same id with a different amount, provider, or transaction conflicts |
+| `recordPayment` | Verifies a raw notice against that attempt's ledger, then derives the transaction status. Booking state unchanged |
 | `readBooking` | Action `read`. Cross-tenant returns no booking body. Write permission does not imply read |
 | `normalizeCustomerExperience` | Legal experience and event pairs only. `confirmed` is false. Payment is not verified |
 | `assessWebhook` | Connection tenant, HMAC over delivery time, replay on delivery time, dedupe key, ordering flag. No socket |
@@ -147,7 +147,8 @@ The current Commerce page, catalog import, and order-capture empty state are unc
 | Read used as write | `permissions: ["read"]` cannot reserve. `permissions: ["write"]` cannot read | Production role mapping is not built |
 | Wrong provider registration | Registry rejects a mode or id that disagrees with the adapter | A live adapter can still mis-declare its own capabilities |
 | Double book | Mock conflict on held or confirmed slot. Second call does not create a row | External capacity stays at the merchant. The mock is not that system |
-| Timeout duplicate | Inflight stays until reconciliation. A committed-then-timeout provider is adopted by lookup. Human release does not authorize a second create | A live lookup that returns an authoritative empty result while a booking exists would allow one retry |
+| Timeout duplicate | Inflight stays until reconciliation on the original provider. Another provider cannot prove absence. A recovered booking must match the original slot. Human release does not authorize a second create | A live lookup on the original provider that returns an authoritative empty result while a booking exists would allow one retry |
+| Second payment capture | Each attempt has its own ledger. A second paid attempt is rejected while another capture is open. Duplicate events do not add revenue | Gateway webhook verification is still outside this HMAC |
 | Invented availability or price | Empty slot list when none were supplied. Quote fails closed without a whole-IDR amount | Native inventory does not exist |
 | Card data | No card field exists | Do not add one |
 | Public generic webhook | No route | Future receiver must be provider-scoped and signed |

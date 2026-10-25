@@ -60,10 +60,11 @@ Failure:
 
 A timeout is not proof that the provider created nothing. The orchestrator keeps the operation in `PENDING_RESOLUTION` and keeps the original idempotency key. `releaseTimedOut` records that a person saw the timeout. It does not delete the inflight record and it does not authorize a second create.
 
-`reconcileTimedOut` is the only resolver:
+`reconcileTimedOut` is the only resolver. It uses the stored tenant, location, provider, idempotency key, and request hash. The actor is authorized against that stored scope. A command that names another provider or location returns `SCOPE_MISMATCH` and does not call either provider. That mismatch does not verify absence and does not authorize a retry. The transaction stays `PENDING_RESOLUTION`.
 
-- `guaranteesIdempotency` on the adapter: retry the same create or hold with the original key. Accepting a key is not this guarantee. The flag is true only when the provider documents that the same key cannot create a second reservation.
-- Otherwise call `findByIdempotencyKey`. A found `CONFIRMED`, `HELD`, `REQUESTED`, or `COMPLETED` row is adopted onto the original transaction. A found `CANCELLED`, `REJECTED`, `EXPIRED`, or `NO_SHOW` closes the key as `TERMINAL`. An authoritative empty result allows one later `reserve` on the same key. A non-authoritative empty result, or a lookup failure, stays `PENDING_RESOLUTION` and does not create.
+- `guaranteesIdempotency` on the original adapter: retry the same create or hold with the original key and the original request hash. Accepting a key is not this guarantee. The flag is true only when the provider documents that the same key cannot create a second reservation.
+- Otherwise call `findByIdempotencyKey` on the original provider only. A found row is adopted only when its slot matches the original tenant, location, offering, and start. A found `CONFIRMED`, `HELD`, `REQUESTED`, or `COMPLETED` row is adopted onto the original transaction. A found `CANCELLED`, `REJECTED`, `EXPIRED`, or `NO_SHOW` closes the key as `TERMINAL`. An authoritative empty result from that same provider allows one later `reserve` on the same key. A non-authoritative empty result, a lookup failure, or a booking that does not match the original request stays `PENDING_RESOLUTION` and does not create.
+- An authoritative empty result from any other provider is not absence.
 
 A human release alone never sets absence as verified.
 

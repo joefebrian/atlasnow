@@ -43,6 +43,8 @@ export type MockOptions = {
    * `unsupported` removes the lookup operation.
    */
   lookup?: "default" | "non-authoritative-empty" | "unsupported";
+  /** Replaces the slot on a found lookup so the orchestrator can reject a foreign booking. */
+  lookupSlotKey?: string;
 };
 
 type Stored = ProviderBooking & {
@@ -266,7 +268,9 @@ export function createMockProvider(options: MockOptions): MockProvider {
       if (!row || row.tenantId !== input.tenantId) {
         return { ok: true, replay: false, data: { found: null, authoritative: true } };
       }
-      return { ok: true, replay: false, data: { found: toPublic(row), authoritative: true } };
+      const found = toPublic(row);
+      if (options.lookupSlotKey) found.slotKey = options.lookupSlotKey;
+      return { ok: true, replay: false, data: { found, authoritative: true } };
     },
   };
 

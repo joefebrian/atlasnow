@@ -1,5 +1,6 @@
 import { authorize, type Actor } from "./auth";
 import {
+  aggregateAttemptLedgers,
   applyPaymentNotice,
   emptyLedger,
   verifyPaymentNotice,
@@ -39,6 +40,7 @@ export type ReserveResult = {
     | "FORBIDDEN"
     | "NOT_FOUND"
     | "RECONCILIATION_REQUIRED"
+    | "SCOPE_MISMATCH"
     | "TERMINAL";
   retryable: boolean;
   resolutionRequired: boolean;
@@ -180,7 +182,6 @@ export async function reserve(
     result.resolutionRequired = true;
     result.transaction = openTransaction(command, transactionRef, "PENDING_RESOLUTION");
     deps.state.transactions.set(transactionRef, result.transaction);
-    if (!deps.state.ledgers.has(transactionRef)) deps.state.ledgers.set(transactionRef, emptyLedger());
     deps.state.inflight.set(storageKey, {
       hash,
       transactionRef,
@@ -197,7 +198,6 @@ export async function reserve(
     const result = failure(response.code, response.message, false);
     const failed = openTransaction(command, transactionRef, "FAILED");
     deps.state.transactions.set(transactionRef, failed);
-    deps.state.ledgers.set(transactionRef, emptyLedger());
     result.transaction = failed;
     remember(deps.state, storageKey, hash, result);
     pushEvent(deps.state, command.tenantId, transactionRef, "provider.rejected", deps.now, { code: response.code });
@@ -209,7 +209,6 @@ export async function reserve(
     const result = failure("MISSING_REFERENCE", "The external provider did not return a booking reference.", false);
     result.transaction = openTransaction(command, transactionRef, "FAILED");
     deps.state.transactions.set(transactionRef, result.transaction);
-    deps.state.ledgers.set(transactionRef, emptyLedger());
     remember(deps.state, storageKey, hash, result);
     return clone(result);
   }
@@ -219,7 +218,6 @@ export async function reserve(
   transaction.bookingRef = booking.bookingRef;
   deps.state.bookings.set(booking.bookingRef, booking);
   deps.state.transactions.set(transactionRef, transaction);
-  if (!deps.state.ledgers.has(transactionRef)) deps.state.ledgers.set(transactionRef, emptyLedger());
   const result: ReserveResult = {
     ok: true,
     replay: response.replay,
@@ -267,19 +265,39 @@ export async function reconcileTimedOut(
   const storageKey = `${command.tenantId}:${command.idempotencyKey}`;
   const pending = deps.state.inflight.get(storageKey);
   if (!pending) return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
+  if (command.tenantId !== pending.request.tenantId || command.idempotencyKey !== pending.request.idempotencyKey) {
+    return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
+  }
   const transaction = deps.state.transactions.get(pending.transactionRef);
-  if (!transaction) return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
-  const allowed = authorize(command.actor, transaction, "write");
+  if (!transaction || transaction.tenantId !== pending.request.tenantId) {
+    return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
+  }
+  const allowed = authorize(
+    command.actor,
+    { tenantId: pending.request.tenantId, locationId: pending.request.locationId },
+    "write",
+  );
   if (!allowed.ok) return failure(allowed.code, authMessage(allowed.code), false);
+  if (command.providerId !== pending.request.providerId || command.locationId !== pending.request.locationId) {
+    return stayPending(
+      deps.state,
+      pending,
+      "SCOPE_MISMATCH",
+      "Reconciliation must use the original provider and location. No lookup was sent.",
+    );
+  }
   if (transaction.state !== "PENDING_RESOLUTION") {
     return { ...clone(pending.result), replay: true };
   }
   const resolved = deps.registry.resolve(
-    { tenantId: command.tenantId, locationId: command.locationId },
-    command.providerId,
+    { tenantId: pending.request.tenantId, locationId: pending.request.locationId },
+    pending.request.providerId,
   );
-  if (!resolved.ok) return failure("NOT_FOUND", "No provider connection is registered for this tenant.", true);
+  if (!resolved.ok) return stayPending(deps.state, pending, "RECONCILIATION_REQUIRED", "No provider connection is registered for the original reservation.");
   const capabilities = resolved.provider.getCapabilities();
+  if (capabilities.providerId !== pending.request.providerId) {
+    return stayPending(deps.state, pending, "RECONCILIATION_REQUIRED", "The resolved provider is not the original connection.");
+  }
   const sameRequest = {
     ...pending.request,
     requestHash: pending.hash,
@@ -297,18 +315,28 @@ export async function reconcileTimedOut(
     return adoptResolved(deps.state, pending, resolved.mode, response.data, deps.now);
   }
   const lookup = await resolved.provider.findByIdempotencyKey({
-    tenantId: command.tenantId,
-    locationId: command.locationId,
-    idempotencyKey: command.idempotencyKey,
+    tenantId: pending.request.tenantId,
+    locationId: pending.request.locationId,
+    idempotencyKey: pending.request.idempotencyKey,
   });
   if (!lookup.ok) {
-    const again = clone(pending.result);
-    again.resolutionRequired = true;
-    again.code = lookup.code === "UNSUPPORTED" ? "RECONCILIATION_REQUIRED" : lookup.code;
-    again.message = "Provider lookup did not produce an authoritative result. The create was not retried.";
+    const again = stayPending(
+      deps.state,
+      pending,
+      lookup.code === "UNSUPPORTED" ? "RECONCILIATION_REQUIRED" : lookup.code,
+      "Provider lookup did not produce an authoritative result. The create was not retried.",
+    );
     return again;
   }
   if (lookup.data.found) {
+    if (lookup.data.found.slotKey !== expectedSlot(pending)) {
+      return stayPending(
+        deps.state,
+        pending,
+        "RECONCILIATION_REQUIRED",
+        "The recovered booking does not match the original request. No second booking was authorized.",
+      );
+    }
     const terminal = terminalFailure(lookup.data.found.state);
     if (terminal) {
       transaction.state = "FAILED";
@@ -375,13 +403,28 @@ export function openPaymentAttempt(
   state: OrchestratorState,
   actor: Actor,
   input: { transactionRef: string; attemptRef: string; providerId: string; expectedAmountIdr: number },
-): { ok: true } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "MISMATCH" } {
+):
+  | { ok: true; replay: boolean }
+  | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "MISMATCH" | "ATTEMPT_CONFLICT" } {
   const transaction = state.transactions.get(input.transactionRef);
   if (!transaction) return { ok: false, code: "NOT_FOUND" };
   const allowed = authorize(actor, transaction, "write");
   if (!allowed.ok) return { ok: false, code: allowed.code };
+  if (!input.attemptRef.trim() || !input.providerId.trim()) return { ok: false, code: "MISMATCH" };
   if (!Number.isSafeInteger(input.expectedAmountIdr) || input.expectedAmountIdr < 1) return { ok: false, code: "MISMATCH" };
-  state.paymentAttempts.set(`${input.transactionRef}:${input.attemptRef}`, {
+  const key = attemptKey(transaction.tenantId, input.attemptRef);
+  const existing = state.paymentAttempts.get(key);
+  if (existing) {
+    const same =
+      existing.tenantId === transaction.tenantId &&
+      existing.transactionRef === transaction.transactionRef &&
+      existing.providerId === input.providerId &&
+      existing.expectedAmountIdr === input.expectedAmountIdr &&
+      existing.currency === "IDR";
+    if (!same) return { ok: false, code: "ATTEMPT_CONFLICT" };
+    return { ok: true, replay: true };
+  }
+  state.paymentAttempts.set(key, {
     tenantId: transaction.tenantId,
     transactionRef: transaction.transactionRef,
     attemptRef: input.attemptRef,
@@ -389,7 +432,8 @@ export function openPaymentAttempt(
     expectedAmountIdr: input.expectedAmountIdr,
     currency: "IDR",
   });
-  return { ok: true };
+  if (!state.ledgers.has(key)) state.ledgers.set(key, emptyLedger());
+  return { ok: true, replay: false };
 }
 
 export function recordPayment(
@@ -414,14 +458,18 @@ export function recordPayment(
         | "NO_ATTEMPT"
         | "UNVERIFIED"
         | "MISMATCH"
-        | "REJECTED_EVIDENCE";
+        | "REJECTED_EVIDENCE"
+        | "ATTEMPT_CONFLICT";
     } {
   const transaction = state.transactions.get(input.transactionRef);
   if (!transaction) return { ok: false, code: "NOT_FOUND" };
   const allowed = authorize(actor, transaction, "write");
   if (!allowed.ok) return { ok: false, code: allowed.code };
-  const attempt = state.paymentAttempts.get(`${input.transactionRef}:${input.notice.attemptRef}`);
-  if (!attempt || attempt.transactionRef !== transaction.transactionRef) return { ok: false, code: "NO_ATTEMPT" };
+  const attempt = state.paymentAttempts.get(attemptKey(transaction.tenantId, input.notice.attemptRef));
+  if (!attempt) return { ok: false, code: "NO_ATTEMPT" };
+  if (attempt.transactionRef !== transaction.transactionRef || attempt.tenantId !== transaction.tenantId) {
+    return { ok: false, code: "MISMATCH" };
+  }
   if (input.connection.tenantId !== transaction.tenantId || input.connection.providerId !== attempt.providerId) {
     return { ok: false, code: "MISMATCH" };
   }
@@ -439,17 +487,26 @@ export function recordPayment(
     },
   });
   if (!verified.ok) return { ok: false, code: verified.code };
-  const current = state.ledgers.get(input.transactionRef) ?? emptyLedger();
+  const key = attemptKey(attempt.tenantId, attempt.attemptRef);
+  const current = state.ledgers.get(key) ?? emptyLedger();
   if (current.providerReference && current.providerReference !== verified.event.providerReference) {
     return { ok: false, code: "MISMATCH" };
   }
+  if (refundBelongsToAnotherAttempt(state, transaction, attempt.attemptRef, verified.event)) {
+    return { ok: false, code: "MISMATCH" };
+  }
+  if (verified.event.type === "payment.paid" && anotherAttemptIsCapturing(state, transaction, attempt.attemptRef)) {
+    return { ok: false, code: "ATTEMPT_CONFLICT" };
+  }
   const applied = applyPaymentNotice(current, verified.event);
-  state.ledgers.set(input.transactionRef, applied.ledger);
-  transaction.paymentStatus = applied.ledger.status;
-  transaction.verifiedPaid = applied.ledger.verifiedPaid;
+  state.ledgers.set(key, applied.ledger);
+  const aggregate = aggregateAttemptLedgers(attemptLedgers(state, transaction));
+  transaction.paymentStatus = aggregate.status;
+  transaction.verifiedPaid = aggregate.verifiedPaid;
   pushEvent(state, transaction.tenantId, input.transactionRef, input.notice.type, now, {
     effect: applied.effect,
-    paymentStatus: applied.ledger.status,
+    paymentStatus: aggregate.status,
+    attemptRef: attempt.attemptRef,
   });
   const booking = transaction.bookingRef ? state.bookings.get(transaction.bookingRef) ?? null : null;
   return { ok: true, effect: applied.effect, ledger: applied.ledger, transaction: { ...transaction }, booking: booking ? { ...booking } : null };
@@ -522,6 +579,14 @@ function adoptResolved(
   data: { bookingRef: string; state: BookingState; slotKey: string; providerReference: string | null; referenceAuthoritative: boolean },
   now: string,
 ): ReserveResult {
+  if (data.slotKey !== expectedSlot(pending)) {
+    return stayPending(
+      state,
+      pending,
+      "RECONCILIATION_REQUIRED",
+      "The recovered booking does not match the original request. No second booking was authorized.",
+    );
+  }
   const external = mode === "EXTERNAL_API" || mode === "EXTERNAL_CHECKOUT";
   if ((data.state === "CONFIRMED" || data.state === "HELD") && external && !data.providerReference) {
     const result = failure("MISSING_REFERENCE", "The external provider did not return a booking reference.", false);
@@ -563,6 +628,76 @@ function adoptResolved(
   state.inflight.delete(`${pending.request.tenantId}:${pending.request.idempotencyKey}`);
   pushEvent(state, pending.request.tenantId, pending.transactionRef, "booking.recovered", now, { state: booking.state });
   return clone(result);
+}
+
+function expectedSlot(pending: InflightReservation): string {
+  return `${pending.request.tenantId}:${pending.request.locationId}:${pending.request.offeringId}:${pending.request.startsAt}`;
+}
+
+function stayPending(
+  state: OrchestratorState,
+  pending: InflightReservation,
+  code: ReserveResult["code"],
+  message: string,
+): ReserveResult {
+  const again = clone(pending.result);
+  again.ok = false;
+  again.replay = false;
+  again.code = code;
+  again.resolutionRequired = true;
+  again.booking = null;
+  again.transaction = state.transactions.get(pending.transactionRef) ?? again.transaction;
+  again.message = message;
+  return again;
+}
+
+function attemptKey(tenantId: string, attemptRef: string): string {
+  return `${tenantId}:${attemptRef}`;
+}
+
+function attemptLedgers(
+  state: OrchestratorState,
+  transaction: CommerceTransaction,
+): PaymentLedger[] {
+  const ledgers: PaymentLedger[] = [];
+  for (const attempt of state.paymentAttempts.values()) {
+    if (attempt.tenantId !== transaction.tenantId || attempt.transactionRef !== transaction.transactionRef) continue;
+    const ledger = state.ledgers.get(attemptKey(attempt.tenantId, attempt.attemptRef));
+    if (ledger) ledgers.push(ledger);
+  }
+  return ledgers;
+}
+
+function anotherAttemptIsCapturing(
+  state: OrchestratorState,
+  transaction: CommerceTransaction,
+  attemptRef: string,
+): boolean {
+  for (const attempt of state.paymentAttempts.values()) {
+    if (attempt.tenantId !== transaction.tenantId || attempt.transactionRef !== transaction.transactionRef) continue;
+    if (attempt.attemptRef === attemptRef) continue;
+    const ledger = state.ledgers.get(attemptKey(attempt.tenantId, attempt.attemptRef));
+    if (ledger?.status === "PAID" || ledger?.status === "PARTIALLY_REFUNDED") return true;
+  }
+  return false;
+}
+
+function refundBelongsToAnotherAttempt(
+  state: OrchestratorState,
+  transaction: CommerceTransaction,
+  attemptRef: string,
+  event: { type: string; providerReference: string },
+): boolean {
+  if (event.type !== "payment.refunded" && event.type !== "payment.partially_refunded" && event.type !== "payment.chargeback") {
+    return false;
+  }
+  for (const attempt of state.paymentAttempts.values()) {
+    if (attempt.tenantId !== transaction.tenantId || attempt.transactionRef !== transaction.transactionRef) continue;
+    if (attempt.attemptRef === attemptRef) continue;
+    const ledger = state.ledgers.get(attemptKey(attempt.tenantId, attempt.attemptRef));
+    if (ledger?.providerReference && ledger.providerReference === event.providerReference) return true;
+  }
+  return false;
 }
 
 function terminalFailure(state: BookingState): boolean {

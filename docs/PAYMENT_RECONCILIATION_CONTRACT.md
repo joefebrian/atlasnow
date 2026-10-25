@@ -40,7 +40,7 @@ A caller-supplied evidence enum is not proof. Three objects stay separate:
 | Object | Meaning |
 |---|---|
 | `RawPaymentNotice` | Inbound claim. Includes the evidence label, amount, currency, provider reference, tenant, provider, attempt, and transaction |
-| `PaymentProof` | HMAC-SHA256 over tenant, provider, attempt, transaction, provider reference, currency, amount, event id, and type. Signed with the payment connection secret |
+| `PaymentProof` | HMAC-SHA256 over tenant, provider, attempt, transaction, provider reference, currency, amount, event id, type, `occurredAt`, and sequence. Signed with the payment connection secret |
 | `VerifiedPaymentEvent` | Internal event. Only `verifyPaymentNotice` may produce one. `applyPaymentNotice` accepts only this type |
 
 `verifyPaymentNotice` requires a match between the notice, the proof, and a `PaymentExpectation` stored by `openPaymentAttempt`:
@@ -49,9 +49,12 @@ A caller-supplied evidence enum is not proof. Three objects stay separate:
 - Payment provider id on the connection and on the attempt
 - Payment attempt ref
 - Transaction ref
-- Provider transaction reference
+- Provider transaction reference. A blank reference cannot verify payment
 - Currency `IDR`
 - Expected or captured whole-IDR amount
+- `occurredAt` and sequence. These fields count only when they are inside the signature. A verified evidence label does not make a caller-supplied time or sequence trustworthy
+
+The HMAC proves that AtlasNow's payment-connection secret signed those fields. It is not Xendit, Midtrans, or any other gateway's webhook signature. A future adapter must perform that gateway check before it produces this proof. This module does not call a gateway.
 
 `payment.paid`, `payment.pending`, `payment.failed`, `payment.expired`, `payment.refunded`, and `payment.chargeback` must equal the stored amount. `payment.partially_refunded` must be greater than zero and less than that amount. A mismatch returns `MISMATCH` and does not change the ledger. A missing or bad signature returns `UNVERIFIED`. `REDIRECT`, `WHATSAPP_MESSAGE`, `SCREENSHOT`, and `CUSTOMER_CONFIRMATION` return `REJECTED_EVIDENCE` even when the HMAC is valid.
 
@@ -78,7 +81,19 @@ A rejected notice does not change status.
 
 `PaymentAttempt` is a type: its own `attemptRef`, its own `externalId`, whole `amountIdr`, currency `IDR`. It is not the booking's `PRV-` reference. Nothing writes gateway credentials. There is no PAN, CVV, or raw card field.
 
-One ledger in the mock is one attempt. A second capture is a new attempt, not a second paid notice on the same ledger. A repeated paid notice with the same amount is a duplicate.
+Each attempt has its own ledger, keyed by tenant and attempt id. One transaction may have several attempts. Opening the same attempt id again is a replay only when tenant, transaction, provider, currency, and amount are unchanged. A different amount, provider, or transaction returns `ATTEMPT_CONFLICT` and does not overwrite the stored attempt.
+
+A failed or expired attempt does not block a later attempt. A refund, partial refund, or chargeback applies only to the attempt whose provider reference owns that capture. A second attempt cannot refund or charge back the first attempt's reference.
+
+The transaction payment status is `aggregateAttemptLedgers`. It does not apply events itself.
+
+- `PAID` or `PARTIALLY_REFUNDED` attempts contribute captured amount minus refunded amount once
+- `REFUNDED` and `CHARGEBACK` contribute no revenue
+- `PENDING`, `FAILED`, and `EXPIRED` do not erase a settled attempt
+- While one attempt is `PAID` or `PARTIALLY_REFUNDED`, another `payment.paid` on the same transaction is `ATTEMPT_CONFLICT`
+- A repeated event id, or a second paid notice for the same captured amount on the same attempt, does not add revenue again
+
+`verifiedPaid` on the transaction is true when any attempt ledger has verified a payment. Revenue still follows the aggregate status, so a refunded transaction is not level A.
 
 ## Amounts
 

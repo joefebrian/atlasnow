@@ -44,7 +44,11 @@ export type RawPaymentNotice = {
   transactionRef: string;
 };
 
-/** HMAC over the binding fields. Produced with the payment connection secret. */
+/**
+ * HMAC over the binding fields, including occurredAt and sequence.
+ * Signed with the payment connection secret after the gateway's own
+ * webhook check has already passed. This HMAC is not that gateway check.
+ */
 export type PaymentProof = {
   tenantId: string;
   providerId: string;
@@ -55,6 +59,8 @@ export type PaymentProof = {
   amountIdr: number;
   eventId: string;
   type: PaymentNoticeType;
+  occurredAt: string;
+  sequence: number | null;
   signature: string;
 };
 
@@ -94,6 +100,9 @@ export function signPaymentProof(secret: string, fields: Omit<PaymentProof, "sig
 /**
  * Turns a raw notice into an internal event only when the proof matches the
  * stored attempt. A caller-supplied evidence label is not enough.
+ * occurredAt and sequence are trusted only when they are inside the signed proof.
+ * An empty provider reference cannot verify a payment.
+ * This proof is not Xendit, Midtrans, or any other gateway signature.
  */
 export function verifyPaymentNotice(input: {
   notice: RawPaymentNotice;
@@ -121,8 +130,15 @@ export function verifyPaymentNotice(input: {
     proof.eventId !== notice.eventId ||
     proof.type !== notice.type ||
     proof.providerReference !== notice.providerReference ||
-    proof.amountIdr !== notice.amountIdr
+    proof.amountIdr !== notice.amountIdr ||
+    proof.occurredAt !== notice.occurredAt ||
+    proof.sequence !== notice.sequence
   ) {
+    return { ok: false, code: "MISMATCH" };
+  }
+  if (!proof.providerReference.trim()) return { ok: false, code: "MISMATCH" };
+  if (!Number.isFinite(Date.parse(proof.occurredAt))) return { ok: false, code: "MISMATCH" };
+  if (proof.sequence != null && (!Number.isSafeInteger(proof.sequence) || proof.sequence < 0)) {
     return { ok: false, code: "MISMATCH" };
   }
   if (!amountMatchesExpectation(notice.type, notice.amountIdr, expected.amountIdr)) {
@@ -164,6 +180,8 @@ function proofMaterial(fields: Omit<PaymentProof, "signature">): string {
     String(fields.amountIdr),
     fields.eventId,
     fields.type,
+    fields.occurredAt,
+    fields.sequence == null ? "" : String(fields.sequence),
   ].join("|");
 }
 
@@ -260,6 +278,10 @@ function applyOne(current: PaymentLedger, notice: VerifiedPaymentEvent): { ledge
   }
 
   if (notice.type === "payment.paid") {
+    if (!notice.providerReference.trim()) {
+      next.rejectedEventIds.push(notice.eventId);
+      return { ledger: next, effect: "rejected_amount" };
+    }
     if (notice.amountIdr < 1) {
       next.rejectedEventIds.push(notice.eventId);
       return { ledger: next, effect: "rejected_amount" };
@@ -368,6 +390,54 @@ function enqueue(ledger: PaymentLedger, notice: VerifiedPaymentEvent): PaymentLe
   const next = clone(ledger);
   next.queued.push({ ...notice });
   return next;
+}
+
+/**
+ * Transaction status is derived from attempt ledgers. It is not a second place that applies events.
+ * Settled funds count once per attempt. REFUNDED and CHARGEBACK add no revenue.
+ * A failed or expired attempt does not erase another attempt.
+ */
+export function aggregateAttemptLedgers(ledgers: readonly PaymentLedger[]): {
+  status: PaymentState;
+  verifiedPaid: boolean;
+  netRevenueIdr: number;
+} {
+  let net = 0;
+  let refundedOnSettled = 0;
+  let verifiedPaid = false;
+  let chargeback = false;
+  let refunded = false;
+  let pending = false;
+  let failed = false;
+  let expired = false;
+  for (const ledger of ledgers) {
+    if (ledger.verifiedPaid) verifiedPaid = true;
+    if (ledger.status === "PAID" || ledger.status === "PARTIALLY_REFUNDED") {
+      net += Math.max(0, (ledger.amountIdr ?? 0) - ledger.refundedIdr);
+      refundedOnSettled += ledger.refundedIdr;
+    } else if (ledger.status === "CHARGEBACK") chargeback = true;
+    else if (ledger.status === "REFUNDED") refunded = true;
+    else if (ledger.status === "PENDING") pending = true;
+    else if (ledger.status === "FAILED") failed = true;
+    else if (ledger.status === "EXPIRED") expired = true;
+  }
+  const status: PaymentState =
+    net > 0 && refundedOnSettled > 0
+      ? "PARTIALLY_REFUNDED"
+      : net > 0
+        ? "PAID"
+        : chargeback
+          ? "CHARGEBACK"
+          : refunded
+            ? "REFUNDED"
+            : pending
+              ? "PENDING"
+              : failed
+                ? "FAILED"
+                : expired
+                  ? "EXPIRED"
+                  : "NOT_STARTED";
+  return { status, verifiedPaid, netRevenueIdr: net };
 }
 
 function clone(ledger: PaymentLedger): PaymentLedger {

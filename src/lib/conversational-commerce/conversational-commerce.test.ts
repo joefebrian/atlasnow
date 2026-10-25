@@ -24,7 +24,7 @@ import {
   reserve,
   type ReserveCommand,
 } from "./orchestrator";
-import { applyPaymentNotice, emptyLedger, signPaymentProof, verifyPaymentNotice, type RawPaymentNotice, type VerifiedPaymentEvent } from "./payment";
+import { aggregateAttemptLedgers, applyPaymentNotice, emptyLedger, signPaymentProof, verifyPaymentNotice, type RawPaymentNotice, type VerifiedPaymentEvent } from "./payment";
 import { evaluateEligibility } from "./policy";
 import { createRegistry, type ProviderRegistry } from "./registry";
 import { transitionTransaction } from "./transaction-state";
@@ -106,6 +106,8 @@ function proofFor(notice: RawPaymentNotice, secret = PAY_SECRET) {
     amountIdr: notice.amountIdr,
     eventId: notice.eventId,
     type: notice.type,
+    occurredAt: notice.occurredAt,
+    sequence: notice.sequence,
   };
   return { ...fields, signature: signPaymentProof(secret, fields) };
 }
@@ -493,6 +495,113 @@ describe("mock booking provider", () => {
     assert.equal(provider.bookingCount(), 1);
   });
 
+  it("does not let another provider authorize a retry after a committed timeout", async () => {
+    const providerA = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-a",
+      mode: "EXTERNAL_API",
+      ambiguousTimeout: true,
+    });
+    const providerB = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-b",
+      mode: "EXTERNAL_API",
+    });
+    const deps = wire(providerA, "EXTERNAL_API");
+    const registered = deps.registry.register({
+      tenantId: "tenant-a",
+      locationId: null,
+      providerId: "provider-b",
+      mode: "EXTERNAL_API",
+      provider: providerB,
+    });
+    assert.equal(registered.ok, true);
+    const first = await reserve(command({ idempotencyKey: "split-1" }), { ...deps, now: NOW });
+    assert.equal(first.code, "TIMEOUT");
+    assert.equal(first.transaction?.state, "PENDING_RESOLUTION");
+    assert.equal(providerA.bookingCount(), 1);
+
+    const otherProvider = await reconcileTimedOut(
+      {
+        actor: actor("tenant-a"),
+        tenantId: "tenant-a",
+        locationId: "loc-1",
+        providerId: "provider-b",
+        idempotencyKey: "split-1",
+      },
+      { ...deps, now: NOW },
+    );
+    assert.equal(otherProvider.code, "SCOPE_MISMATCH");
+    assert.equal(otherProvider.transaction?.state, "PENDING_RESOLUTION");
+    assert.equal(providerB.calls.includes("findByIdempotencyKey"), false);
+    assert.equal(providerB.calls.includes("createBooking"), false);
+    assert.equal(providerA.calls.filter((call) => call === "findByIdempotencyKey").length, 0);
+    assert.equal(providerA.bookingCount(), 1);
+
+    const otherLocation = await reconcileTimedOut(
+      {
+        actor: actor("tenant-a"),
+        tenantId: "tenant-a",
+        locationId: "loc-2",
+        providerId: "provider-a",
+        idempotencyKey: "split-1",
+      },
+      { ...deps, now: NOW },
+    );
+    assert.equal(otherLocation.code, "SCOPE_MISMATCH");
+    assert.equal(providerA.calls.filter((call) => call === "findByIdempotencyKey").length, 0);
+
+    const wrongOutlet = await reconcileTimedOut(
+      {
+        actor: actor("tenant-a", ["loc-2"]),
+        tenantId: "tenant-a",
+        locationId: "loc-1",
+        providerId: "provider-a",
+        idempotencyKey: "split-1",
+      },
+      { ...deps, now: NOW },
+    );
+    assert.equal(wrongOutlet.code, "LOCATION_FORBIDDEN");
+    assert.equal(providerA.calls.filter((call) => call === "createBooking").length, 1);
+
+    const retried = await reserve(command({ idempotencyKey: "split-1" }), { ...deps, now: NOW });
+    assert.equal(retried.replay, true);
+    assert.equal(providerA.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(providerA.bookingCount(), 1);
+    assert.equal(providerB.bookingCount(), 0);
+    assert.equal(deps.state.transactions.get(first.transaction?.transactionRef ?? "")?.state, "PENDING_RESOLUTION");
+  });
+
+  it("does not adopt a recovered booking from a different request", async () => {
+    const provider = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-a",
+      mode: "EXTERNAL_API",
+      ambiguousTimeout: true,
+      lookupSlotKey: "tenant-a:loc-9:offer-1:2026-11-01T09:00:00.000Z",
+    });
+    const deps = wire(provider, "EXTERNAL_API");
+    const first = await reserve(command({ idempotencyKey: "foreign-slot" }), { ...deps, now: NOW });
+    const recovered = await reconcileTimedOut(
+      {
+        actor: actor("tenant-a"),
+        tenantId: "tenant-a",
+        locationId: "loc-1",
+        providerId: "provider-a",
+        idempotencyKey: "foreign-slot",
+      },
+      { ...deps, now: NOW },
+    );
+    assert.equal(recovered.code, "RECONCILIATION_REQUIRED");
+    assert.equal(recovered.booking, null);
+    assert.equal(deps.state.bookings.size, 0);
+    assert.equal(deps.state.transactions.get(first.transaction?.transactionRef ?? "")?.state, "PENDING_RESOLUTION");
+    const retried = await reserve(command({ idempotencyKey: "foreign-slot" }), { ...deps, now: NOW });
+    assert.equal(retried.replay, true);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(provider.bookingCount(), 1);
+  });
+
   it("does not confirm an external booking without a provider reference", async () => {
     const provider = createMockProvider({
       boundTenantId: "tenant-a",
@@ -711,6 +820,8 @@ describe("payment evidence", () => {
       amountIdr: notice.amountIdr,
       eventId: notice.eventId,
       type: notice.type,
+      occurredAt: notice.occurredAt,
+      sequence: notice.sequence,
     };
     const currencyMismatch = verifyPaymentNotice({
       notice,
@@ -758,8 +869,451 @@ describe("payment evidence", () => {
     assert.equal(referenceMismatch.ok, false);
     if (referenceMismatch.ok) return;
     assert.equal(referenceMismatch.code, "MISMATCH");
-    assert.equal(deps.state.ledgers.get(transactionRef)?.status, "PAID");
-    assert.equal(deps.state.ledgers.get(transactionRef)?.providerReference, "pay-ref-1");
+    assert.equal(deps.state.ledgers.get(`tenant-a:attempt-1`)?.status, "PAID");
+    assert.equal(deps.state.ledgers.get(`tenant-a:attempt-1`)?.providerReference, "pay-ref-1");
+  });
+
+  it("keeps an expired attempt from blocking a later paid attempt", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "pay-expire" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
+    assert.equal(
+      openPaymentAttempt(deps.state, actor("tenant-a"), {
+        transactionRef,
+        attemptRef: "attempt-a",
+        providerId: PAY_PROVIDER,
+        expectedAmountIdr: 10000,
+      }).ok,
+      true,
+    );
+    const expiredNotice = rawNotice(
+      verifiedEvent({
+        transactionRef,
+        attemptRef: "attempt-a",
+        eventId: "exp-a",
+        type: "payment.expired",
+        providerReference: "ref-a",
+      }),
+    );
+    const expired = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: expiredNotice, proof: proofFor(expiredNotice), connection },
+      NOW,
+    );
+    assert.equal(expired.ok, true);
+    if (!expired.ok) return;
+    assert.equal(expired.ledger.status, "EXPIRED");
+    assert.equal(expired.ledger.verifiedPaid, false);
+
+    assert.equal(
+      openPaymentAttempt(deps.state, actor("tenant-a"), {
+        transactionRef,
+        attemptRef: "attempt-b",
+        providerId: PAY_PROVIDER,
+        expectedAmountIdr: 10000,
+      }).ok,
+      true,
+    );
+    const paidNotice = rawNotice(
+      verifiedEvent({
+        transactionRef,
+        attemptRef: "attempt-b",
+        eventId: "pay-b",
+        providerReference: "ref-b",
+      }),
+    );
+    const paid = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
+      NOW,
+    );
+    assert.equal(paid.ok, true);
+    if (!paid.ok) return;
+    assert.equal(paid.ledger.status, "PAID");
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-a")?.status, "EXPIRED");
+    assert.equal(deps.state.transactions.get(transactionRef)?.paymentStatus, "PAID");
+    assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, true);
+    const totals = aggregateAttemptLedgers([
+      deps.state.ledgers.get("tenant-a:attempt-a") ?? emptyLedger(),
+      deps.state.ledgers.get("tenant-a:attempt-b") ?? emptyLedger(),
+    ]);
+    assert.equal(totals.netRevenueIdr, 10000);
+    assert.equal(totals.status, "PAID");
+  });
+
+  it("leaves a later attempt pending when an earlier attempt is paid", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "pay-pending-b" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-b",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const paidNotice = rawNotice(
+      verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a", providerReference: "ref-a" }),
+    );
+    const paid = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
+      NOW,
+    );
+    assert.equal(paid.ok, true);
+    const pendingNotice = rawNotice(
+      verifiedEvent({
+        transactionRef,
+        attemptRef: "attempt-b",
+        eventId: "pend-b",
+        type: "payment.pending",
+        providerReference: "ref-b",
+      }),
+    );
+    const pending = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: pendingNotice, proof: proofFor(pendingNotice), connection },
+      NOW,
+    );
+    assert.equal(pending.ok, true);
+    if (!pending.ok) return;
+    assert.equal(pending.ledger.status, "PENDING");
+    assert.equal(pending.ledger.verifiedPaid, false);
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-a")?.status, "PAID");
+    assert.equal(deps.state.transactions.get(transactionRef)?.paymentStatus, "PAID");
+    const totals = aggregateAttemptLedgers([
+      deps.state.ledgers.get("tenant-a:attempt-a") ?? emptyLedger(),
+      deps.state.ledgers.get("tenant-a:attempt-b") ?? emptyLedger(),
+    ]);
+    assert.equal(totals.netRevenueIdr, 10000);
+  });
+
+  it("rejects a repeated attempt id when the amount or provider changes", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "pay-reuse" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const first = openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    assert.equal(first.ok, true);
+    const changedAmount = openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 5000,
+    });
+    assert.equal(changedAmount.ok, false);
+    if (changedAmount.ok) return;
+    assert.equal(changedAmount.code, "ATTEMPT_CONFLICT");
+    const changedProvider = openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: "other-gateway",
+      expectedAmountIdr: 10000,
+    });
+    assert.equal(changedProvider.ok, false);
+    if (changedProvider.ok) return;
+    assert.equal(changedProvider.code, "ATTEMPT_CONFLICT");
+    const replay = openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    assert.equal(replay.ok, true);
+    if (!replay.ok) return;
+    assert.equal(replay.replay, true);
+    assert.equal(deps.state.paymentAttempts.get("tenant-a:attempt-a")?.expectedAmountIdr, 10000);
+    const other = await reserve(command({ idempotencyKey: "pay-reuse-other" }), { ...deps, now: NOW });
+    const otherTransaction = other.transaction?.transactionRef ?? "";
+    const moved = openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef: otherTransaction,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    assert.equal(moved.ok, false);
+    if (moved.ok) return;
+    assert.equal(moved.code, "ATTEMPT_CONFLICT");
+    assert.equal(deps.state.paymentAttempts.get("tenant-a:attempt-a")?.transactionRef, transactionRef);
+  });
+
+  it("does not apply attempt A's refund or chargeback to attempt B", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "pay-refund-map" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-b",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const paidNotice = rawNotice(
+      verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a", providerReference: "ref-a" }),
+    );
+    assert.equal(
+      recordPayment(
+        deps.state,
+        actor("tenant-a"),
+        { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
+        NOW,
+      ).ok,
+      true,
+    );
+    const mischarge = rawNotice(
+      verifiedEvent({
+        transactionRef,
+        attemptRef: "attempt-b",
+        eventId: "cb-b",
+        type: "payment.chargeback",
+        providerReference: "ref-a",
+      }),
+    );
+    const chargeRejected = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: mischarge, proof: proofFor(mischarge), connection },
+      NOW,
+    );
+    assert.equal(chargeRejected.ok, false);
+    if (chargeRejected.ok) return;
+    assert.equal(chargeRejected.code, "MISMATCH");
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-a")?.status, "PAID");
+
+    const misrefund = rawNotice(
+      verifiedEvent({
+        transactionRef,
+        attemptRef: "attempt-b",
+        eventId: "refund-b",
+        type: "payment.refunded",
+        providerReference: "ref-a",
+      }),
+    );
+    const rejected = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: misrefund, proof: proofFor(misrefund), connection },
+      NOW,
+    );
+    assert.equal(rejected.ok, false);
+    if (rejected.ok) return;
+    assert.equal(rejected.code, "MISMATCH");
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-a")?.status, "PAID");
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-b")?.status, "NOT_STARTED");
+
+    const refundA = rawNotice(
+      verifiedEvent({
+        transactionRef,
+        attemptRef: "attempt-a",
+        eventId: "refund-a",
+        type: "payment.refunded",
+        providerReference: "ref-a",
+      }),
+    );
+    const refunded = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: refundA, proof: proofFor(refundA), connection },
+      NOW,
+    );
+    assert.equal(refunded.ok, true);
+    if (!refunded.ok) return;
+    assert.equal(refunded.ledger.status, "REFUNDED");
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-b")?.status, "NOT_STARTED");
+    assert.equal(deps.state.transactions.get(transactionRef)?.paymentStatus, "REFUNDED");
+    assert.equal(
+      aggregateAttemptLedgers([
+        deps.state.ledgers.get("tenant-a:attempt-a") ?? emptyLedger(),
+        deps.state.ledgers.get("tenant-a:attempt-b") ?? emptyLedger(),
+      ]).netRevenueIdr,
+      0,
+    );
+  });
+
+  it("does not double count a duplicate paid event or a second open capture", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "pay-once" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const paidNotice = rawNotice(
+      verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a", providerReference: "ref-a" }),
+    );
+    const paid = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
+      NOW,
+    );
+    assert.equal(paid.ok, true);
+    const duplicate = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
+      NOW,
+    );
+    assert.equal(duplicate.ok, true);
+    if (!duplicate.ok || !paid.ok) return;
+    assert.equal(duplicate.effect, "duplicate");
+    assert.equal(duplicate.ledger.appliedEventIds.length, 1);
+    const secondEvent = rawNotice(
+      verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a-2", providerReference: "ref-a" }),
+    );
+    const repeated = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: secondEvent, proof: proofFor(secondEvent), connection },
+      NOW,
+    );
+    assert.equal(repeated.ok, true);
+    if (!repeated.ok) return;
+    assert.equal(repeated.effect, "duplicate");
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-b",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const otherCapture = rawNotice(
+      verifiedEvent({ transactionRef, attemptRef: "attempt-b", eventId: "pay-b", providerReference: "ref-b" }),
+    );
+    const blocked = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: otherCapture, proof: proofFor(otherCapture), connection },
+      NOW,
+    );
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) return;
+    assert.equal(blocked.code, "ATTEMPT_CONFLICT");
+    const totals = aggregateAttemptLedgers([
+      deps.state.ledgers.get("tenant-a:attempt-a") ?? emptyLedger(),
+      deps.state.ledgers.get("tenant-a:attempt-b") ?? emptyLedger(),
+    ]);
+    assert.equal(totals.netRevenueIdr, 10000);
+    assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, true);
+    const outcome = classifyOutcome({
+      paymentStatus: deps.state.transactions.get(transactionRef)?.paymentStatus ?? "NOT_STARTED",
+      paymentVerified: deps.state.transactions.get(transactionRef)?.verifiedPaid ?? false,
+      bookingState: "REQUESTED",
+      authoritativeBookingRef: null,
+      qualifiedLead: true,
+      engaged: true,
+    });
+    assert.equal(outcome.countsAsRevenue, true);
+    assert.equal(outcome.revenue, "FULL");
+  });
+
+  it("rejects an empty provider reference, a tampered timestamp, and a foreign tenant or provider", async () => {
+    const blank = applyPaymentNotice(emptyLedger(), verifiedEvent({ providerReference: "" }));
+    assert.equal(blank.ledger.verifiedPaid, false);
+    assert.notEqual(blank.ledger.status, "PAID");
+
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "pay-bind" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-a",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const event = verifiedEvent({ transactionRef, attemptRef: "attempt-a", providerReference: "ref-a" });
+    const notice = rawNotice(event);
+    const proof = proofFor(notice);
+    const emptyRef = rawNotice(verifiedEvent({ ...event, providerReference: "" }));
+    const unsignedEmpty = verifyPaymentNotice({
+      notice: emptyRef,
+      proof: proofFor(emptyRef),
+      secret: PAY_SECRET,
+      expectation: {
+        tenantId: "tenant-a",
+        providerId: PAY_PROVIDER,
+        attemptRef: "attempt-a",
+        transactionRef,
+        currency: "IDR",
+        amountIdr: 10000,
+      },
+    });
+    assert.equal(unsignedEmpty.ok, false);
+    if (unsignedEmpty.ok) return;
+    assert.equal(unsignedEmpty.code, "MISMATCH");
+
+    const shifted = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: { ...notice, occurredAt: "2026-10-25T08:00:00.000Z" }, proof, connection },
+      NOW,
+    );
+    assert.equal(shifted.ok, false);
+    if (shifted.ok) return;
+    assert.equal(shifted.code, "MISMATCH");
+    const reordered = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: { ...notice, sequence: 9 }, proof, connection },
+      NOW,
+    );
+    assert.equal(reordered.ok, false);
+    if (reordered.ok) return;
+    assert.equal(reordered.code, "MISMATCH");
+
+    const otherTenant = rawNotice(verifiedEvent({ ...event, tenantId: "tenant-b" }));
+    const tenantRejected = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      { transactionRef, notice: otherTenant, proof: proofFor(otherTenant), connection },
+      NOW,
+    );
+    assert.equal(tenantRejected.ok, false);
+    const otherProvider = rawNotice(verifiedEvent({ ...event, providerId: "other-gateway" }));
+    const providerRejected = recordPayment(
+      deps.state,
+      actor("tenant-a"),
+      {
+        transactionRef,
+        notice: otherProvider,
+        proof: proofFor(otherProvider),
+        connection: { tenantId: "tenant-a", providerId: "other-gateway", secret: PAY_SECRET },
+      },
+      NOW,
+    );
+    assert.equal(providerRejected.ok, false);
+    assert.equal(deps.state.transactions.get(transactionRef)?.paymentStatus, "NOT_STARTED");
+    assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, false);
   });
 });
 
@@ -828,7 +1382,7 @@ describe("booking and payment stay independent", () => {
       { ...deps, now: NOW },
     );
     assert.equal(cancelled.booking?.state, "CANCELLED");
-    assert.equal(deps.state.ledgers.get(transactionRef)?.status, "PAID");
+    assert.equal(deps.state.ledgers.get("tenant-a:attempt-1")?.status, "PAID");
     const refunded = payVerified(deps.state, transactionRef, { eventId: "refund-1", type: "payment.refunded" });
     assert.equal(refunded.ok, true);
     if (!refunded.ok) return;
