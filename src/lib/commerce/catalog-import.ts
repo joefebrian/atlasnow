@@ -66,25 +66,36 @@ export function catalogImportEnabled(tenantId: string): boolean {
 }
 
 export function parseIdrAmount(price: string, currency: string): number | null {
-  const code = currency.trim().toUpperCase();
-  let text = price.trim();
-  if (!text) return null;
-  const suffix = text.match(/^(.+?)\s+([A-Za-z]{3})$/);
-  let amount = text;
-  let seen = code;
+  const field = currency.trim().toUpperCase();
+  let amount = price.trim();
+  if (!amount) return null;
+  let seen = "";
+  const suffix = amount.match(/^(.*\S)\s+([A-Za-z]{3})$/);
   if (suffix) {
     amount = suffix[1].trim();
     seen = suffix[2].toUpperCase();
   }
-  if (seen && seen !== "IDR") return null;
-  if (!seen && !code) return null;
-  if (amount.startsWith("Rp")) amount = amount.slice(2).trim();
+  if (amount.startsWith("Rp")) {
+    amount = amount.slice(2).trim();
+  } else {
+    const prefix = amount.match(/^([A-Za-z]{3})\s*(\S(?:.*\S)?)$/);
+    if (prefix) {
+      const prefixed = prefix[1].toUpperCase();
+      if (seen && seen !== prefixed) return null;
+      amount = prefix[2].trim();
+      seen = prefixed;
+    }
+  }
+  if (seen && field && seen !== field) return null;
+  const code = seen || field;
+  if (code !== "IDR") return null;
   amount = amount.replace(/\s/g, "");
   if (/^\d{1,3}(\.\d{3})+$/.test(amount)) amount = amount.replace(/\./g, "");
   amount = amount.replace(/,/g, "");
   if (!/^\d+(\.0+)?$/.test(amount)) return null;
-  const whole = Number(amount.split(".")[0]);
-  if (!Number.isSafeInteger(whole) || whole < 0 || whole > MAX_PRICE) return null;
+  const digits = amount.split(".")[0];
+  const whole = Number(digits);
+  if (!Number.isSafeInteger(whole) || String(whole) !== digits || whole < 0 || whole > MAX_PRICE) return null;
   return whole;
 }
 

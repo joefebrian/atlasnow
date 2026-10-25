@@ -100,8 +100,10 @@ describe("catalog import gate", () => {
 
 describe("meta catalog price", () => {
   it("reads the QA whole-rupiah price", () => {
-    assert.equal(parseIdrAmount("28780 IDR", "IDR"), 28780);
+    assert.equal(parseIdrAmount("IDR28,780", "IDR"), 28780);
+    assert.equal(parseIdrAmount("IDR 28,780", "IDR"), 28780);
     assert.equal(parseIdrAmount("28,780 IDR", ""), 28780);
+    assert.equal(parseIdrAmount("28780 IDR", "IDR"), 28780);
     assert.equal(parseIdrAmount("28780.00 IDR", "IDR"), 28780);
     assert.equal(parseIdrAmount("Rp28.780", "IDR"), 28780);
     assert.equal(parseIdrAmount("28780", "IDR"), 28780);
@@ -109,8 +111,53 @@ describe("meta catalog price", () => {
 
   it("rejects another currency and a fractional rupiah amount", () => {
     assert.equal(parseIdrAmount("9.99 USD", "USD"), null);
+    assert.equal(parseIdrAmount("IDR28,780", "USD"), null);
+    assert.equal(parseIdrAmount("28780 IDR", "USD"), null);
+    assert.equal(parseIdrAmount("USD28,780", "IDR"), null);
     assert.equal(parseIdrAmount("28780.50 IDR", "IDR"), null);
+    assert.equal(parseIdrAmount("IDR28,780.50", "IDR"), null);
+    assert.equal(parseIdrAmount("-28780 IDR", "IDR"), null);
+    assert.equal(parseIdrAmount("1000000001", "IDR"), null);
     assert.equal(parseIdrAmount("", "IDR"), null);
+  });
+});
+
+const LIVE_QA_GRAPH_PRODUCT = {
+  id: "28730199909979244",
+  retailer_id: "ATLASNOW-QA-SHAPE-001",
+  name: "BabyToys Puzzle Kayu Montessori - Shape Sorter",
+  price: "IDR28,780",
+  currency: "IDR",
+  availability: "in stock",
+  review_status: "",
+};
+
+describe("live QA catalog price", () => {
+  it("parses the prefixed Meta price and keeps an unknown review", async () => {
+    assert.equal(JSON.parse(JSON.stringify(LIVE_QA_GRAPH_PRODUCT)).id, "28730199909979244");
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      assert.equal(init?.method, undefined);
+      assert.equal(url.pathname, "/v25.0/1649727826536046/products");
+      assert.equal(url.pathname.includes("items_batch"), false);
+      return Response.json({ data: [LIVE_QA_GRAPH_PRODUCT] });
+    }) as typeof fetch;
+    const listed = await listCatalogItems("1649727826536046", "token", fetchImpl);
+    const row = listed.items[0];
+    assert.equal(row?.id, "28730199909979244");
+    assert.equal(typeof row?.id, "string");
+    const item = previewCatalogItem(row, [], "1649727826536046");
+    assert.equal(item.priceLabel, "IDR28,780");
+    assert.equal(item.unitPriceIdr, 28780);
+    assert.equal(item.currency, "IDR");
+    assert.equal(item.mapping, "META_ONLY");
+    assert.deepEqual(item.missing, []);
+    assert.equal(item.importable, true);
+    assert.equal(item.metaProductId, "28730199909979244");
+    assert.equal(typeof item.metaProductId, "string");
+    assert.equal(item.retailerId, "ATLASNOW-QA-SHAPE-001");
+    assert.equal(item.availability, "in stock");
+    assert.equal(item.mappedReview, "UNKNOWN");
   });
 });
 
