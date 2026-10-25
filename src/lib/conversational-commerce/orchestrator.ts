@@ -1,10 +1,17 @@
 import { authorize, type Actor } from "./auth";
-import { applyPaymentNotice, emptyLedger, type PaymentLedger, type PaymentNotice } from "./payment";
+import {
+  applyPaymentNotice,
+  emptyLedger,
+  verifyPaymentNotice,
+  type PaymentLedger,
+  type PaymentProof,
+  type RawPaymentNotice,
+} from "./payment";
 import { phoneCorrelation, refFromMaterial, stableHash } from "./ids";
-import { evaluateEligibility, type MerchantEligibility, type OfferingCategory } from "./policy";
+import { evaluateEligibility, type ApprovalEvidence, type MerchantEligibility, type OfferingCategory } from "./policy";
 import type { ProviderErrorCode } from "./provider";
 import type { ProviderRegistry } from "./registry";
-import type { Booking, CommerceTransaction, CustomerExperience, PaymentState, TransactionEvent } from "./types";
+import type { Booking, BookingState, CommerceTransaction, CustomerExperience, PaymentState, TransactionEvent } from "./types";
 
 export type ReserveCommand = {
   actor: Actor;
@@ -17,14 +24,22 @@ export type ReserveCommand = {
   experience: CustomerExperience;
   category: OfferingCategory;
   merchantEligibility: MerchantEligibility;
-  approvalEvidenceRef: string | null;
+  approvalEvidence: ApprovalEvidence;
   merchantConfirmed: boolean;
 };
 
 export type ReserveResult = {
   ok: boolean;
   replay: boolean;
-  code: "OK" | ProviderErrorCode | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "NOT_FOUND";
+  code:
+    | "OK"
+    | ProviderErrorCode
+    | "CROSS_TENANT"
+    | "LOCATION_FORBIDDEN"
+    | "FORBIDDEN"
+    | "NOT_FOUND"
+    | "RECONCILIATION_REQUIRED"
+    | "TERMINAL";
   retryable: boolean;
   resolutionRequired: boolean;
   message: string;
@@ -34,12 +49,40 @@ export type ReserveResult = {
   handoffReference: string | null;
 };
 
+type InflightReservation = {
+  hash: string;
+  transactionRef: string;
+  result: ReserveResult;
+  /** Set only after an authoritative lookup reported no reservation. */
+  absenceVerified: boolean;
+  hold: boolean;
+  request: {
+    tenantId: string;
+    locationId: string;
+    providerId: string;
+    offeringId: string;
+    startsAt: string;
+    idempotencyKey: string;
+    merchantConfirmed: boolean;
+  };
+};
+
+export type StoredPaymentAttempt = {
+  tenantId: string;
+  transactionRef: string;
+  attemptRef: string;
+  providerId: string;
+  expectedAmountIdr: number;
+  currency: "IDR";
+};
+
 export type OrchestratorState = {
   idempotency: Map<string, { hash: string; result: ReserveResult }>;
-  inflight: Map<string, { hash: string; transactionRef: string; result: ReserveResult }>;
+  inflight: Map<string, InflightReservation>;
   bookings: Map<string, Booking>;
   transactions: Map<string, CommerceTransaction>;
   ledgers: Map<string, PaymentLedger>;
+  paymentAttempts: Map<string, StoredPaymentAttempt>;
   events: TransactionEvent[];
 };
 
@@ -50,6 +93,7 @@ export function createOrchestratorState(): OrchestratorState {
     bookings: new Map(),
     transactions: new Map(),
     ledgers: new Map(),
+    paymentAttempts: new Map(),
     events: [],
   };
 }
@@ -60,7 +104,7 @@ export async function reserve(
 ): Promise<ReserveResult> {
   const scope = { tenantId: command.tenantId, locationId: command.locationId };
   const allowed = authorize(command.actor, scope, "write");
-  if (!allowed.ok) return failure(allowed.code, allowed.code === "CROSS_TENANT" ? "Tenant mismatch." : "Location is outside this actor.", false);
+  if (!allowed.ok) return failure(allowed.code, authMessage(allowed.code), false);
 
   if (phoneCorrelation(command.idempotencyKey) || phoneCorrelation(command.offeringId)) {
     return failure("NOT_AUTHORITATIVE", "A phone number cannot correlate a booking or a payment.", false);
@@ -75,6 +119,8 @@ export async function reserve(
     experience: command.experience,
     category: command.category,
     merchantConfirmed: command.merchantConfirmed,
+    approvalStatus: command.approvalEvidence?.status ?? "",
+    approvalReference: command.approvalEvidence?.reference ?? "",
   });
   const storageKey = `${command.tenantId}:${command.idempotencyKey}`;
   const stored = deps.state.idempotency.get(storageKey);
@@ -85,14 +131,15 @@ export async function reserve(
   const pending = deps.state.inflight.get(storageKey);
   if (pending) {
     if (pending.hash !== hash) return failure("IDEMPOTENCY_CONFLICT", "This idempotency key is waiting on a different request.", false);
-    return { ...clone(pending.result), replay: true };
+    if (!pending.absenceVerified) return { ...clone(pending.result), replay: true };
+    pending.absenceVerified = false;
   }
 
   const policy = evaluateEligibility({
     merchantEligibility: command.merchantEligibility,
     offeringCategory: command.category,
     experience: command.experience,
-    approvalEvidenceRef: command.approvalEvidenceRef,
+    approvalEvidence: command.approvalEvidence,
   });
   if (policy.transactional !== "ALLOW") {
     const result = failure("POLICY_BLOCKED", policy.reasons[0] ?? "Transactional commerce is blocked.", false);
@@ -133,8 +180,15 @@ export async function reserve(
     result.resolutionRequired = true;
     result.transaction = openTransaction(command, transactionRef, "PENDING_RESOLUTION");
     deps.state.transactions.set(transactionRef, result.transaction);
-    deps.state.ledgers.set(transactionRef, emptyLedger());
-    deps.state.inflight.set(storageKey, { hash, transactionRef, result: clone(result) });
+    if (!deps.state.ledgers.has(transactionRef)) deps.state.ledgers.set(transactionRef, emptyLedger());
+    deps.state.inflight.set(storageKey, {
+      hash,
+      transactionRef,
+      result: clone(result),
+      absenceVerified: false,
+      hold,
+      request: requestSnapshot(command),
+    });
     pushEvent(deps.state, command.tenantId, transactionRef, "provider.timeout", deps.now, { providerId: command.providerId });
     return clone(result);
   }
@@ -161,11 +215,11 @@ export async function reserve(
   }
 
   const booking = bookingFrom(command, transactionRef, resolved.mode, response.data);
-  const transaction = openTransaction(command, transactionRef, booking.state === "CONFIRMED" ? "COMMITTED" : "IN_PROGRESS");
+  const transaction = settleTransaction(deps.state, command, transactionRef, booking.state);
   transaction.bookingRef = booking.bookingRef;
   deps.state.bookings.set(booking.bookingRef, booking);
   deps.state.transactions.set(transactionRef, transaction);
-  deps.state.ledgers.set(transactionRef, emptyLedger());
+  if (!deps.state.ledgers.has(transactionRef)) deps.state.ledgers.set(transactionRef, emptyLedger());
   const result: ReserveResult = {
     ok: true,
     replay: response.replay,
@@ -183,19 +237,101 @@ export async function reserve(
   return clone(result);
 }
 
+/**
+ * A person acknowledging a timeout does not authorize another booking create.
+ * The inflight record stays in PENDING_RESOLUTION until reconcileTimedOut.
+ */
 export function releaseTimedOut(
   state: OrchestratorState,
   actor: Actor,
   idempotencyKey: string,
-): { ok: true } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" } {
+): { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "RECONCILIATION_REQUIRED" } {
   const pending = state.inflight.get(`${actor.tenantId}:${idempotencyKey}`);
   if (!pending) return { ok: false, code: "NOT_FOUND" };
   const transaction = state.transactions.get(pending.transactionRef);
   if (!transaction || transaction.tenantId !== actor.tenantId) return { ok: false, code: "NOT_FOUND" };
   const allowed = authorize(actor, transaction, "write");
   if (!allowed.ok) return allowed;
-  state.inflight.delete(`${actor.tenantId}:${idempotencyKey}`);
-  return { ok: true };
+  return { ok: false, code: "RECONCILIATION_REQUIRED" };
+}
+
+/**
+ * Resolves a timed-out reserve without treating the timeout as proof of absence.
+ * Lookup, a terminal provider state, or a documented idempotency guarantee is required.
+ * This function does not create a second reservation when the first one already exists.
+ */
+export async function reconcileTimedOut(
+  command: { actor: Actor; tenantId: string; locationId: string; providerId: string; idempotencyKey: string },
+  deps: { registry: ProviderRegistry; state: OrchestratorState; now: string },
+): Promise<ReserveResult> {
+  const storageKey = `${command.tenantId}:${command.idempotencyKey}`;
+  const pending = deps.state.inflight.get(storageKey);
+  if (!pending) return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
+  const transaction = deps.state.transactions.get(pending.transactionRef);
+  if (!transaction) return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
+  const allowed = authorize(command.actor, transaction, "write");
+  if (!allowed.ok) return failure(allowed.code, authMessage(allowed.code), false);
+  if (transaction.state !== "PENDING_RESOLUTION") {
+    return { ...clone(pending.result), replay: true };
+  }
+  const resolved = deps.registry.resolve(
+    { tenantId: command.tenantId, locationId: command.locationId },
+    command.providerId,
+  );
+  if (!resolved.ok) return failure("NOT_FOUND", "No provider connection is registered for this tenant.", true);
+  const capabilities = resolved.provider.getCapabilities();
+  const sameRequest = {
+    ...pending.request,
+    requestHash: pending.hash,
+  };
+  if (capabilities.guaranteesIdempotency) {
+    const response = pending.hold
+      ? await resolved.provider.holdReservation(sameRequest)
+      : await resolved.provider.createBooking(sameRequest);
+    if (!response.ok) {
+      const again = clone(pending.result);
+      again.resolutionRequired = true;
+      again.message = "The provider still has not returned an authoritative result. No second booking was authorized.";
+      return again;
+    }
+    return adoptResolved(deps.state, pending, resolved.mode, response.data, deps.now);
+  }
+  const lookup = await resolved.provider.findByIdempotencyKey({
+    tenantId: command.tenantId,
+    locationId: command.locationId,
+    idempotencyKey: command.idempotencyKey,
+  });
+  if (!lookup.ok) {
+    const again = clone(pending.result);
+    again.resolutionRequired = true;
+    again.code = lookup.code === "UNSUPPORTED" ? "RECONCILIATION_REQUIRED" : lookup.code;
+    again.message = "Provider lookup did not produce an authoritative result. The create was not retried.";
+    return again;
+  }
+  if (lookup.data.found) {
+    const terminal = terminalFailure(lookup.data.found.state);
+    if (terminal) {
+      transaction.state = "FAILED";
+      const result = failure("TERMINAL", "The provider reported a terminal reservation. The idempotency key stays closed.", false);
+      result.transaction = { ...transaction };
+      remember(deps.state, storageKey, pending.hash, result);
+      deps.state.inflight.delete(storageKey);
+      return clone(result);
+    }
+    return adoptResolved(deps.state, pending, resolved.mode, lookup.data.found, deps.now);
+  }
+  if (lookup.data.authoritative) {
+    pending.absenceVerified = true;
+    const again = clone(pending.result);
+    again.resolutionRequired = true;
+    again.message = "Authoritative lookup found no reservation. One retry may use the same idempotency key.";
+    return again;
+  }
+  const blocked = clone(pending.result);
+  blocked.code = "RECONCILIATION_REQUIRED";
+  blocked.resolutionRequired = true;
+  blocked.message = "Absence is not authoritative. No retry was authorized.";
+  return blocked;
 }
 
 export async function cancelReservation(
@@ -235,25 +371,83 @@ export async function cancelReservation(
   };
 }
 
-export function recordPayment(
+export function openPaymentAttempt(
   state: OrchestratorState,
   actor: Actor,
-  transactionRef: string,
-  notice: PaymentNotice,
-  now: string,
-):
-  | { ok: true; effect: string; ledger: PaymentLedger; transaction: CommerceTransaction; booking: Booking | null }
-  | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" } {
-  const transaction = state.transactions.get(transactionRef);
+  input: { transactionRef: string; attemptRef: string; providerId: string; expectedAmountIdr: number },
+): { ok: true } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "MISMATCH" } {
+  const transaction = state.transactions.get(input.transactionRef);
   if (!transaction) return { ok: false, code: "NOT_FOUND" };
   const allowed = authorize(actor, transaction, "write");
   if (!allowed.ok) return { ok: false, code: allowed.code };
-  const current = state.ledgers.get(transactionRef) ?? emptyLedger();
-  const applied = applyPaymentNotice(current, notice);
-  state.ledgers.set(transactionRef, applied.ledger);
+  if (!Number.isSafeInteger(input.expectedAmountIdr) || input.expectedAmountIdr < 1) return { ok: false, code: "MISMATCH" };
+  state.paymentAttempts.set(`${input.transactionRef}:${input.attemptRef}`, {
+    tenantId: transaction.tenantId,
+    transactionRef: transaction.transactionRef,
+    attemptRef: input.attemptRef,
+    providerId: input.providerId,
+    expectedAmountIdr: input.expectedAmountIdr,
+    currency: "IDR",
+  });
+  return { ok: true };
+}
+
+export function recordPayment(
+  state: OrchestratorState,
+  actor: Actor,
+  input: {
+    transactionRef: string;
+    notice: RawPaymentNotice;
+    proof: PaymentProof | null;
+    connection: { tenantId: string; providerId: string; secret: string };
+  },
+  now: string,
+):
+  | { ok: true; effect: string; ledger: PaymentLedger; transaction: CommerceTransaction; booking: Booking | null }
+  | {
+      ok: false;
+      code:
+        | "NOT_FOUND"
+        | "CROSS_TENANT"
+        | "LOCATION_FORBIDDEN"
+        | "FORBIDDEN"
+        | "NO_ATTEMPT"
+        | "UNVERIFIED"
+        | "MISMATCH"
+        | "REJECTED_EVIDENCE";
+    } {
+  const transaction = state.transactions.get(input.transactionRef);
+  if (!transaction) return { ok: false, code: "NOT_FOUND" };
+  const allowed = authorize(actor, transaction, "write");
+  if (!allowed.ok) return { ok: false, code: allowed.code };
+  const attempt = state.paymentAttempts.get(`${input.transactionRef}:${input.notice.attemptRef}`);
+  if (!attempt || attempt.transactionRef !== transaction.transactionRef) return { ok: false, code: "NO_ATTEMPT" };
+  if (input.connection.tenantId !== transaction.tenantId || input.connection.providerId !== attempt.providerId) {
+    return { ok: false, code: "MISMATCH" };
+  }
+  const verified = verifyPaymentNotice({
+    notice: input.notice,
+    proof: input.proof,
+    secret: input.connection.secret,
+    expectation: {
+      tenantId: attempt.tenantId,
+      providerId: attempt.providerId,
+      attemptRef: attempt.attemptRef,
+      transactionRef: attempt.transactionRef,
+      currency: "IDR",
+      amountIdr: attempt.expectedAmountIdr,
+    },
+  });
+  if (!verified.ok) return { ok: false, code: verified.code };
+  const current = state.ledgers.get(input.transactionRef) ?? emptyLedger();
+  if (current.providerReference && current.providerReference !== verified.event.providerReference) {
+    return { ok: false, code: "MISMATCH" };
+  }
+  const applied = applyPaymentNotice(current, verified.event);
+  state.ledgers.set(input.transactionRef, applied.ledger);
   transaction.paymentStatus = applied.ledger.status;
   transaction.verifiedPaid = applied.ledger.verifiedPaid;
-  pushEvent(state, transaction.tenantId, transactionRef, notice.type, now, {
+  pushEvent(state, transaction.tenantId, input.transactionRef, input.notice.type, now, {
     effect: applied.effect,
     paymentStatus: applied.ledger.status,
   });
@@ -265,7 +459,7 @@ export function readBooking(
   state: OrchestratorState,
   actor: Actor,
   bookingRef: string,
-): { ok: true; booking: Booking } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" } {
+): { ok: true; booking: Booking } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" } {
   const booking = state.bookings.get(bookingRef);
   if (!booking) return { ok: false, code: "NOT_FOUND" };
   const allowed = authorize(actor, booking, "read");
@@ -292,6 +486,93 @@ function bookingFrom(
     referenceAuthoritative: data.referenceAuthoritative,
     idempotencyKey: command.idempotencyKey,
   };
+}
+
+function requestSnapshot(command: ReserveCommand): InflightReservation["request"] {
+  return {
+    tenantId: command.tenantId,
+    locationId: command.locationId,
+    providerId: command.providerId,
+    offeringId: command.offeringId,
+    startsAt: command.startsAt,
+    idempotencyKey: command.idempotencyKey,
+    merchantConfirmed: command.merchantConfirmed,
+  };
+}
+
+function settleTransaction(
+  state: OrchestratorState,
+  command: ReserveCommand,
+  transactionRef: string,
+  bookingState: BookingState,
+): CommerceTransaction {
+  const nextState = bookingState === "CONFIRMED" || bookingState === "COMPLETED" ? "COMMITTED" : "IN_PROGRESS";
+  const existing = state.transactions.get(transactionRef);
+  if (existing && existing.state === "PENDING_RESOLUTION") {
+    existing.state = nextState;
+    return existing;
+  }
+  return openTransaction(command, transactionRef, nextState);
+}
+
+function adoptResolved(
+  state: OrchestratorState,
+  pending: InflightReservation,
+  mode: Booking["providerMode"],
+  data: { bookingRef: string; state: BookingState; slotKey: string; providerReference: string | null; referenceAuthoritative: boolean },
+  now: string,
+): ReserveResult {
+  const external = mode === "EXTERNAL_API" || mode === "EXTERNAL_CHECKOUT";
+  if ((data.state === "CONFIRMED" || data.state === "HELD") && external && !data.providerReference) {
+    const result = failure("MISSING_REFERENCE", "The external provider did not return a booking reference.", false);
+    result.resolutionRequired = true;
+    result.transaction = state.transactions.get(pending.transactionRef) ?? null;
+    return result;
+  }
+  const transaction = state.transactions.get(pending.transactionRef);
+  if (!transaction) return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
+  const booking: Booking = {
+    bookingRef: data.bookingRef,
+    tenantId: pending.request.tenantId,
+    locationId: pending.request.locationId,
+    transactionRef: pending.transactionRef,
+    providerId: pending.request.providerId,
+    providerMode: mode,
+    slotKey: data.slotKey,
+    state: data.state,
+    providerReference: data.providerReference,
+    referenceAuthoritative: data.referenceAuthoritative,
+    idempotencyKey: pending.request.idempotencyKey,
+  };
+  transaction.bookingRef = booking.bookingRef;
+  transaction.state = data.state === "CONFIRMED" || data.state === "COMPLETED" ? "COMMITTED" : "IN_PROGRESS";
+  state.bookings.set(booking.bookingRef, booking);
+  const result: ReserveResult = {
+    ok: true,
+    replay: false,
+    code: "OK",
+    retryable: false,
+    resolutionRequired: false,
+    message: "Recovered the original provider reservation. No second booking was created.",
+    transaction,
+    booking,
+    handoffUrl: null,
+    handoffReference: null,
+  };
+  remember(state, `${pending.request.tenantId}:${pending.request.idempotencyKey}`, pending.hash, result);
+  state.inflight.delete(`${pending.request.tenantId}:${pending.request.idempotencyKey}`);
+  pushEvent(state, pending.request.tenantId, pending.transactionRef, "booking.recovered", now, { state: booking.state });
+  return clone(result);
+}
+
+function terminalFailure(state: BookingState): boolean {
+  return state === "CANCELLED" || state === "REJECTED" || state === "EXPIRED" || state === "NO_SHOW";
+}
+
+function authMessage(code: "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN"): string {
+  if (code === "CROSS_TENANT") return "Tenant mismatch.";
+  if (code === "FORBIDDEN") return "This action is not allowed.";
+  return "Location is outside this actor.";
 }
 
 function openTransaction(

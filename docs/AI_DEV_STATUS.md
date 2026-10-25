@@ -2,27 +2,32 @@
 
 Updated 2026-10-25. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
 
-## Conversational commerce M0 and M1A
+## Conversational commerce M0, M1A, and M1A.1
 
-In-memory orchestrator foundation on `feature/conversational-commerce-m1a`. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch.
+In-memory orchestrator foundation on `feature/conversational-commerce-m1a`. M1A.1 hardens contracts. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
 
 Working in unit tests only:
 
 - Booking and transaction transition checks, including a rejected hold when the provider cannot reserve
 - Tenant and location denials that do not return the other merchant's booking
+- Read and write are separate actions. This is not production RBAC
 - Four mock providers: native hold, external API, external checkout handoff, manual inquiry
-- Slot conflict, idempotent replay, timeout without a second create, and a missing external reference
-- Payment duplicates, out-of-order notices, partial and full refunds, and unverified evidence
+- Slot conflict, idempotent replay, and a missing external reference
+- A timeout stays `PENDING_RESOLUTION`. Human release does not authorize a second booking. Lookup adopts a reservation the provider committed before timing out. A non-authoritative empty lookup does not retry
+- Payment duplicates, out-of-order notices, and partial and full refunds
+- An evidence label, a bad signature, or a mismatched tenant, provider, attempt, amount, currency, or provider reference does not mark a transaction paid
 - Confirmed booking with unpaid payment, and paid payment with an unconfirmed booking
-- Unknown Meta eligibility fails closed. A Flow does not confirm a booking
+- Unknown Meta eligibility fails closed. An unverified approval reference fails closed. A Flow submission does not confirm a booking. A catalog order does not verify payment. Illegal experience and event pairs are rejected
+- Webhook replay uses the authenticated delivery time. An old business event with a fresh delivery is accepted. The tenant comes from the connection, not from JSON
+- A native adapter cannot be registered as an external API, or the reverse
 - Missing attribution ids are not invented. Aggregated Search or Maps counts are not a person
 - Existing catalog order constants still map. This module does not import Prisma or call Graph
 
-Not built: tables, webhooks, Flows, gateway calls, native inventory, UI, feature flags.
+Not built: tables, webhooks, Flows, gateway calls, native inventory, UI, feature flags, durable webhook dedupe, production RBAC, a live provider lookup.
 
 Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md` and the five companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
 
-Do not merge this into PR #1. Do not start persistence until a separate review.
+Do not merge this into PR #1. Do not merge PR #2. Do not start M1B until a separate review.
 
 ## Active slice
 

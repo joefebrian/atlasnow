@@ -16,6 +16,7 @@ import {
   type ProviderOperation,
   type ProviderResult,
   type QuoteQuery,
+  type IdempotencyLookupQuery,
 } from "./provider";
 import type { BookingProviderMode, BookingState } from "./types";
 
@@ -28,6 +29,20 @@ export type MockOptions = {
   unavailableOn?: readonly ProviderOperation[];
   /** External provider returned no booking id. Native mocks still issue their own id. */
   omitExternalReference?: boolean;
+  /**
+   * The provider commits a reservation and then the response times out.
+   * A second create with the same key adds another reservation unless
+   * guaranteesIdempotency is true.
+   */
+  ambiguousTimeout?: boolean;
+  /** Documented provider promise. Distinct from merely accepting a key. */
+  guaranteesIdempotency?: boolean;
+  /**
+   * Overrides findByIdempotencyKey.
+   * `non-authoritative-empty` reports no row and does not prove absence.
+   * `unsupported` removes the lookup operation.
+   */
+  lookup?: "default" | "non-authoritative-empty" | "unsupported";
 };
 
 type Stored = ProviderBooking & {
@@ -40,6 +55,8 @@ type Stored = ProviderBooking & {
 export type MockProvider = BookingProvider & {
   calls: ProviderOperation[];
   bookingCount: () => number;
+  /** Test hook. Changes a stored reservation so lookup can return a terminal state. */
+  setState: (idempotencyKey: string, state: BookingState) => void;
 };
 
 export function createMockProvider(options: MockOptions): MockProvider {
@@ -105,6 +122,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
 
   async function create(input: CreateBookingCommand, state: BookingState, authoritative: boolean): Promise<ProviderResult<ProviderBooking>> {
     const operation: ProviderOperation = state === "HELD" ? "holdReservation" : "createBooking";
+    if (options.ambiguousTimeout) return ambiguousCommit(input, state, authoritative, operation);
     const blocked = gate(operation, input.tenantId, input.idempotencyKey, input.requestHash);
     if (blocked) return blocked;
     const replay = replayOrConflict(input.idempotencyKey, input.requestHash);
@@ -134,6 +152,11 @@ export function createMockProvider(options: MockOptions): MockProvider {
   return {
     calls,
     bookingCount: () => bookings.size,
+    setState(idempotencyKey, state) {
+      const bookingRef = byKey.get(idempotencyKey);
+      const row = bookingRef ? bookings.get(bookingRef) : undefined;
+      if (row) row.state = state;
+    },
     getCapabilities: () => capabilities,
     async getAvailability(input: AvailabilityQuery) {
       const blocked = gate("getAvailability", input.tenantId);
@@ -229,7 +252,67 @@ export function createMockProvider(options: MockOptions): MockProvider {
       calls.push("getPaymentStatus");
       return unsupported("getPaymentStatus");
     },
+    async findByIdempotencyKey(input: IdempotencyLookupQuery) {
+      if (options.lookup === "non-authoritative-empty") {
+        calls.push("findByIdempotencyKey");
+        const denied = failTenant(input.tenantId);
+        if (denied) return denied;
+        return { ok: true, replay: false, data: { found: null, authoritative: false } };
+      }
+      const blocked = gate("findByIdempotencyKey", input.tenantId);
+      if (blocked) return blocked;
+      const bookingRef = byKey.get(input.idempotencyKey);
+      const row = bookingRef ? bookings.get(bookingRef) : undefined;
+      if (!row || row.tenantId !== input.tenantId) {
+        return { ok: true, replay: false, data: { found: null, authoritative: true } };
+      }
+      return { ok: true, replay: false, data: { found: toPublic(row), authoritative: true } };
+    },
   };
+
+  function ambiguousCommit(
+    input: CreateBookingCommand,
+    state: BookingState,
+    authoritative: boolean,
+    operation: ProviderOperation,
+  ): ProviderResult<ProviderBooking> {
+    calls.push(operation);
+    const denied = failTenant(input.tenantId);
+    if (denied) return denied;
+    if (capabilities.operations[operation] !== "supported") return unsupported(operation);
+    const existingRef = byKey.get(input.idempotencyKey);
+    const existing = existingRef ? bookings.get(existingRef) : undefined;
+    if (existing && options.guaranteesIdempotency) {
+      return { ok: true, data: toPublic(existing), replay: true };
+    }
+    if (existing) {
+      const bookingRef = refFromMaterial("CBK", `${input.tenantId}:${input.idempotencyKey}:dup:${bookings.size}`);
+      bookings.set(bookingRef, {
+        ...existing,
+        bookingRef,
+        idempotencyKey: `${input.idempotencyKey}#${bookings.size}`,
+      });
+      return providerError("TIMEOUT", "Timed out. A second reservation was committed because this provider does not guarantee idempotency.");
+    }
+    const slotKey = slotOf(input);
+    const bookingRef = refFromMaterial("CBK", `${input.tenantId}:${input.idempotencyKey}:${slotKey}`);
+    const issued = options.mode === "MANUAL" ? null : refFromMaterial("PRV", `${options.providerId}:${bookingRef}`);
+    const row: Stored = {
+      bookingRef,
+      state,
+      slotKey,
+      providerReference: issued,
+      referenceAuthoritative: authoritative && Boolean(issued),
+      handoffUrl: null,
+      tenantId: input.tenantId,
+      locationId: input.locationId,
+      idempotencyKey: input.idempotencyKey,
+      requestHash: input.requestHash,
+    };
+    bookings.set(bookingRef, row);
+    byKey.set(input.idempotencyKey, bookingRef);
+    return providerError("TIMEOUT", "Timed out after the provider committed a reservation.");
+  }
 
   async function lookup(input: BookingLookup, operation: ProviderOperation): Promise<ProviderResult<ProviderBooking>> {
     const blocked = gate(operation, input.tenantId);
@@ -262,15 +345,16 @@ function buildCapabilities(options: MockOptions): ProviderCapabilities {
   const operations = unsupportedMap();
   operations.getCapabilities = "supported";
   if (options.mode === "NATIVE") {
-    turnOn(operations, ["getAvailability", "getQuote", "createBooking", "holdReservation", "confirmBooking", "getBooking", "cancelBooking", "getBookingStatus"]);
+    turnOn(operations, ["getAvailability", "getQuote", "createBooking", "holdReservation", "confirmBooking", "getBooking", "cancelBooking", "getBookingStatus", "findByIdempotencyKey"]);
   } else if (options.mode === "EXTERNAL_API") {
-    turnOn(operations, ["getAvailability", "getQuote", "createBooking", "confirmBooking", "getBooking", "cancelBooking", "getBookingStatus"]);
+    turnOn(operations, ["getAvailability", "getQuote", "createBooking", "confirmBooking", "getBooking", "cancelBooking", "getBookingStatus", "findByIdempotencyKey"]);
     if (supportsHold) operations.holdReservation = "supported";
   } else if (options.mode === "EXTERNAL_CHECKOUT") {
     turnOn(operations, ["getAvailability", "getBookingStatus"]);
   } else {
-    turnOn(operations, ["createBooking", "confirmBooking", "getBooking", "cancelBooking", "getBookingStatus"]);
+    turnOn(operations, ["createBooking", "confirmBooking", "getBooking", "cancelBooking", "getBookingStatus", "findByIdempotencyKey"]);
   }
+  if (options.lookup === "unsupported") operations.findByIdempotencyKey = "unsupported";
   return {
     providerId: options.providerId,
     mode: options.mode,
@@ -279,6 +363,7 @@ function buildCapabilities(options: MockOptions): ProviderCapabilities {
     authoritativeForCapacity: options.mode === "NATIVE",
     canVerifyPayment: false,
     acceptsIdempotencyKey: true,
+    guaranteesIdempotency: options.guaranteesIdempotency === true,
   };
 }
 
@@ -294,6 +379,7 @@ function unsupportedMap(): ProviderCapabilities["operations"] {
     cancelBooking: "unsupported",
     getBookingStatus: "unsupported",
     getPaymentStatus: "unsupported",
+    findByIdempotencyKey: "unsupported",
   };
 }
 

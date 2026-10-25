@@ -71,7 +71,7 @@ Production history is 39 finished migrations. `CommerceOrder` is not among them.
 
 `FAILED` and `CLOSED` are terminal.
 
-`PENDING_RESOLUTION` means the provider timed out. The same idempotency key returns that result and does not call the provider again until `releaseTimedOut`. Release does not invent a booking.
+`PENDING_RESOLUTION` means the provider outcome is unknown. The same idempotency key returns that result and does not call the provider again. `releaseTimedOut` does not clear the key and does not authorize another booking. `reconcileTimedOut` adopts a found reservation, closes a terminal provider state, or allows one retry only after an authoritative lookup reports no reservation or the adapter's `guaranteesIdempotency` is true.
 
 A successful hold stores `IN_PROGRESS`. A provider confirmation stores `COMMITTED`. Cancel moves the transaction to `CLOSED` and does not change the payment ledger.
 
@@ -99,16 +99,20 @@ There is no HTTP route.
 
 | Function | Effect |
 |---|---|
-| `reserve` | Policy, tenant check, idempotency, then hold or create |
-| `releaseTimedOut` | Clears one tenant's inflight key so a later reserve may call again |
+| `reserve` | Action `write`, policy, tenant check, idempotency, then hold or create |
+| `releaseTimedOut` | Acknowledges a timeout. Returns `RECONCILIATION_REQUIRED`. Does not delete the inflight key |
+| `reconcileTimedOut` | Lookup, terminal close, or one guaranteed retry. Does not create a second reservation |
 | `cancelReservation` | Provider cancel. Payment ledger unchanged |
-| `recordPayment` | Applies one payment notice. Booking state unchanged |
-| `readBooking` | Tenant and location check. Cross-tenant returns no booking body |
-| `normalizeCustomerExperience` | Intent only. `confirmed` is false |
-| `assessWebhook` | HMAC, tenant, provider, skew, duplicate, ordering flag. No socket |
+| `openPaymentAttempt` | Stores the expected amount and provider for one attempt |
+| `recordPayment` | Verifies a raw notice against that attempt, then applies the internal event. Booking state unchanged |
+| `readBooking` | Action `read`. Cross-tenant returns no booking body. Write permission does not imply read |
+| `normalizeCustomerExperience` | Legal experience and event pairs only. `confirmed` is false. Payment is not verified |
+| `assessWebhook` | Connection tenant, HMAC over delivery time, replay on delivery time, dedupe key, ordering flag. No socket |
 | `planBookingEvent` | Next booking state, or a refusal. Reschedule is not applied |
 
-Idempotency key plus a hash of tenant, location, provider, offering, start, experience, category, and merchant-confirmed flag:
+Authorization is `authorize(actor, scope, action)` with `read` or `write`. Omitted or null permissions allow every action in the tenant. A list allows only those actions. This is not production RBAC.
+
+Idempotency key plus a hash of tenant, location, provider, offering, start, experience, category, merchant-confirmed flag, approval status, and approval reference:
 
 - Same key and same hash returns the stored result and does not call the provider again
 - Same key and a different hash returns `IDEMPOTENCY_CONFLICT`
@@ -133,15 +137,17 @@ The current Commerce page, catalog import, and order-capture empty state are unc
 |---|---|---|
 | Cross-tenant read or write | Actor tenant must match. Registry is tenant-scoped. Denial omits the other payload | Persist the check next to every future query |
 | Location leak inside a tenant | Actor location list is enforced | HQ-wide null list is intentional for brand admin |
-| Unsigned or mismatched webhook | HMAC over `timestamp.body`. Empty secret fails closed | No route is mounted. Secret storage is not built |
-| Replay | Event time must be within five minutes of the supplied clock. Seen event ids are duplicates | Clock source and nonce store are not durable |
+| Unsigned or mismatched webhook | HMAC over `deliveredAt.body`. Tenant comes from the connection, not JSON. Empty secret fails closed | No route is mounted. Secret storage is not built |
+| Replay | Delivery time must be within five minutes of the supplied clock. Business `occurredAt` may be older. Dedupe key is `providerId:eventId` | The seen-id set is in memory. A durable store is not built |
 | Out-of-order events | Payment regress is ignored. Early refunds queue. Sequence numbers are flagged | Booking reschedule is recognized and not applied |
 | Idempotency swap | Hash covers the business payload. A second payload with the same key conflicts | Key storage is in memory |
 | Phone as a join key | Rejected before the provider is called. Phone is not a column on these types | A future schema review must keep it that way |
-| Fake paid | Redirect, WhatsApp text, screenshot, and customer confirmation cannot verify payment | A live gateway verifier is not built |
-| Policy bypass through Flows | Restricted categories are denied on Flow even with an evidence string | Evidence is a non-empty reference, not a checked Meta document |
+| Fake paid | Evidence label, redirect, WhatsApp text, screenshot, and customer confirmation cannot verify payment. Amount, currency, tenant, provider, attempt, reference, and transaction must match the stored attempt | A live gateway verifier is not built |
+| Policy bypass through Flows | Restricted categories are denied on Flow. `UNVERIFIED` evidence denies even when the reference string is non-empty | `VERIFIED` is still an input. This module does not fetch a Meta approval |
+| Read used as write | `permissions: ["read"]` cannot reserve. `permissions: ["write"]` cannot read | Production role mapping is not built |
+| Wrong provider registration | Registry rejects a mode or id that disagrees with the adapter | A live adapter can still mis-declare its own capabilities |
 | Double book | Mock conflict on held or confirmed slot. Second call does not create a row | External capacity stays at the merchant. The mock is not that system |
-| Timeout duplicate | Second reserve does not call the provider until release. Timeout does not insert a booking | A real adapter must look up the original request before creating another |
+| Timeout duplicate | Inflight stays until reconciliation. A committed-then-timeout provider is adopted by lookup. Human release does not authorize a second create | A live lookup that returns an authoritative empty result while a booking exists would allow one retry |
 | Invented availability or price | Empty slot list when none were supplied. Quote fails closed without a whole-IDR amount | Native inventory does not exist |
 | Card data | No card field exists | Do not add one |
 | Public generic webhook | No route | Future receiver must be provider-scoped and signed |

@@ -12,6 +12,24 @@ export type OfferingCategory = (typeof OFFERING_CATEGORIES)[number];
 
 export type MerchantEligibility = "UNKNOWN" | "ELIGIBLE" | "INELIGIBLE";
 
+/**
+ * A reference string is not Meta approval.
+ * Only status VERIFIED from META_COMMERCE_POLICY counts, and this milestone
+ * does not contact Meta to produce that status.
+ */
+export type ApprovalEvidence = {
+  source: "META_COMMERCE_POLICY";
+  status: "VERIFIED" | "UNVERIFIED";
+  reference: string;
+} | null;
+
+export function approvalIsVerified(evidence: ApprovalEvidence): boolean {
+  if (!evidence) return false;
+  if (evidence.source !== "META_COMMERCE_POLICY") return false;
+  if (evidence.status !== "VERIFIED") return false;
+  return evidence.reference.trim().length > 0;
+}
+
 export type PolicyDecision = {
   transactional: "ALLOW" | "DENY";
   /** Inquiry capture is not a booking and is not a payment. */
@@ -30,7 +48,7 @@ export function evaluateEligibility(input: {
   merchantEligibility: MerchantEligibility;
   offeringCategory: OfferingCategory;
   experience: CustomerExperience;
-  approvalEvidenceRef: string | null;
+  approvalEvidence: ApprovalEvidence;
 }): PolicyDecision {
   const lead: PolicyDecision = { transactional: "DENY", leadCapture: "ALLOW", reasons: [] };
   const deny = (reason: string): PolicyDecision => ({ ...lead, reasons: [reason] });
@@ -50,8 +68,8 @@ export function evaluateEligibility(input: {
   if (input.experience === "WHATSAPP_FLOW" && FLOW_BLOCKED.has(input.offeringCategory)) {
     return deny("WhatsApp Flow cannot carry a restricted admission, voucher, or gift-card transaction.");
   }
-  if (!input.approvalEvidenceRef?.trim()) {
-    return deny("Approval evidence is missing.");
+  if (!approvalIsVerified(input.approvalEvidence)) {
+    return deny("Approval evidence is not a verified Meta commerce policy record.");
   }
   return { transactional: "ALLOW", leadCapture: "ALLOW", reasons: [] };
 }

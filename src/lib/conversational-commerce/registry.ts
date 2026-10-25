@@ -10,7 +10,7 @@ export type RegisteredProvider = {
 };
 
 export type ProviderRegistry = {
-  register(row: RegisteredProvider): void;
+  register(row: RegisteredProvider): { ok: true } | { ok: false; code: "PROVIDER_MISMATCH" };
   resolve(scope: { tenantId: string; locationId: string | null }, providerId: string):
     | { ok: true; provider: BookingProvider; mode: BookingProviderMode }
     | { ok: false; code: "NOT_FOUND" };
@@ -25,7 +25,12 @@ export function createRegistry(): ProviderRegistry {
   const rows: RegisteredProvider[] = [];
   return {
     register(row) {
+      const capabilities = row.provider.getCapabilities();
+      if (capabilities.providerId !== row.providerId || capabilities.mode !== row.mode) {
+        return { ok: false, code: "PROVIDER_MISMATCH" };
+      }
       rows.push(row);
+      return { ok: true };
     },
     resolve(scope, providerId) {
       const owned = rows.filter((row) => row.tenantId === scope.tenantId && row.providerId === providerId);

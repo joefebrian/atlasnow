@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **stop after M0 and M1A.** Do not start persistence, webhooks, Flows, payments, UI, or deploy from this document.
+Status: **stop after M0, M1A, and M1A.1 contract hardening.** Do not start persistence, webhooks, Flows, payments, UI, or deploy from this document.
 
 ## Stack
 
@@ -41,8 +41,11 @@ Included:
 - Policy checks
 - Attribution classification
 - Tenant and location authorization
-- In-memory reserve, cancel, timeout release, and payment notices
+- In-memory reserve, cancel, timeout reconciliation, and verified payment events
 - Webhook HMAC gate and booking event planner with no route
+- Action-level read and write checks. This is not production RBAC
+
+M1A.1 hardens the M1A contracts. A timeout stays `PENDING_RESOLUTION` until lookup, a terminal provider state, or a documented idempotency guarantee. A human release does not authorize a second booking. Payment requires a signed proof matched to a stored attempt. Experience and event pairs are validated. Webhook replay uses the delivery timestamp. Registry mode must match the adapter. A non-empty approval string is not Meta approval.
 
 Excluded:
 
@@ -66,17 +69,21 @@ Unit file: `src/lib/conversational-commerce/conversational-commerce.test.ts`.
 | 4 | Checkout provider cannot hold or create |
 | 5 | Second hold on the same slot conflicts and does not add a row |
 | 6 | Idempotent replay, hash conflict, phone-shaped key rejected |
-| 7 | External timeout, no second call until release, still no booking |
+| 7 | External timeout stays pending. Human release does not create a second booking. Lookup adopts a committed-then-timeout reservation. A non-authoritative empty lookup does not retry |
 | 8 | Missing external reference does not confirm |
 | 9 | Duplicate paid notice |
 | 10 | Pending after paid does not regress. Refund before paid waits, then applies |
 | 11 | Cancel leaves payment paid. A later refund does not reopen the booking |
 | 12 | Confirmed booking with `NOT_STARTED` payment is level B and not revenue |
 | 13 | Verified payment leaves the booking at `REQUESTED` and is level A |
-| 14 | Unknown eligibility, services, and admission-on-Flow deny |
-| 15 | Catalog order and Flow submission normalize with `confirmed: false` |
+| 14 | Unknown eligibility, services, admission-on-Flow, and an unverified approval reference deny |
+| 15 | Catalog order and Flow submission normalize with `confirmed: false` and do not verify payment. Illegal experience and event pairs are rejected |
 | 16 | Missing ids and aggregated Search or Maps counts do not invent `ctwa_clid` |
 | 17 | Existing order constants, catalog eligibility, and tenant helper still behave. Source scan forbids Prisma and Graph |
+| 18 | Unverified, unsigned, wrong-amount, wrong-tenant, wrong-provider, wrong-attempt, wrong-currency, and wrong-reference payment notices do not mark `PAID` |
+| 19 | Read permission cannot reserve. Write permission cannot read a booking |
+| 20 | Native registered as external API, and the reverse, is `PROVIDER_MISMATCH` and is not resolved |
+| 21 | A delayed business event with a fresh delivery is accepted. A stale delivery is `REPLAY`. A claimed tenant that disagrees with the connection is `TENANT_MISMATCH` |
 
 Also run:
 
@@ -86,7 +93,7 @@ Also run:
 
 No live Graph write, payment charge, or booking API call.
 
-The new test file is not added to `commerce.yml` in this milestone. Earlier pushes that edit that workflow were refused for token scope. Run the file locally until a workflow edit is possible. Do not treat a green catalog workflow as coverage of this module.
+M1A.1 adds `src/lib/conversational-commerce/conversational-commerce.test.ts` to the unit job in `.github/workflows/commerce.yml`. A green run of that workflow is coverage only when the log includes this file. A green catalog-only run does not. If the push of the workflow file is refused, that remains a blocker and this sentence must stay honest.
 
 ## Rollout gates
 

@@ -35,7 +35,29 @@ A verified `payment.paid` can move `NOT_STARTED` directly to `PAID`, matching a 
 
 ## Evidence
 
-Only these kinds can change the ledger:
+A caller-supplied evidence enum is not proof. Three objects stay separate:
+
+| Object | Meaning |
+|---|---|
+| `RawPaymentNotice` | Inbound claim. Includes the evidence label, amount, currency, provider reference, tenant, provider, attempt, and transaction |
+| `PaymentProof` | HMAC-SHA256 over tenant, provider, attempt, transaction, provider reference, currency, amount, event id, and type. Signed with the payment connection secret |
+| `VerifiedPaymentEvent` | Internal event. Only `verifyPaymentNotice` may produce one. `applyPaymentNotice` accepts only this type |
+
+`verifyPaymentNotice` requires a match between the notice, the proof, and a `PaymentExpectation` stored by `openPaymentAttempt`:
+
+- Tenant id
+- Payment provider id on the connection and on the attempt
+- Payment attempt ref
+- Transaction ref
+- Provider transaction reference
+- Currency `IDR`
+- Expected or captured whole-IDR amount
+
+`payment.paid`, `payment.pending`, `payment.failed`, `payment.expired`, `payment.refunded`, and `payment.chargeback` must equal the stored amount. `payment.partially_refunded` must be greater than zero and less than that amount. A mismatch returns `MISMATCH` and does not change the ledger. A missing or bad signature returns `UNVERIFIED`. `REDIRECT`, `WHATSAPP_MESSAGE`, `SCREENSHOT`, and `CUSTOMER_CONFIRMATION` return `REJECTED_EVIDENCE` even when the HMAC is valid.
+
+`recordPayment` refuses when no attempt is stored (`NO_ATTEMPT`), when the connection tenant or provider does not match the attempt (`MISMATCH`), or when a later event names a different provider reference than the ledger. A failed check leaves status at `NOT_STARTED` or at the status already applied.
+
+Only these kinds can be verified at all:
 
 - `VERIFIED_PROVIDER_EVENT`
 - `TRUSTED_MERCHANT_EVENT`
@@ -48,9 +70,9 @@ These cannot:
 - `SCREENSHOT`
 - `CUSTOMER_CONFIRMATION`
 
-A rejected notice does not change status. The same event id is then a duplicate.
+A rejected notice does not change status.
 
-`verifiedPaid` becomes true only after a verified paid notice is applied. It stays true after a later refund so the ledger remembers that money moved. Current revenue uses the status: `PAID` is full level A, `PARTIALLY_REFUNDED` is partial level A, `REFUNDED` and `CHARGEBACK` are not revenue.
+`verifiedPaid` becomes true only after a verified paid event is applied. It stays true after a later refund so the ledger remembers that money moved. Current revenue uses the status: `PAID` is full level A, `PARTIALLY_REFUNDED` is partial level A, `REFUNDED` and `CHARGEBACK` are not revenue.
 
 ## Attempts and references
 
@@ -81,11 +103,11 @@ This matches the payments PRD rule that a second partial stores the new refunded
 | Verified `payment.paid` while a refund is queued | Applies paid, then the queued refund in sequence and time order |
 | `payment.failed` after `PAID` | `ignored_out_of_order` |
 
-Webhook authentication is `assessWebhook` in the booking contract. A notice is applied only after that gate would pass. The ledger itself re-checks evidence. Both checks are in process. Neither is mounted on a URL.
+Webhook authentication is `assessWebhook` in the booking contract. A raw notice is not applied. `recordPayment` verifies the proof against the stored attempt, then `applyPaymentNotice` accepts the internal event. Both checks are in process. Neither is mounted on a URL. No payment gateway HTTP call exists.
 
 ## Reconciliation
 
-A level A outcome needs one of the three verified evidence kinds and a payment status of `PAID` or `PARTIALLY_REFUNDED`, linked to a transaction ref. Outlet id is copied from the transaction when a touchpoint or a later rollup is built.
+A level A outcome needs a verified internal payment event and a payment status of `PAID` or `PARTIALLY_REFUNDED`, linked to a transaction ref. The evidence label alone is not that event. Outlet id is copied from the transaction when a touchpoint or a later rollup is built.
 
 These are not reconciliation:
 

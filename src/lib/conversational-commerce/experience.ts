@@ -15,6 +15,18 @@ export type NormalizedExperience = {
   bookingState: null;
   confirmed: false;
   createsReservation: false;
+  /** A catalog order is not a verified payment. */
+  verifiesPayment: false;
+};
+
+export type NormalizeResult =
+  | { ok: true; value: NormalizedExperience }
+  | { ok: false; code: "EXPERIENCE_EVENT_MISMATCH" };
+
+const ALLOWED_EVENTS: Record<CustomerExperience, readonly ExperienceEventName[]> = {
+  WHATSAPP_CATALOG: ["catalog.order", "catalog.cart"],
+  WHATSAPP_FLOW: ["flow.submission", "flow.selection"],
+  WHATSAPP_CHAT: ["chat.message"],
 };
 
 export function normalizeCustomerExperience(input: {
@@ -26,10 +38,15 @@ export function normalizeCustomerExperience(input: {
   customerRef?: string | null;
   commerceOrderRef?: string | null;
   intentRef?: string | null;
-}): NormalizedExperience {
+}): NormalizeResult {
+  if (!ALLOWED_EVENTS[input.experience].includes(input.event)) {
+    return { ok: false, code: "EXPERIENCE_EVENT_MISMATCH" };
+  }
   const intentType = intentFor(input.experience, input.event, Boolean(input.qualified));
   const qualified = intentType === "QUALIFIED_INQUIRY" || intentType === "BOOKING_REQUEST" || intentType === "PRODUCT_ORDER";
   return {
+    ok: true,
+    value: {
     intent: {
       intentRef: input.intentRef ?? "",
       tenantId: input.tenantId,
@@ -43,6 +60,8 @@ export function normalizeCustomerExperience(input: {
     bookingState: null,
     confirmed: false,
     createsReservation: false,
+    verifiesPayment: false,
+    },
   };
 }
 

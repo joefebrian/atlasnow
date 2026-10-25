@@ -20,21 +20,56 @@ export type InboundEventType = (typeof INBOUND_EVENT_TYPES)[number];
 
 const MAX_SKEW_MS = 5 * 60 * 1000;
 
+export type WebhookConnection = {
+  providerId: string;
+  tenantId: string;
+};
+
 export type WebhookAssessment =
-  | { ok: true; duplicate: boolean; outOfOrder: boolean; eventType: InboundEventType }
-  | { ok: false; reason: "UNSIGNED" | "MISSING_PROVIDER" | "MISSING_TENANT" | "MISSING_EVENT" | "REPLAY" | "UNSUPPORTED_EVENT" };
+  | {
+      ok: true;
+      duplicate: boolean;
+      outOfOrder: boolean;
+      eventType: InboundEventType;
+      /** Durable dedupe key. Persist it per provider connection, not per JSON tenant. */
+      dedupeKey: string;
+      tenantId: string;
+      providerId: string;
+    }
+  | {
+      ok: false;
+      reason:
+        | "UNSIGNED"
+        | "MISSING_PROVIDER"
+        | "MISSING_TENANT"
+        | "MISSING_EVENT"
+        | "REPLAY"
+        | "UNSUPPORTED_EVENT"
+        | "TENANT_MISMATCH"
+        | "PROVIDER_MISMATCH";
+    };
 
 /**
  * Gate for a future provider webhook. No HTTP route calls this.
- * A non-empty signature is not enough. The HMAC must match the raw body and timestamp.
- * Tenant and provider identity are required before the body is trusted.
+ *
+ * `connection` is the stored provider-to-tenant mapping. A tenant or provider
+ * id inside the JSON body is untrusted and must not select the merchant.
+ * The HMAC covers the authenticated delivery timestamp and the raw body.
+ * `occurredAt` is the business event time. A delayed booking or payment event
+ * stays acceptable when the delivery timestamp is fresh.
+ * `seenEventIds` must be a durable set for `dedupeKey` before this returns duplicate.
  */
 export function assessWebhook(input: {
-  providerId: string;
-  tenantId: string;
+  connection: WebhookConnection;
+  /** Untrusted claim copied from the body. Null when the body has no tenant field. */
+  claimedTenantId: string | null;
+  claimedProviderId?: string | null;
   eventId: string;
   eventType: string;
+  /** Business time. Not the replay clock. */
   occurredAt: string;
+  /** Authenticated delivery time. Covered by the HMAC. */
+  deliveredAt: string;
   nowIso: string;
   signature: string | null;
   secret: string;
@@ -43,25 +78,43 @@ export function assessWebhook(input: {
   sequence: number | null;
   lastSequence: number | null;
 }): WebhookAssessment {
-  if (!input.providerId.trim()) return { ok: false, reason: "MISSING_PROVIDER" };
-  if (!input.tenantId.trim()) return { ok: false, reason: "MISSING_TENANT" };
+  if (!input.connection.providerId.trim()) return { ok: false, reason: "MISSING_PROVIDER" };
+  if (!input.connection.tenantId.trim()) return { ok: false, reason: "MISSING_TENANT" };
   if (!input.eventId.trim()) return { ok: false, reason: "MISSING_EVENT" };
-  if (!input.secret || !signatureMatches(input.secret, input.rawBody, input.occurredAt, input.signature)) {
+  if (input.claimedTenantId != null && input.claimedTenantId !== input.connection.tenantId) {
+    return { ok: false, reason: "TENANT_MISMATCH" };
+  }
+  if (input.claimedProviderId != null && input.claimedProviderId !== "" && input.claimedProviderId !== input.connection.providerId) {
+    return { ok: false, reason: "PROVIDER_MISMATCH" };
+  }
+  if (!input.secret || !signatureMatches(input.secret, input.rawBody, input.deliveredAt, input.signature)) {
     return { ok: false, reason: "UNSIGNED" };
   }
-  const occurred = Date.parse(input.occurredAt);
+  const delivered = Date.parse(input.deliveredAt);
   const now = Date.parse(input.nowIso);
-  if (!Number.isFinite(occurred) || !Number.isFinite(now) || Math.abs(now - occurred) > MAX_SKEW_MS) {
+  if (!Number.isFinite(delivered) || !Number.isFinite(now) || Math.abs(now - delivered) > MAX_SKEW_MS) {
     return { ok: false, reason: "REPLAY" };
+  }
+  if (!Number.isFinite(Date.parse(input.occurredAt))) {
+    return { ok: false, reason: "UNSUPPORTED_EVENT" };
   }
   if (!(INBOUND_EVENT_TYPES as readonly string[]).includes(input.eventType)) {
     return { ok: false, reason: "UNSUPPORTED_EVENT" };
   }
   const eventType = input.eventType as InboundEventType;
-  const duplicate = input.seenEventIds.includes(input.eventId);
+  const dedupeKey = `${input.connection.providerId}:${input.eventId}`;
+  const duplicate = input.seenEventIds.includes(input.eventId) || input.seenEventIds.includes(dedupeKey);
   const outOfOrder =
     input.sequence != null && input.lastSequence != null && input.sequence < input.lastSequence;
-  return { ok: true, duplicate, outOfOrder, eventType };
+  return {
+    ok: true,
+    duplicate,
+    outOfOrder,
+    eventType,
+    dedupeKey,
+    tenantId: input.connection.tenantId,
+    providerId: input.connection.providerId,
+  };
 }
 
 export function signWebhook(secret: string, rawBody: string, timestamp: string): string {

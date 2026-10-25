@@ -50,7 +50,7 @@ Failure:
 |---|---|---|
 | `UNSUPPORTED` | no | The capability map says the operation is unsupported |
 | `UNAVAILABLE` | yes | The operation is down, or no whole-IDR price was supplied for a quote |
-| `TIMEOUT` | yes at the provider, no at the orchestrator until the inflight key is released | The script times out before a row exists |
+| `TIMEOUT` | yes at the provider, no at the orchestrator until reconciliation allows one retry | The response timed out. That is not proof that no reservation exists |
 | `RETRYABLE` | yes | Reserved for a later transient failure |
 | `CONFLICT` | no | Slot is already `HELD` or `CONFIRMED` for that tenant |
 | `MISSING_REFERENCE` | no | An external confirm or create did not return a provider reference |
@@ -58,7 +58,14 @@ Failure:
 | `IDEMPOTENCY_CONFLICT` | no | Same key, different payload hash |
 | `POLICY_BLOCKED` | no | Orchestrator refused before the provider ran |
 
-A timeout response contains no booking. The orchestrator stores `PENDING_RESOLUTION` and the same key does not call the provider again until `releaseTimedOut`. A later call may try once. If the provider times out again, there is still no reservation.
+A timeout is not proof that the provider created nothing. The orchestrator keeps the operation in `PENDING_RESOLUTION` and keeps the original idempotency key. `releaseTimedOut` records that a person saw the timeout. It does not delete the inflight record and it does not authorize a second create.
+
+`reconcileTimedOut` is the only resolver:
+
+- `guaranteesIdempotency` on the adapter: retry the same create or hold with the original key. Accepting a key is not this guarantee. The flag is true only when the provider documents that the same key cannot create a second reservation.
+- Otherwise call `findByIdempotencyKey`. A found `CONFIRMED`, `HELD`, `REQUESTED`, or `COMPLETED` row is adopted onto the original transaction. A found `CANCELLED`, `REJECTED`, `EXPIRED`, or `NO_SHOW` closes the key as `TERMINAL`. An authoritative empty result allows one later `reserve` on the same key. A non-authoritative empty result, or a lookup failure, stays `PENDING_RESOLUTION` and does not create.
+
+A human release alone never sets absence as verified.
 
 ## Availability and quotes
 
@@ -88,6 +95,7 @@ The slot key is `tenantId:locationId:offeringId:startsAt`. Another tenant is a d
 - A location-specific registration does not serve a different location
 - A tenant-wide registration (`locationId: null`) serves locations inside that tenant
 - The orchestrator still checks the actor before resolve
+- `register` compares `providerId` and `mode` with `getCapabilities()`. A native adapter registered as `EXTERNAL_API`, or the reverse, returns `PROVIDER_MISMATCH` and is not stored
 
 ## Idempotency
 
@@ -96,8 +104,9 @@ The provider stores the first success under the idempotency key and the request 
 - Same key and same hash: `replay: true` and the same `bookingRef`
 - Same key and a different hash: `IDEMPOTENCY_CONFLICT`
 - The orchestrator applies the same rule and skips the provider on replay
+- `acceptsIdempotencyKey` means the adapter will send a key. `guaranteesIdempotency` means the provider documents that the same key returns the original reservation
 
-On timeout the provider records the key as inflight and does not insert a booking. A different hash for that inflight key conflicts.
+The standard timeout script returns `TIMEOUT` before it inserts a row. The ambiguous timeout script inserts the reservation and then returns `TIMEOUT` with no booking payload. A second create on that script inserts another row unless `guaranteesIdempotency` is true. The orchestrator must not issue that second create. Lookup adopts the first row.
 
 ## Concurrency
 
@@ -107,7 +116,7 @@ Rules for a later live adapter:
 
 - Use the provider's atomic hold or create when one exists
 - Send the idempotency key when the provider accepts one
-- On timeout, read the original request by that key before creating another
+- On timeout, read the original request by that key, or rely on a documented idempotency guarantee, before creating another
 - If the provider cannot guarantee the slot, return pending or the checkout handoff
 - Do not mark `CONFIRMED` without a provider reference on an external mode
 - Do not treat `getAvailability` as a reservation
@@ -135,15 +144,18 @@ Accepted event names, after the gate passes:
 
 A provider may support a subset. Unknown names are `UNSUPPORTED_EVENT`.
 
-`assessWebhook` requires:
+`assessWebhook` takes a stored `connection` (`providerId`, `tenantId`). That mapping is the tenant. A `claimedTenantId` or `claimedProviderId` copied from JSON must match the connection or the gate returns `TENANT_MISMATCH` or `PROVIDER_MISMATCH` before the signature is trusted. A missing claim does not let the JSON body choose the merchant. The success payload copies tenant and provider from the connection.
 
-- Non-empty `providerId`, `tenantId`, and `eventId`
-- HMAC-SHA256 of `` `${timestamp}.${rawBody}` `` using the provider secret
-- Event time within five minutes of the supplied clock
-- Duplicate detection by event id
-- `outOfOrder` when a sequence number goes backwards
+Four clocks and identities stay separate:
 
-A missing secret or a bad signature is `UNSIGNED` even if the event id was seen. Tenant resolution is the caller's job. This function does not accept an unsigned body and guess the tenant from JSON.
+| Field | Role |
+|---|---|
+| `deliveredAt` | Authenticated delivery time. The HMAC is SHA-256 of `` `${deliveredAt}.${rawBody}` ``. Replay rejects a delivery more than five minutes from `nowIso` |
+| `occurredAt` | Business event time. A delayed booking or payment stays acceptable when delivery is fresh and this timestamp parses. It is not the replay clock |
+| `eventId` | Provider event id |
+| `connection` | Provider connection identity and the verified tenant |
+
+Durable dedupe key is `` `${providerId}:${eventId}` ``. `seenEventIds` must be that durable set before a repeat is marked `duplicate`. The in-memory list is the contract check only. A missing secret or a bad signature is `UNSIGNED`. An empty connection tenant is `MISSING_TENANT`. Ordering still flags `outOfOrder` when `sequence` is lower than `lastSequence`. Unknown names are `UNSUPPORTED_EVENT`. Fail closed. No HTTP route calls this.
 
 `planBookingEvent`:
 
@@ -158,4 +170,4 @@ Payment notices are applied by `applyPaymentNotice`, not by the booking planner.
 
 ## Tests that lock this contract
 
-`conversational-commerce.test.ts` covers unsupported checkout, double hold conflict, idempotent replay, hash conflict, timeout without a second create, missing external reference, empty availability, and a quote that refuses to invent a price.
+`conversational-commerce.test.ts` covers unsupported checkout, double hold conflict, idempotent replay, hash conflict, a pre-commit timeout, a timeout after the provider committed, a non-authoritative empty lookup, a cancelled lookup, idempotency guarantee replay, missing external reference, registry mode mismatch, empty availability, and a quote that refuses to invent a price. Webhook tests cover a fresh delivery of an old business event, a stale delivery timestamp, and a tenant claim that does not match the connection.

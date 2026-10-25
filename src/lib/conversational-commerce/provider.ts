@@ -11,6 +11,7 @@ export const PROVIDER_OPERATIONS = [
   "cancelBooking",
   "getBookingStatus",
   "getPaymentStatus",
+  "findByIdempotencyKey",
 ] as const;
 export type ProviderOperation = (typeof PROVIDER_OPERATIONS)[number];
 
@@ -53,7 +54,13 @@ export type ProviderCapabilities = {
   authoritativeForCapacity: boolean;
   /** Booking adapters do not verify money in this milestone. */
   canVerifyPayment: boolean;
+  /** The adapter will send a key. This is not a promise that the provider deduplicates. */
   acceptsIdempotencyKey: boolean;
+  /**
+   * True only when the provider documents that the same key returns the original
+   * reservation and never creates a second one. A timeout is not this guarantee.
+   */
+  guaranteesIdempotency: boolean;
 };
 
 export type AvailabilitySlot = {
@@ -130,6 +137,18 @@ export type PaymentLookup = {
   attemptRef: string;
 };
 
+export type IdempotencyLookupQuery = {
+  tenantId: string;
+  locationId: string;
+  idempotencyKey: string;
+};
+
+/** A null booking is authoritative only when the provider looked up this key and found nothing. */
+export type IdempotencyLookup = {
+  found: ProviderBooking | null;
+  authoritative: boolean;
+};
+
 /**
  * Every adapter exposes the same methods.
  * Unsupported operations return UNSUPPORTED. They do not throw and they do not invent a booking.
@@ -145,6 +164,7 @@ export interface BookingProvider {
   cancelBooking(input: CancelCommand): Promise<ProviderResult<ProviderBooking>>;
   getBookingStatus(input: BookingLookup): Promise<ProviderResult<{ state: BookingState }>>;
   getPaymentStatus(input: PaymentLookup): Promise<ProviderResult<{ status: PaymentState; verified: false }>>;
+  findByIdempotencyKey(input: IdempotencyLookupQuery): Promise<ProviderResult<IdempotencyLookup>>;
 }
 
 const RETRYABLE: ReadonlySet<ProviderErrorCode> = new Set(["TIMEOUT", "RETRYABLE", "UNAVAILABLE"]);

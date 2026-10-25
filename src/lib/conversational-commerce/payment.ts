@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { PaymentState } from "./types";
 
 /**
@@ -26,7 +27,8 @@ export const PAYMENT_NOTICE_TYPES = [
 ] as const;
 export type PaymentNoticeType = (typeof PAYMENT_NOTICE_TYPES)[number];
 
-export type PaymentNotice = {
+/** Inbound claim. The evidence enum is not proof. */
+export type RawPaymentNotice = {
   eventId: string;
   type: PaymentNoticeType;
   evidence: PaymentEvidenceKind;
@@ -36,7 +38,142 @@ export type PaymentNotice = {
   occurredAt: string;
   providerReference: string | null;
   sequence: number | null;
+  tenantId: string;
+  providerId: string;
+  attemptRef: string;
+  transactionRef: string;
 };
+
+/** HMAC over the binding fields. Produced with the payment connection secret. */
+export type PaymentProof = {
+  tenantId: string;
+  providerId: string;
+  attemptRef: string;
+  transactionRef: string;
+  providerReference: string;
+  currency: "IDR";
+  amountIdr: number;
+  eventId: string;
+  type: PaymentNoticeType;
+  signature: string;
+};
+
+/** Amount and identity AtlasNow already stored for the attempt. Not taken from the notice. */
+export type PaymentExpectation = {
+  tenantId: string;
+  providerId: string;
+  attemptRef: string;
+  transactionRef: string;
+  currency: "IDR";
+  amountIdr: number;
+};
+
+/** Internal event. Only verifyPaymentNotice may construct one. */
+export type VerifiedPaymentEvent = {
+  eventId: string;
+  type: PaymentNoticeType;
+  amountIdr: number;
+  currency: "IDR";
+  occurredAt: string;
+  providerReference: string;
+  sequence: number | null;
+  tenantId: string;
+  providerId: string;
+  attemptRef: string;
+  transactionRef: string;
+};
+
+export type PaymentVerifyResult =
+  | { ok: true; event: VerifiedPaymentEvent }
+  | { ok: false; code: "UNVERIFIED" | "MISMATCH" | "REJECTED_EVIDENCE" };
+
+export function signPaymentProof(secret: string, fields: Omit<PaymentProof, "signature">): string {
+  return createHmac("sha256", secret).update(proofMaterial(fields)).digest("hex");
+}
+
+/**
+ * Turns a raw notice into an internal event only when the proof matches the
+ * stored attempt. A caller-supplied evidence label is not enough.
+ */
+export function verifyPaymentNotice(input: {
+  notice: RawPaymentNotice;
+  proof: PaymentProof | null;
+  secret: string;
+  expectation: PaymentExpectation;
+}): PaymentVerifyResult {
+  if (!evidenceCanVerifyPaid(input.notice.evidence)) return { ok: false, code: "REJECTED_EVIDENCE" };
+  if (!input.proof || !input.secret || !proofMatches(input.secret, input.proof)) return { ok: false, code: "UNVERIFIED" };
+  const proof = input.proof;
+  const notice = input.notice;
+  const expected = input.expectation;
+  if (proof.currency !== "IDR" || notice.currency !== "IDR" || expected.currency !== "IDR") {
+    return { ok: false, code: "MISMATCH" };
+  }
+  if (
+    proof.tenantId !== expected.tenantId ||
+    notice.tenantId !== expected.tenantId ||
+    proof.providerId !== expected.providerId ||
+    notice.providerId !== expected.providerId ||
+    proof.attemptRef !== expected.attemptRef ||
+    notice.attemptRef !== expected.attemptRef ||
+    proof.transactionRef !== expected.transactionRef ||
+    notice.transactionRef !== expected.transactionRef ||
+    proof.eventId !== notice.eventId ||
+    proof.type !== notice.type ||
+    proof.providerReference !== notice.providerReference ||
+    proof.amountIdr !== notice.amountIdr
+  ) {
+    return { ok: false, code: "MISMATCH" };
+  }
+  if (!amountMatchesExpectation(notice.type, notice.amountIdr, expected.amountIdr)) {
+    return { ok: false, code: "MISMATCH" };
+  }
+  return {
+    ok: true,
+    event: {
+      eventId: notice.eventId,
+      type: notice.type,
+      amountIdr: notice.amountIdr,
+      currency: "IDR",
+      occurredAt: notice.occurredAt,
+      providerReference: proof.providerReference,
+      sequence: notice.sequence,
+      tenantId: expected.tenantId,
+      providerId: expected.providerId,
+      attemptRef: expected.attemptRef,
+      transactionRef: expected.transactionRef,
+    },
+  };
+}
+
+function amountMatchesExpectation(type: PaymentNoticeType, amountIdr: number, expectedAmountIdr: number): boolean {
+  if (!Number.isSafeInteger(amountIdr) || !Number.isSafeInteger(expectedAmountIdr) || expectedAmountIdr < 1) return false;
+  if (type === "payment.partially_refunded") return amountIdr > 0 && amountIdr < expectedAmountIdr;
+  if (type === "payment.chargeback") return amountIdr === expectedAmountIdr;
+  return amountIdr === expectedAmountIdr;
+}
+
+function proofMaterial(fields: Omit<PaymentProof, "signature">): string {
+  return [
+    fields.tenantId,
+    fields.providerId,
+    fields.attemptRef,
+    fields.transactionRef,
+    fields.providerReference,
+    fields.currency,
+    String(fields.amountIdr),
+    fields.eventId,
+    fields.type,
+  ].join("|");
+}
+
+function proofMatches(secret: string, proof: PaymentProof): boolean {
+  const expected = signPaymentProof(secret, proof);
+  const left = Buffer.from(expected);
+  const right = Buffer.from(proof.signature);
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
 
 export type PaymentEffect =
   | "applied"
@@ -55,7 +192,7 @@ export type PaymentLedger = {
   verifiedPaid: boolean;
   appliedEventIds: string[];
   rejectedEventIds: string[];
-  queued: PaymentNotice[];
+  queued: VerifiedPaymentEvent[];
   providerReference: string | null;
 };
 
@@ -79,13 +216,10 @@ export function evidenceCanVerifyPaid(kind: PaymentEvidenceKind): boolean {
 
 export function applyPaymentNotice(
   current: PaymentLedger,
-  notice: PaymentNotice,
+  notice: VerifiedPaymentEvent,
 ): { ledger: PaymentLedger; effect: PaymentEffect } {
   if (seen(current, notice.eventId)) return { ledger: current, effect: "duplicate" };
 
-  if (!evidenceCanVerifyPaid(notice.evidence)) {
-    return { ledger: reject(current, notice.eventId), effect: "rejected_evidence" };
-  }
   if (notice.currency !== "IDR" || !Number.isSafeInteger(notice.amountIdr) || notice.amountIdr < 0) {
     return { ledger: reject(current, notice.eventId), effect: "rejected_amount" };
   }
@@ -101,7 +235,7 @@ export function applyPaymentNotice(
   return flush(applied.ledger, applied.effect);
 }
 
-function applyOne(current: PaymentLedger, notice: PaymentNotice): { ledger: PaymentLedger; effect: PaymentEffect } {
+function applyOne(current: PaymentLedger, notice: VerifiedPaymentEvent): { ledger: PaymentLedger; effect: PaymentEffect } {
   const next = clone(current);
   next.currency = "IDR";
   if (notice.providerReference) next.providerReference = notice.providerReference;
@@ -169,7 +303,7 @@ function applyOne(current: PaymentLedger, notice: PaymentNotice): { ledger: Paym
   return applyRefund(next, notice);
 }
 
-function applyRefund(next: PaymentLedger, notice: PaymentNotice): { ledger: PaymentLedger; effect: PaymentEffect } {
+function applyRefund(next: PaymentLedger, notice: VerifiedPaymentEvent): { ledger: PaymentLedger; effect: PaymentEffect } {
   const captured = next.amountIdr;
   if (captured == null || captured < 1) {
     next.rejectedEventIds.push(notice.eventId);
@@ -209,7 +343,7 @@ function flush(ledger: PaymentLedger, effect: PaymentEffect): { ledger: PaymentL
   return { ledger: current, effect };
 }
 
-function compareNotice(left: PaymentNotice, right: PaymentNotice): number {
+function compareNotice(left: VerifiedPaymentEvent, right: VerifiedPaymentEvent): number {
   if (left.sequence != null && right.sequence != null && left.sequence !== right.sequence) {
     return left.sequence - right.sequence;
   }
@@ -230,7 +364,7 @@ function reject(ledger: PaymentLedger, eventId: string): PaymentLedger {
   return next;
 }
 
-function enqueue(ledger: PaymentLedger, notice: PaymentNotice): PaymentLedger {
+function enqueue(ledger: PaymentLedger, notice: VerifiedPaymentEvent): PaymentLedger {
   const next = clone(ledger);
   next.queued.push({ ...notice });
   return next;
