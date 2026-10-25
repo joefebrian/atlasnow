@@ -1,6 +1,78 @@
 # AtlasNow development status
 
-Updated 2026-10-23. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
+Updated 2026-10-26. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
+
+## Conversational commerce M0 through M1C.2
+
+In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. M1B.1 copies repository results, binds a reservation to the registered provider mode, scopes policy evidence and webhook identity, and specifies composite location foreign keys. M1C runs the orchestrator through those ports. The orchestrator no longer keeps a second copy of bookings, payments, or idempotency. M1C.1 stops a losing claim from calling the provider, requires trusted payment evidence before settlement, and stores the operation envelope with the claim so a crash can be reconciled. M1C.2 keeps that envelope unless the provider outcome is explicitly `NO_COMMIT`, and resolves booking, payment, and cancellation references by the authenticated tenant. The Prisma schema is unchanged. Not deployed. No migration. No route. No gateway. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
+
+Working in unit tests only:
+
+- Booking and transaction transition checks, including a rejected hold when the provider cannot reserve
+- Tenant and location denials that do not return the other merchant's booking
+- Read and write are separate actions. This is not production RBAC
+- Four mock providers: native hold, external API, external checkout handoff, manual inquiry
+- Slot conflict, idempotent replay, and a missing external reference
+- A timeout stays `PENDING_RESOLUTION`. Human release does not authorize a second booking. Lookup uses the original provider, location, and request hash. Another provider cannot prove absence. A recovered booking must match the original slot
+- Each payment attempt has its own ledger. A repeated attempt id cannot change amount, provider, or transaction. An expired attempt does not block a later paid attempt. A refund cannot move to a different attempt. Duplicate events do not add revenue. A blank provider reference cannot verify payment. The internal HMAC is not a gateway webhook signature
+- Payment duplicates, out-of-order notices, and partial and full refunds
+- An evidence label, a bad signature, or a mismatched tenant, provider, attempt, amount, currency, or provider reference does not mark a transaction paid
+- Confirmed booking with unpaid payment, and paid payment with an unconfirmed booking
+- Unknown Meta eligibility fails closed. An unverified approval reference fails closed. A Flow submission does not confirm a booking. A catalog order does not verify payment. Illegal experience and event pairs are rejected
+- Webhook replay uses the authenticated delivery time. An old business event with a fresh delivery is accepted. The tenant comes from the connection, not from JSON
+- A native adapter cannot be registered as an external API, or the reverse
+- Missing attribution ids are not invented. Aggregated Search or Maps counts are not a person
+- Existing catalog order constants still map. This module does not import Prisma or call Graph
+
+M1B, in unit tests only:
+
+- Repository ports for intents, transactions, bookings, connections, payment attempts, idempotency, webhooks, events, attribution, and policy evidence
+- Tenant and location isolation, optimistic version checks, and a first-writer win for two overlapping snapshots
+- Restart rehydration of an unresolved timeout. A new booking waits for that provider's absence rule
+- One attempt identity, one provider reference, and one live capture. `EXPIRED` requires an authoritative provider read
+- Cancellation does not refund. A refund or chargeback does not change the booking
+- Caller `VERIFIED` stays unverified. An attested process can pass the existing fail-closed policy
+- Credential ports store a reference and reject secret bytes. Outlet health does not fall through to the tenant default
+- Session mapping follows `canReadCommerce` and `canWriteCommerce`. `BRANCH` stays scoped to `Membership.locationId` and still has no commerce permission
+
+M1B.1, in unit tests only:
+
+- A read-only caller cannot mutate a stored booking, ledger, or connection through a repository result
+- A reservation mode must match the booking connection. External checkout does not create a booking. Manual confirmation cannot invent an authoritative reference
+- Policy evidence is one merchant, one offering category, and one commerce surface. An unmatched scope fails closed
+- Webhook dedupe is the connection id plus the provider event id. Another tenant's connection does not suppress the event
+- Two non-conflicting reservations both keep their transaction, booking, idempotency row, and event. A losing slot does not leave its transaction behind
+- `settleConcurrent` does not claim to prove arbitrary atomic SQL. Composite location keys are documented and not migrated
+
+M1C, in unit tests only:
+
+- Reserve, replay, timeout, and recovery go through the in-memory ports. Provider calls stay outside the atomic write
+- The same idempotency key cannot create a second booking. An unknown provider result stays `PENDING_RESOLUTION` and is resolved only with the original provider
+- Payment attempts and ledger events go through the payment port. A forged notice never becomes a ledger event. Refunds and chargebacks do not change the booking
+- Webhook apply requires the connection's location. A snapshot without the policy seal cannot grant commerce approval
+- M1C seeded one attested goods-and-catalog fixture from the orchestrator constructor. M1C.1 removes that silent seed
+
+M1C.1, in unit tests only:
+
+- Two callers can both pass the initial read. Only the claim winner sends one create. The loser rereads and does not call the provider. A different payload is `IDEMPOTENCY_CONFLICT`
+- A forged paid event passed straight to `applyEvent`, including by a Commerce writer, stays `NOT_STARTED` and writes no ledger event. A verified notice through the port still settles
+- A crash after claim, after a provider create but before the local write, after timeout persistence, and during reconciliation does not create a second booking. A confirmed external booking is adopted on the original transaction
+- `createOrchestratorState()` does not create merchant approval. The goods/catalog attestation is an explicit test fixture and is not Meta approval
+
+M1C.2, in unit tests only:
+
+- `ProviderFailure.outcomeCertainty` is `NO_COMMIT` or `MAY_COMMIT`. `providerError` defaults to `MAY_COMMIT`. A missing certainty is treated as uncertain. `RETRYABLE`, `UNAVAILABLE`, and `TIMEOUT` do not by themselves prove that no booking was created
+- A committed booking that returns `RETRYABLE` or `UNAVAILABLE` stays `PENDING_RESOLUTION`. The idempotency key is not completed as `FAILED`. Restart keeps the envelope. Recovery adopts the original booking on the original provider, connection, location, and key. A repeated reserve does not create a second booking
+- A remote success with a blank booking reference, or an external held or confirmed booking with a blank provider reference, keeps the envelope as `MISSING_REFERENCE`. It is not closed as a denial
+- A definitive no-commit conflict calls `finishDenied`, completes the key, and leaves no inflight row. A replay does not call the provider again
+- `readBooking`, `openPaymentAttempt`, `recordPayment`, and `cancelReservation` match the actor's tenant and the reference before location authorization. Two tenants can share one internal reference string. A foreign-only reference returns `CROSS_TENANT` and does not include the other tenant's record. A wrong outlet is still `LOCATION_FORBIDDEN`
+- The read-only snapshot maps still key bookings and transactions by reference alone. Those maps are not the lookup used by the four operations above. A SQL adapter must not copy that keying
+
+Not built: SQL tables, a Prisma adapter, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender, offer-specific Meta exception rows. The in-process payment HMAC is not a gateway signature. The in-memory claim is not a Postgres lock. Outcome certainty is only as honest as the adapter that sets it.
+
+Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md`, `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`, and the companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
+
+Do not merge this into PR #1. Do not merge PR #2. Do not add a SQL adapter, a route, or a gateway until a separate review.
 
 ## Active slice
 
@@ -66,6 +138,8 @@ Inbound WhatsApp `type=order` capture is implemented behind `COMMERCE_ORDER_CAPT
 2026-10-24, catalog file and publish preview: `catalog-feed.test.ts` 7 passed, `catalog-publish.test.ts` 6 passed, `catalog-bidirectional.db.test.ts` 1 passed, `catalog-import.db.test.ts` 3 passed, `service.db.test.ts` 16 passed, and `tsc --noEmit` passed. No `items_batch` call was made by the file or the preview. `.github/workflows/commerce.yml` does not list the new tests. The GitHub token cannot edit that workflow. `COMMERCE_CATALOG_SYNC_ENABLED` stays unset. The local demo brand page rendered the catalog file section. Its export returned no file because a required link was missing, and its preview returned `networkCalled: false`.
 
 2026-10-25, feed schema review: `catalog-feed.test.ts` 11 passed, `catalog-publish.test.ts` 9 passed, `catalog-import.test.ts` 6 passed, `connection.test.ts` 13 passed, `validate.test.ts` 12 passed, `nav-access.test.ts` 8 passed, `catalog-import.db.test.ts` 3 passed, `catalog-bidirectional.db.test.ts` 1 passed, `service.db.test.ts` 17 passed, `order-capture.test.ts` 11 passed, `order-capture.db.test.ts` 4 passed, and `tsc --noEmit` passed. No live Graph call. GitHub Actions on `f64502b` runs those catalog tests and passed: https://github.com/joefebrian/atlasnow/actions/runs/40149503443. `COMMERCE_CATALOG_SYNC_ENABLED` stays unset.
+
+2026-10-26, conversational commerce M1C.2: `conversational-commerce.test.ts` and `persistence.test.ts` together 92 passed. Commerce unit files 73 passed. Separate database processes: `service.db.test.ts` 17, `catalog-import.db.test.ts` 3, `catalog-bidirectional.db.test.ts` 1, `slice25-release.db.test.ts` 1 with `CommerceOrder` absent, `order-capture.db.test.ts` 4. `tsc --noEmit` passed. No Prisma schema change. No live provider or gateway call.
 
 2026-10-24, order capture: `npx tsx --test src/lib/commerce/order-capture.test.ts` — **11 passed, 0 failed**. `npx tsx --test src/lib/commerce/order-capture.db.test.ts` on localhost:5433 — **4 passed, 0 failed**. `npx tsc --noEmit` passed. The Commerce page for the local demo brand rendered "Catalog orders", the empty state, and, with a fixture row that was deleted afterward, the reference, SKU, `IDR 28,780` estimate, review label, and "Not started". The orders API omitted the sender id. Anonymous `GET /api/commerce/orders` returned 401. No payment call was made.
 
