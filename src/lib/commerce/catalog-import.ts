@@ -45,14 +45,24 @@ type LocalSku = {
   lastSyncedAt: Date | null;
 };
 
-/** Import stays off for every merchant unless this tenant id is listed. An empty list allows nobody. */
-export function catalogImportEnabled(tenantId: string): boolean {
-  if (process.env.COMMERCE_CATALOG_IMPORT_ENABLED !== "true") return false;
-  const allowed = (process.env.COMMERCE_CATALOG_IMPORT_TENANTS || "")
+function tenantListed(envName: string, tenantId: string): boolean {
+  const allowed = (process.env[envName] || "")
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
   return allowed.includes(tenantId);
+}
+
+/** Read the connected Meta catalog. This does not allow writing products into AtlasNow. An empty list allows nobody. */
+export function catalogDiscoveryEnabled(tenantId: string): boolean {
+  if (process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED !== "true") return false;
+  return tenantListed("COMMERCE_CATALOG_DISCOVERY_TENANTS", tenantId);
+}
+
+/** Write imported products into AtlasNow. Independent of discovery. An empty list allows nobody. */
+export function catalogImportEnabled(tenantId: string): boolean {
+  if (process.env.COMMERCE_CATALOG_IMPORT_ENABLED !== "true") return false;
+  return tenantListed("COMMERCE_CATALOG_IMPORT_TENANTS", tenantId);
 }
 
 export function parseIdrAmount(price: string, currency: string): number | null {
@@ -264,8 +274,18 @@ function graphFailure(error: unknown): { ok: false; status: number; error: strin
 
 export async function listMetaCatalogProducts(tenantId: string, fetchImpl: typeof fetch = fetch) {
   if (!tenantId) return { ok: false as const, status: 400, error: "Pick a brand" };
-  if (!catalogImportEnabled(tenantId)) {
-    return { ok: true as const, enabled: false as const, catalogId: "", products: [] as CatalogPreviewItem[], truncated: false };
+  const discoveryEnabled = catalogDiscoveryEnabled(tenantId);
+  const importEnabled = catalogImportEnabled(tenantId);
+  if (!discoveryEnabled) {
+    return {
+      ok: true as const,
+      enabled: false as const,
+      discoveryEnabled: false as const,
+      importEnabled,
+      catalogId: "",
+      products: [] as CatalogPreviewItem[],
+      truncated: false,
+    };
   }
   const connected = await connectedCatalog(tenantId);
   if (!connected.ok) return connected;
@@ -292,6 +312,8 @@ export async function listMetaCatalogProducts(tenantId: string, fetchImpl: typeo
   return {
     ok: true as const,
     enabled: true as const,
+    discoveryEnabled: true as const,
+    importEnabled,
     catalogId: connected.catalogId,
     products,
     truncated: listed.truncated,

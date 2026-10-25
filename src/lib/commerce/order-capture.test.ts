@@ -112,6 +112,11 @@ describe("whatsapp order webhook plan", () => {
     assert.equal(capture.includes("customerWaId"), true);
     assert.equal(capture.includes("console.info"), true);
     assert.equal(capture.includes("customerWaId:"), true);
+    const listStart = capture.indexOf("export async function listCommerceOrders");
+    const listFn = capture.slice(listStart);
+    const guardAt = listFn.indexOf("orderCaptureEnabled()");
+    const queryAt = listFn.indexOf("commerceOrder.findMany");
+    assert.equal(guardAt > 0 && queryAt > guardAt, true);
   });
 });
 

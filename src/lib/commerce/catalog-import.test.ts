@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { listCatalogItems } from "@/lib/commerce/meta-graph";
-import { catalogImportEnabled, parseIdrAmount, previewCatalogItem, type CatalogPreviewItem } from "@/lib/commerce/catalog-import";
+import {
+  catalogDiscoveryEnabled,
+  catalogImportEnabled,
+  importMetaCatalogProducts,
+  listMetaCatalogProducts,
+  parseIdrAmount,
+  previewCatalogItem,
+  type CatalogPreviewItem,
+} from "@/lib/commerce/catalog-import";
 import type { RemoteCatalogRow } from "@/lib/commerce/meta-graph";
 
 const qa = (overrides?: Partial<RemoteCatalogRow>): RemoteCatalogRow => ({
@@ -21,26 +29,71 @@ const qa = (overrides?: Partial<RemoteCatalogRow>): RemoteCatalogRow => ({
 });
 
 describe("catalog import gate", () => {
-  it("stays off for every merchant unless that tenant is listed", () => {
-    const previousEnabled = process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
-    const previousTenants = process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+  const keys = [
+    "COMMERCE_CATALOG_IMPORT_ENABLED",
+    "COMMERCE_CATALOG_IMPORT_TENANTS",
+    "COMMERCE_CATALOG_DISCOVERY_ENABLED",
+    "COMMERCE_CATALOG_DISCOVERY_TENANTS",
+  ] as const;
+
+  function restore(previous: Record<string, string | undefined>) {
+    for (const key of keys) {
+      if (previous[key] == null) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+
+  it("keeps discovery and import on separate tenant lists", () => {
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
     const qa = "commerceqa20261023tenant";
     const other = "cmsz2tcnk0001coqz71pqqjul";
     try {
-      delete process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
-      delete process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+      for (const key of keys) delete process.env[key];
+      assert.equal(catalogDiscoveryEnabled(qa), false);
+      assert.equal(catalogImportEnabled(qa), false);
+      process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED = "true";
+      assert.equal(catalogDiscoveryEnabled(qa), false);
+      process.env.COMMERCE_CATALOG_DISCOVERY_TENANTS = qa;
+      assert.equal(catalogDiscoveryEnabled(qa), true);
+      assert.equal(catalogDiscoveryEnabled(other), false);
       assert.equal(catalogImportEnabled(qa), false);
       process.env.COMMERCE_CATALOG_IMPORT_ENABLED = "true";
       assert.equal(catalogImportEnabled(qa), false);
-      assert.equal(catalogImportEnabled(other), false);
       process.env.COMMERCE_CATALOG_IMPORT_TENANTS = qa;
       assert.equal(catalogImportEnabled(qa), true);
       assert.equal(catalogImportEnabled(other), false);
     } finally {
-      if (previousEnabled == null) delete process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
-      else process.env.COMMERCE_CATALOG_IMPORT_ENABLED = previousEnabled;
-      if (previousTenants == null) delete process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
-      else process.env.COMMERCE_CATALOG_IMPORT_TENANTS = previousTenants;
+      restore(previous);
+    }
+  });
+
+  it("does not call Graph for a read or a write while both gates are off", async () => {
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    const qa = "commerceqa20261023tenant";
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return Response.json({ data: [] });
+    }) as typeof fetch;
+    try {
+      for (const key of keys) delete process.env[key];
+      const listed = await listMetaCatalogProducts(qa, fetchImpl);
+      assert.equal(listed.ok, true);
+      if (!listed.ok || !("enabled" in listed)) return;
+      assert.equal(listed.enabled, false);
+      assert.equal(listed.discoveryEnabled, false);
+      assert.equal(listed.importEnabled, false);
+      const imported = await importMetaCatalogProducts({
+        tenantId: qa,
+        retailerIds: ["ATLASNOW-QA-SHAPE-001"],
+        fetchImpl,
+      });
+      assert.equal(imported.ok, false);
+      if (imported.ok) return;
+      assert.equal(imported.status, 503);
+      assert.equal(called, false);
+    } finally {
+      restore(previous);
     }
   });
 });

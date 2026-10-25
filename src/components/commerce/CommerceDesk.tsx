@@ -132,6 +132,7 @@ type Props = {
   commerceError: string;
   merchantName: string;
   orders: CommerceOrderView[];
+  ordersEnabled: boolean;
 };
 
 function stateLabel(status: string) {
@@ -198,6 +199,7 @@ export function CommerceDesk({
   commerceError,
   merchantName,
   orders,
+  ordersEnabled,
 }: Props) {
   const router = useRouter();
   const [mode, setMode] = useState<"list" | "edit" | "detail">("list");
@@ -500,7 +502,7 @@ export function CommerceDesk({
           </div>
           <p className="mb-4 text-[13px] text-slate-500">This page does not show revenue. A saved product is not a sale.</p>
           <ConnectionPanel tenantId={tenantId} canWrite={canWrite} initial={connection} />
-          <OrdersInbox merchantName={merchantName} orders={orders} />
+          <OrdersInbox merchantName={merchantName} orders={orders} enabled={ordersEnabled} />
           <MetaCatalogProducts tenantId={tenantId} canWrite={canWrite} />
           <CatalogFeedPanel tenantId={tenantId} canRead />
           {previewText ? (

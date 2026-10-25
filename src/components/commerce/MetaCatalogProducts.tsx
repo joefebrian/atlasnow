@@ -33,6 +33,7 @@ export function MetaCatalogProducts({ tenantId, canWrite }: { tenantId: string; 
   const [products, setProducts] = useState<CatalogPreviewItem[]>([]);
   const [catalogId, setCatalogId] = useState("");
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [importEnabled, setImportEnabled] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -43,6 +44,7 @@ export function MetaCatalogProducts({ tenantId, canWrite }: { tenantId: string; 
     setProducts([]);
     setCatalogId("");
     setEnabled(null);
+    setImportEnabled(false);
     setSelected([]);
     setError("");
     setNotice("");
@@ -57,6 +59,8 @@ export function MetaCatalogProducts({ tenantId, canWrite }: { tenantId: string; 
       const body = (await response.json()) as {
         error?: string;
         enabled?: boolean;
+        discoveryEnabled?: boolean;
+        importEnabled?: boolean;
         catalogId?: string;
         products?: CatalogPreviewItem[];
         truncated?: boolean;
@@ -65,12 +69,16 @@ export function MetaCatalogProducts({ tenantId, canWrite }: { tenantId: string; 
         setError(body.error || "Meta products could not be loaded.");
         return;
       }
-      setEnabled(body.enabled !== false);
+      const discovery = body.discoveryEnabled === true || (body.discoveryEnabled == null && body.enabled !== false);
+      const writing = body.importEnabled === true;
+      setEnabled(discovery);
+      setImportEnabled(writing);
       setCatalogId(body.catalogId || "");
       setProducts(body.products || []);
       setTruncated(Boolean(body.truncated));
       setSelected([]);
-      if (body.enabled === false) setNotice("Catalog import is off. Live catalog push stays off.");
+      if (!discovery && !writing) setNotice("Catalog import is off. Live catalog push stays off.");
+      else if (!writing) setNotice("This catalog list is read-only. Import into AtlasNow is off.");
     } catch {
       setError("Meta products could not be loaded.");
     } finally {
@@ -128,7 +136,7 @@ export function MetaCatalogProducts({ tenantId, canWrite }: { tenantId: string; 
           <button type="button" className="an-btn-ghost text-sm" onClick={load} disabled={busy}>
             Load Meta products
           </button>
-          {canWrite ? (
+          {canWrite && importEnabled ? (
             <button type="button" className="an-btn-primary text-sm" onClick={importSelected} disabled={busy || selected.length === 0}>
               Import to AtlasNow
             </button>
@@ -161,7 +169,7 @@ export function MetaCatalogProducts({ tenantId, canWrite }: { tenantId: string; 
               {products.map((product) => (
                 <tr key={product.metaProductId || product.retailerId} className="border-b border-slate-50 align-top">
                   <td className="px-4 py-3">
-                    {product.importable && canWrite ? (
+                    {product.importable && canWrite && importEnabled ? (
                       <input
                         type="checkbox"
                         checked={selected.includes(product.retailerId)}

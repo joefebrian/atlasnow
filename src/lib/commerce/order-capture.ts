@@ -360,6 +360,7 @@ export async function captureWhatsAppOrders(body: unknown): Promise<CaptureSumma
 
 export async function listCommerceOrders(tenantId: string): Promise<CommerceOrderView[]> {
   if (!tenantId) throw new Error("tenant required");
+  if (!orderCaptureEnabled()) return [];
   const rows = await prisma.commerceOrder.findMany({
     where: { tenantId },
     orderBy: { receivedAt: "desc" },

@@ -48,17 +48,21 @@ describe("meta catalog import", { skip: localDb() ? false : "local database only
   const ids: string[] = [];
   const previous = process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
   const previousTenants = process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+  const previousDiscovery = process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED;
+  const previousDiscoveryTenants = process.env.COMMERCE_CATALOG_DISCOVERY_TENANTS;
   let tenantA = "";
   let tenantB = "";
 
   before(async () => {
     process.env.COMMERCE_CATALOG_IMPORT_ENABLED = "true";
+    process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED = "true";
     const a = await prisma.tenant.create({ data: { name: "Import A", slug: `${stamp}-a`, type: "CLIENT" } });
     const b = await prisma.tenant.create({ data: { name: "Import B", slug: `${stamp}-b`, type: "CLIENT" } });
     ids.push(a.id, b.id);
     tenantA = a.id;
     tenantB = b.id;
     process.env.COMMERCE_CATALOG_IMPORT_TENANTS = `${a.id},${b.id}`;
+    process.env.COMMERCE_CATALOG_DISCOVERY_TENANTS = `${a.id},${b.id}`;
     await prisma.commerceConnection.create({
       data: {
         tenantId: tenantA,
@@ -84,6 +88,10 @@ describe("meta catalog import", { skip: localDb() ? false : "local database only
     else process.env.COMMERCE_CATALOG_IMPORT_ENABLED = previous;
     if (previousTenants == null) delete process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
     else process.env.COMMERCE_CATALOG_IMPORT_TENANTS = previousTenants;
+    if (previousDiscovery == null) delete process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED;
+    else process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED = previousDiscovery;
+    if (previousDiscoveryTenants == null) delete process.env.COMMERCE_CATALOG_DISCOVERY_TENANTS;
+    else process.env.COMMERCE_CATALOG_DISCOVERY_TENANTS = previousDiscoveryTenants;
     if (ids.length) await prisma.tenant.deleteMany({ where: { id: { in: ids } } });
     await prisma.$disconnect();
   });
@@ -188,6 +196,31 @@ describe("meta catalog import", { skip: localDb() ? false : "local database only
     const before = await prisma.commerceProduct.count({ where: { tenantId: tenantB } });
 
     process.env.COMMERCE_CATALOG_IMPORT_ENABLED = "false";
+    let importCalled = false;
+    const blocked = await importMetaCatalogProducts({
+      tenantId: tenantA,
+      retailerIds: ["NEW-SKU"],
+      fetchImpl: (async () => {
+        importCalled = true;
+        return Response.json({ data: [] });
+      }) as typeof fetch,
+    });
+    assert.equal(blocked.ok, false);
+    if (!blocked.ok) assert.equal(blocked.status, 503);
+    assert.equal(importCalled, false);
+    let readCalled = false;
+    const readOnly = await listMetaCatalogProducts(tenantA, (async () => {
+      readCalled = true;
+      return Response.json({ data: [qaItem()] });
+    }) as typeof fetch);
+    assert.equal(readOnly.ok, true);
+    if (!readOnly.ok || !("products" in readOnly)) return;
+    assert.equal(readOnly.discoveryEnabled, true);
+    assert.equal(readOnly.importEnabled, false);
+    assert.equal(readCalled, true);
+    assert.equal(readOnly.products.some((item) => item.retailerId === "ATLASNOW-QA-SHAPE-001"), true);
+
+    process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED = "false";
     let called = false;
     const disabled = await listMetaCatalogProducts(tenantA, (async () => {
       called = true;
@@ -196,10 +229,10 @@ describe("meta catalog import", { skip: localDb() ? false : "local database only
     assert.equal(disabled.ok, true);
     if (!disabled.ok || !("enabled" in disabled)) return;
     assert.equal(disabled.enabled, false);
+    assert.equal(disabled.discoveryEnabled, false);
     assert.equal(called, false);
-    const blocked = await importMetaCatalogProducts({ tenantId: tenantA, retailerIds: ["NEW-SKU"], fetchImpl: graphFetch([]) });
-    assert.equal(blocked.ok, false);
     assert.equal(await prisma.commerceProduct.count({ where: { tenantId: tenantB } }), before);
     process.env.COMMERCE_CATALOG_IMPORT_ENABLED = "true";
+    process.env.COMMERCE_CATALOG_DISCOVERY_ENABLED = "true";
   });
 });

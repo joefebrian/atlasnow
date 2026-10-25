@@ -108,4 +108,4 @@ Branch `feature/commerce-meta-catalog`. Draft pull request https://github.com/jo
 
 ## Next
 
-Review `docs/COMMERCE_SLICE_2_5_RELEASE.md` on the draft pull request. Do not merge. Do not deploy. Do not set any commerce switch. The order-capture migration stays out of a Slice 2.5 image until Milestone C is approved on its own. Local catalog export stays blocked. Import stays off unless the QA tenant is listed.
+Review the Slice 2.5 release fix on the draft pull request. Do not merge. Do not deploy. Do not set any commerce switch. The order-capture migration stays out of a Slice 2.5 image. The Commerce page does not query `CommerceOrder` while capture is off. Catalog discovery and import are separate gates. Local catalog export stays blocked.

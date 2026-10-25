@@ -39,7 +39,15 @@ function paymentLabel(status: string) {
   return status === "NOT_INITIATED" ? "Not started" : status;
 }
 
-export function OrdersInbox({ merchantName, orders }: { merchantName: string; orders: CommerceOrderView[] }) {
+export function OrdersInbox({
+  merchantName,
+  orders,
+  enabled,
+}: {
+  merchantName: string;
+  orders: CommerceOrderView[];
+  enabled: boolean;
+}) {
   return (
     <section className="an-card mb-4 overflow-hidden">
       <div className="border-b border-slate-100 px-4 py-3">
@@ -48,7 +56,9 @@ export function OrdersInbox({ merchantName, orders }: { merchantName: string; or
           WhatsApp catalog orders for {merchantName || "this brand"}. Payment is not started. The estimated total is not revenue.
         </p>
       </div>
-      {orders.length === 0 ? (
+      {!enabled ? (
+        <p className="px-4 py-4 text-sm text-slate-600">Order capture is off. WhatsApp catalog orders are not stored.</p>
+      ) : orders.length === 0 ? (
         <p className="px-4 py-4 text-sm text-slate-600">No catalog orders yet.</p>
       ) : (
         <div className="overflow-x-auto">

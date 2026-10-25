@@ -44,6 +44,8 @@ It creates `CommerceOrder` and `CommerceOrderLine`. Unique keys are `waMessageId
 
 The git branch contains this folder. An image built from the whole branch would apply it on boot. A Slice 2.5 image must omit this folder until `docs/COMMERCE_ORDER_CAPTURE.md` is accepted in a separate approval.
 
+The Commerce page and `GET /api/commerce/orders` call `listCommerceOrders`. That function returns an empty list when `COMMERCE_ORDER_CAPTURE_ENABLED` is not `true`, and it does not query Prisma. The page says order capture is off. Do not add this migration to make the page render.
+
 ### Slice 2.5 folders, still not approved to apply
 
 Both are additive. Neither enables a switch.
@@ -71,8 +73,10 @@ Applied on localhost:5433 only. Not on production.
 - `COMMERCE_PAYMENTS_ENABLED`
 - `COMMERCE_CATALOG_IMPORT_ENABLED`
 - `COMMERCE_CATALOG_IMPORT_TENANTS`
+- `COMMERCE_CATALOG_DISCOVERY_ENABLED`
+- `COMMERCE_CATALOG_DISCOVERY_TENANTS`
 
-Import runs only when the switch is `true` and the tenant id is in the comma-separated tenant list. An empty list allows no merchant. Setting the switch alone does not open import. The QA pilot below is the only listed tenant, and only after a separate approval. Demo brand `cmsz2tcnk0001coqz71pqqjul` stays off that list.
+Discovery and import are separate. `GET /api/commerce/catalog/products` reads Meta only when discovery is `true` and the tenant id is listed in `COMMERCE_CATALOG_DISCOVERY_TENANTS`. `POST` writes a product only when import is `true` and the tenant id is listed in `COMMERCE_CATALOG_IMPORT_TENANTS`. An empty list allows no merchant. Discovery does not enable the import POST. The QA pilot below is the only listed tenant, and only after a separate approval. Demo brand `cmsz2tcnk0001coqz71pqqjul` stays off both lists.
 
 ## Local catalog export
 
@@ -110,9 +114,9 @@ Tenant: AtlasNow Commerce QA, slug `atlasnow-commerce-qa`, id `commerceqa2026102
 Do not run this pilot in this change. It starts only after the deployment above is approved and the read-only check is approved on its own.
 
 1. Read-only. Switches stay unset. Open Commerce for that tenant. Confirm the catalog link, the masked test number, and that publish preview shows `wouldSend: false` and `networkCalled: false`. Confirm the page shows the local-export blocker. Do not download a local file. Do not import.
-2. Still read-only on Graph. After a separate approval, set only:
-   - `COMMERCE_CATALOG_IMPORT_ENABLED=true`
-   - `COMMERCE_CATALOG_IMPORT_TENANTS=commerceqa20261023tenant`
-   Restart. Load Meta Catalog Products for that tenant. Confirm `ATLASNOW-QA-SHAPE-001` is listed. Confirm another brand still sees import off and that its request does not call Graph.
-3. One import. Import that SKU once. Confirm one product row, Meta product id and retailer id stored, `lastImportedAt` set, `lastSyncedAt` empty, and a second import does not create a second row or overwrite the master. Confirm the container log has no `items_batch`.
-4. Stop. Unset both import variables unless a later approval says the QA tenant may keep read and import. Do not add another tenant id. Do not enable sync, polling, order capture, or payments.
+2. Read-only discovery. After a separate approval, set only:
+   - `COMMERCE_CATALOG_DISCOVERY_ENABLED=true`
+   - `COMMERCE_CATALOG_DISCOVERY_TENANTS=commerceqa20261023tenant`
+   Leave both import variables unset. Restart. Load Meta Catalog Products for that tenant. Confirm `ATLASNOW-QA-SHAPE-001` is listed and the import button is absent. `POST /api/commerce/catalog/products` returns 503. Confirm another brand still sees discovery off and that its request does not call Graph.
+3. One import. After a further approval, set `COMMERCE_CATALOG_IMPORT_ENABLED=true` and `COMMERCE_CATALOG_IMPORT_TENANTS=commerceqa20261023tenant`. Import that SKU once. Confirm one product row, Meta product id and retailer id stored, `lastImportedAt` set, `lastSyncedAt` empty, and a second import does not create a second row or overwrite the master. Confirm the container log has no `items_batch`.
+4. Stop. Unset the discovery and import variables unless a later approval says the QA tenant may keep read and import. Do not add another tenant id. Do not enable sync, polling, order capture, or payments.

@@ -3,7 +3,7 @@ import { readSession } from "@/lib/auth";
 import { canReadCommerce, canWriteCommerce } from "@/lib/commerce/access";
 import { emptyConnection } from "@/lib/commerce/connection";
 import { getCommerceConnection } from "@/lib/commerce/connection-service";
-import { listCommerceOrders } from "@/lib/commerce/order-capture";
+import { listCommerceOrders, orderCaptureEnabled } from "@/lib/commerce/order-capture";
 import {
   ensureCommerceReadiness,
   listCommerceProducts,
@@ -51,6 +51,7 @@ export default async function CommercePage({ searchParams }: Props) {
       commerceError={typeof commerceError === "string" ? commerceError.slice(0, 180) : ""}
       merchantName={clients.find((row) => row.id === tenantId)?.name ?? ""}
       orders={orders}
+      ordersEnabled={orderCaptureEnabled()}
     />
   );
 }
