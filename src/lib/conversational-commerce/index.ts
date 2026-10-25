@@ -18,3 +18,6 @@ export * from "./provider";
 export * from "./registry";
 export * from "./mock-provider";
 export * from "./orchestrator";
+export * from "./ports";
+export * from "./memory-store";
+export * from "./session-actor";

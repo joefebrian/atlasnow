@@ -1,10 +1,10 @@
 # AtlasNow development status
 
-Updated 2026-10-25. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
+Updated 2026-10-26. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
 
-## Conversational commerce M0, M1A, M1A.1, and M1A.2
+## Conversational commerce M0 through M1B
 
-In-memory orchestrator foundation on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
+In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. The Prisma schema is unchanged. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
 
 Working in unit tests only:
 
@@ -24,11 +24,22 @@ Working in unit tests only:
 - Missing attribution ids are not invented. Aggregated Search or Maps counts are not a person
 - Existing catalog order constants still map. This module does not import Prisma or call Graph
 
-Not built: tables, webhooks, Flows, gateway calls, native inventory, UI, feature flags, durable webhook dedupe, production RBAC, a live provider lookup.
+M1B, in unit tests only:
 
-Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md` and the five companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
+- Repository ports for intents, transactions, bookings, connections, payment attempts, idempotency, webhooks, events, attribution, and policy evidence
+- Tenant and location isolation, optimistic version checks, and a first-writer win for two overlapping snapshots
+- Restart rehydration of an unresolved timeout. A new booking waits for that provider's absence rule
+- One attempt identity, one provider reference, and one live capture. `EXPIRED` requires an authoritative provider read
+- Cancellation does not refund. A refund or chargeback does not change the booking
+- Caller `VERIFIED` stays unverified. An attested process can pass the existing fail-closed policy
+- Credential ports store a reference and reject secret bytes. Outlet health does not fall through to the tenant default
+- Session mapping follows `canReadCommerce` and `canWriteCommerce`. `BRANCH` stays scoped to `Membership.locationId` and still has no commerce permission
 
-Do not merge this into PR #1. Do not merge PR #2. Do not start M1B until a separate review.
+Not built: SQL tables, a Prisma adapter, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender.
+
+Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md`, `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`, and the companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
+
+Do not merge this into PR #1. Do not merge PR #2. Do not start M1C until a separate review.
 
 ## Active slice
 

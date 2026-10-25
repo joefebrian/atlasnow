@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **stop after M0, M1A, M1A.1, and M1A.2 contract corrections.** Do not start persistence, webhooks, Flows, payments, UI, or deploy from this document.
+Status: **M0 through M1B design and in-memory ports.** Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document. M1C is not authorized.
 
 ## Stack
 
@@ -108,11 +108,11 @@ All of these stay true after M1A:
 - PR #1 is not merged
 - No pilot workspace is created
 
-## M1B — recommended next slice
+## M1B — persistence design
 
-Do not start M1B from this plan. A separate review has to approve it.
+M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. The M1A.2 orchestrator still owns its own maps. M1C is not authorized.
 
-Recommended M1B, still without a production migration:
+The slice that was recommended, still without a production migration:
 
 1. Repository ports for transaction, booking, payment ledger, and idempotency, with an in-memory adapter and the same tests
 2. A reviewed table sketch that a human can reject. No SQL folder
@@ -133,11 +133,21 @@ Still not in M1B unless a later approval says so:
 
 Rejected as the next step: a localhost migration. The production image applies migrations on boot, and a folder that lands in an image is no longer local.
 
-## Unresolved items to settle before M1B code
+## Open before M1C
 
-- Confirm the payments-PRD state map (`DISPUTED` → `CHARGEBACK`, `NOT_INITIATED` → `NOT_STARTED`, unpaid `CANCELLED` → `FAILED`)
-- Decide whether manual staff confirmation can ever be level B
-- Name the first external booking vendor, or explicitly keep mocks only
-- Decide hold TTL
-- Decide `ctwa_clid` retention
-- Decide whether `EXPIRED` payment recovery from a provider read is in scope
+Settled for M1B, and still not a migration:
+
+- Payments-PRD words stay mapped as they were: `DISPUTED` → `CHARGEBACK`, `NOT_INITIATED` → `NOT_STARTED`. Unpaid `CANCELLED` stays `FAILED` on the catalog map. Conversational `EXPIRED` and `FAILED` change only after an authoritative provider read
+- The first booking vendor stays unnamed. Mocks only
+- No universal hold TTL. Provider expiry is stored when the provider sends it. Native expiry waits for a policy id
+- No universal `ctwa_clid` retention period. Erasure is explicit
+- Manual staff confirmation is not level B unless the booking is confirmed and the provider reference is authoritative
+
+Still open:
+
+- Wire the M1A.2 orchestrator through the ports without changing its tests
+- Choose KMS or the existing AES-256-GCM helper before any real credential row
+- Choose a legal retention interval before storing one
+- Decide whether a chargeback blocks a later capture. Today only `PAID` and `PARTIALLY_REFUNDED` block a second capture
+- Split tender
+- Whether `BRANCH` ever gains commerce read, using the location already on the membership

@@ -98,6 +98,10 @@ The poll worker loads the product again after `check_batch_request_status` and t
 
 `POST /api/internal/commerce/poll` accepts a bearer `COMMERCE_POLL_SECRET` and polls only when `COMMERCE_CATALOG_POLL_ENABLED=true`. Both are unset. The server process does not start a timer. The row lock stays with the worker until that tick returns.
 
+## 2026-10-26 — Conversational commerce M1B is ports and a schema sketch
+
+Persistence boundaries for the orchestrator are repository interfaces and a deterministic in-memory store. The schema sketch is `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It is not applied. `prisma/schema.prisma` is unchanged. `CommerceOrder` stays the catalog-order domain and is not a foreign key. Provider secrets stay references. The existing AES-256-GCM helper is the future ciphertext writer, and this milestone does not store a secret. `VERIFIED` policy evidence requires an attested process. There is no universal hold TTL and no universal click-id retention period. External delivery is at-least-once with idempotent effects. Split tender is not implemented. The M1A.2 orchestrator is not moved onto the ports. YOLA FUN stays NO-GO. M1C is not started.
+
 ## 2026-10-26 — Conversational commerce M1A.2 binds reconciliation and payment attempts
 
 Timeout reconciliation uses the stored tenant, location, provider, idempotency key, and request hash. A later command that names another provider or location does not call that provider and does not prove the original booking is absent. A recovered booking must match the original slot. Payment attempts no longer share one transaction ledger. The same attempt id cannot be overwritten with a different amount, provider, or transaction. Refunds and chargebacks stay on the attempt that owns the provider reference. The transaction status is derived from the attempt ledgers, and a second open capture does not add revenue. An empty provider reference cannot verify payment. The internal HMAC is not a substitute for a payment gateway's own webhook verification. `occurredAt` and sequence count only when they are inside that HMAC. No migration, route, gateway, or Flow was added. M1B is not started.
