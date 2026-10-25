@@ -20,7 +20,7 @@ import { refFromMaterial, phoneCorrelation, stableHash } from "./ids";
 import { createMemoryCommerceStore, signPolicyAttestation } from "./memory-store";
 import { trustPaymentNotice, type PaymentLedger, type PaymentProof, type RawPaymentNotice } from "./payment";
 import { evaluateEligibility, type ApprovalEvidence, type MerchantEligibility, type OfferingCategory } from "./policy";
-import type { ProviderErrorCode } from "./provider";
+import type { OutcomeCertainty, ProviderErrorCode } from "./provider";
 import type {
   CommercePersistence,
   ConnectionCapabilities,
@@ -201,45 +201,26 @@ export async function reserve(
   };
   const response = hold ? await resolved.provider.holdReservation(request) : await resolved.provider.createBooking(request);
 
-  if (!response.ok && response.code === "TIMEOUT") {
-    const persisted = ports.runAtomic((draft): PortResult<unknown> => {
-      const timeout = draft.idempotency.recordTimeout(command.actor, {
-        tenantId: command.tenantId,
-        locationId: command.locationId,
-        providerId: command.providerId,
-        idempotencyKey: command.idempotencyKey,
-        requestHash: hash,
-        slotKey: slotKeyOf(command),
-        transactionRef,
-        merchantConfirmed: command.merchantConfirmed,
-        experience: command.experience,
-        category: command.category,
-        offeringId: command.offeringId,
-        startsAt: command.startsAt,
-      });
-      if (!timeout.ok) return timeout;
-      if (timeout.value.absenceVerified) {
-        const cleared = draft.idempotency.clearAbsence(command.actor, command.tenantId, command.idempotencyKey);
-        if (!cleared.ok) return cleared;
-      }
-      const intent = saveIntent(draft, command);
-      if (!intent.ok) return intent;
-      return appendEvent(draft, command.actor, command.tenantId, transactionRef, "provider.timeout", deps.now, {
-        providerId: command.providerId,
-      });
-    });
-    if (!persisted.ok) return failure(asReserveCode(persisted.code), persisted.message, false);
-    deps.crash?.afterTimeout?.();
-    const transaction = findTransaction(ports.exportSnapshot(), command.tenantId, transactionRef);
-    if (!transaction) return unresolved("TIMEOUT", response.message, null);
-    return unresolved("TIMEOUT", response.message, publicTransaction(transaction));
+  if (!response.ok && mayHaveCommitted(response)) {
+    return holdUnresolved(ports, command, hash, transactionRef, response.code, response.message, deps);
   }
 
   if (!response.ok) return deny(ports, command, hash, response.code, response.message);
 
   const external = resolved.mode === "EXTERNAL_API" || resolved.mode === "EXTERNAL_CHECKOUT";
-  if ((response.data.state === "CONFIRMED" || response.data.state === "HELD") && external && !response.data.providerReference) {
-    return deny(ports, command, hash, "MISSING_REFERENCE", "The external provider did not return a booking reference.");
+  const referenceMissing =
+    !response.data.bookingRef.trim() ||
+    ((response.data.state === "CONFIRMED" || response.data.state === "HELD") && external && !response.data.providerReference?.trim());
+  if (referenceMissing) {
+    return holdUnresolved(
+      ports,
+      command,
+      hash,
+      transactionRef,
+      "MISSING_REFERENCE",
+      "The provider result did not include a usable booking reference.",
+      deps,
+    );
   }
   deps.crash?.beforePersist?.();
 
@@ -379,8 +360,9 @@ export async function cancelReservation(
   command: { actor: Actor; bookingRef: string; idempotencyKey: string },
   deps: { registry: ProviderRegistry; state: OrchestratorState; now: string },
 ): Promise<ReserveResult> {
-  const booking = deps.state.persistence.exportSnapshot().bookings.find((row) => row.bookingRef === command.bookingRef);
-  if (!booking) return failure("NOT_FOUND", "Booking was not found.", false);
+  const bookingSnap = deps.state.persistence.exportSnapshot();
+  const booking = bookingForTenant(bookingSnap, command.actor.tenantId, command.bookingRef);
+  if (!booking) return failure(foreignBookingCode(bookingSnap, command.actor.tenantId, command.bookingRef), "Booking was not found.", false);
   const allowed = authorize(command.actor, booking, "write");
   if (!allowed.ok) return failure(allowed.code, "Booking is outside this actor.", false);
   const resolved = deps.registry.resolve(booking, booking.providerId);
@@ -435,8 +417,9 @@ export function openPaymentAttempt(
 ):
   | { ok: true; replay: boolean }
   | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "MISMATCH" | "ATTEMPT_CONFLICT" } {
-  const transaction = state.persistence.exportSnapshot().transactions.find((row) => row.transactionRef === input.transactionRef);
-  if (!transaction) return { ok: false, code: "NOT_FOUND" };
+  const paymentSnap = state.persistence.exportSnapshot();
+  const transaction = transactionForTenant(paymentSnap, actor.tenantId, input.transactionRef);
+  if (!transaction) return { ok: false, code: foreignTransactionCode(paymentSnap, actor.tenantId, input.transactionRef) };
   const allowed = authorize(actor, transaction, "write");
   if (!allowed.ok) return { ok: false, code: allowed.code };
   if (!input.attemptRef.trim() || !input.providerId.trim()) return { ok: false, code: "MISMATCH" };
@@ -489,8 +472,8 @@ export function recordPayment(
         | "ATTEMPT_CONFLICT";
     } {
   const snap = state.persistence.exportSnapshot();
-  const transaction = snap.transactions.find((row) => row.transactionRef === input.transactionRef);
-  if (!transaction) return { ok: false, code: "NOT_FOUND" };
+  const transaction = transactionForTenant(snap, actor.tenantId, input.transactionRef);
+  if (!transaction) return { ok: false, code: foreignTransactionCode(snap, actor.tenantId, input.transactionRef) };
   const allowed = authorize(actor, transaction, "write");
   if (!allowed.ok) return { ok: false, code: allowed.code };
   const attempt = snap.attempts.find((row) => row.tenantId === transaction.tenantId && row.attemptRef === input.notice.attemptRef);
@@ -542,8 +525,9 @@ export function readBooking(
   actor: Actor,
   bookingRef: string,
 ): { ok: true; booking: Booking } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" } {
-  const booking = state.persistence.exportSnapshot().bookings.find((row) => row.bookingRef === bookingRef);
-  if (!booking) return { ok: false, code: "NOT_FOUND" };
+  const bookingSnap = state.persistence.exportSnapshot();
+  const booking = bookingForTenant(bookingSnap, actor.tenantId, bookingRef);
+  if (!booking) return { ok: false, code: foreignBookingCode(bookingSnap, actor.tenantId, bookingRef) };
   const allowed = authorize(actor, booking, "read");
   if (!allowed.ok) return { ok: false, code: allowed.code };
   return { ok: true, booking: publicBooking(booking) };
@@ -624,6 +608,58 @@ function replayReserve(
     return { ...unresolved("TIMEOUT", "The reservation was claimed and has no authoritative outcome.", transaction ? publicTransaction(transaction) : null), replay: true };
   }
   return null;
+}
+
+/**
+ * Keeps the claim envelope when the provider may already have a reservation.
+ * Does not call finishDenied and does not call the provider.
+ */
+function holdUnresolved(
+  ports: CommercePersistence,
+  command: ReserveCommand,
+  hash: string,
+  transactionRef: string,
+  code: ReserveResult["code"],
+  message: string,
+  deps: { now: string; crash?: OrchestratorCrash },
+): ReserveResult {
+  const persisted = ports.runAtomic((draft): PortResult<unknown> => {
+    const timeout = draft.idempotency.recordTimeout(command.actor, {
+      tenantId: command.tenantId,
+      locationId: command.locationId,
+      providerId: command.providerId,
+      idempotencyKey: command.idempotencyKey,
+      requestHash: hash,
+      slotKey: slotKeyOf(command),
+      transactionRef,
+      merchantConfirmed: command.merchantConfirmed,
+      experience: command.experience,
+      category: command.category,
+      offeringId: command.offeringId,
+      startsAt: command.startsAt,
+    });
+    if (!timeout.ok) return timeout;
+    if (timeout.value.absenceVerified) {
+      const cleared = draft.idempotency.clearAbsence(command.actor, command.tenantId, command.idempotencyKey);
+      if (!cleared.ok) return cleared;
+    }
+    const intent = saveIntent(draft, command);
+    if (!intent.ok) return intent;
+    const eventType = code === "TIMEOUT" ? "provider.timeout" : "provider.uncertain";
+    return appendEvent(draft, command.actor, command.tenantId, transactionRef, eventType, deps.now, {
+      providerId: command.providerId,
+      code,
+    });
+  });
+  if (!persisted.ok) return failure(asReserveCode(persisted.code), persisted.message, false);
+  deps.crash?.afterTimeout?.();
+  const transaction = findTransaction(ports.exportSnapshot(), command.tenantId, transactionRef);
+  if (!transaction) return unresolved(code, message, null);
+  return unresolved(code, message, publicTransaction(transaction));
+}
+
+function mayHaveCommitted(failure: { outcomeCertainty?: OutcomeCertainty }): boolean {
+  return failure.outcomeCertainty !== "NO_COMMIT";
 }
 
 function deny(ports: CommercePersistence, command: ReserveCommand, hash: string, code: ReserveResult["code"], message: string): ReserveResult {
@@ -893,6 +929,30 @@ function requestFromInflight(pending: StoredInflight) {
     startsAt: pending.startsAt || (split >= 0 ? rest.slice(split + 1) : ""),
     merchantConfirmed: pending.merchantConfirmed,
   };
+}
+
+function bookingForTenant(snap: ReturnType<CommercePersistence["exportSnapshot"]>, tenantId: string, bookingRef: string) {
+  return snap.bookings.find((row) => row.tenantId === tenantId && row.bookingRef === bookingRef);
+}
+
+function transactionForTenant(snap: ReturnType<CommercePersistence["exportSnapshot"]>, tenantId: string, transactionRef: string) {
+  return snap.transactions.find((row) => row.tenantId === tenantId && row.transactionRef === transactionRef);
+}
+
+function foreignBookingCode(
+  snap: ReturnType<CommercePersistence["exportSnapshot"]>,
+  tenantId: string,
+  bookingRef: string,
+): "NOT_FOUND" | "CROSS_TENANT" {
+  return snap.bookings.some((row) => row.bookingRef === bookingRef && row.tenantId !== tenantId) ? "CROSS_TENANT" : "NOT_FOUND";
+}
+
+function foreignTransactionCode(
+  snap: ReturnType<CommercePersistence["exportSnapshot"]>,
+  tenantId: string,
+  transactionRef: string,
+): "NOT_FOUND" | "CROSS_TENANT" {
+  return snap.transactions.some((row) => row.transactionRef === transactionRef && row.tenantId !== tenantId) ? "CROSS_TENANT" : "NOT_FOUND";
 }
 
 function findInflight(snap: ReturnType<CommercePersistence["exportSnapshot"]>, tenantId: string, idempotencyKey: string) {

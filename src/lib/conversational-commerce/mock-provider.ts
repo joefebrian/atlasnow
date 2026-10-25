@@ -35,6 +35,13 @@ export type MockOptions = {
    * guaranteesIdempotency is true.
    */
   ambiguousTimeout?: boolean;
+  /**
+   * The provider stores a reservation, then returns an uncertain result.
+   * INCOMPLETE_REFERENCE keeps the stored reference and omits it from the response.
+   * A second create with the same key adds another reservation unless
+   * guaranteesIdempotency is true.
+   */
+  commitThen?: "RETRYABLE" | "UNAVAILABLE" | "INCOMPLETE_REFERENCE";
   /** Documented provider promise. Distinct from merely accepting a key. */
   guaranteesIdempotency?: boolean;
   /**
@@ -70,7 +77,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
 
   function failTenant(tenantId: string): ProviderResult<never> | null {
     if (tenantId === options.boundTenantId) return null;
-    return providerError("NOT_AUTHORITATIVE", "Tenant does not match this provider connection.");
+    return providerError("NOT_AUTHORITATIVE", "Tenant does not match this provider connection.", "NO_COMMIT");
   }
 
   function gate(operation: ProviderOperation, tenantId: string, idempotencyKey?: string, requestHash?: string): ProviderResult<never> | null {
@@ -79,13 +86,13 @@ export function createMockProvider(options: MockOptions): MockProvider {
     if (denied) return denied;
     if (capabilities.operations[operation] !== "supported") return unsupported(operation);
     if (options.unavailableOn?.includes(operation)) {
-      return providerError("UNAVAILABLE", `${operation} is unavailable.`);
+      return providerError("UNAVAILABLE", `${operation} is unavailable.`, "NO_COMMIT");
     }
     if (options.timeoutOn?.includes(operation)) {
       if (idempotencyKey && requestHash) {
         const previous = inflight.get(idempotencyKey);
         if (previous && previous !== requestHash) {
-          return providerError("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.");
+          return providerError("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.", "NO_COMMIT");
         }
         inflight.set(idempotencyKey, requestHash);
       }
@@ -107,7 +114,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
     const existing = bookings.get(existingRef);
     if (!existing) return null;
     if (existing.requestHash !== requestHash) {
-      return providerError("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.");
+      return providerError("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.", "NO_COMMIT");
     }
     return { ok: true, data: toPublic(existing), replay: true };
   }
@@ -116,7 +123,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
     if (options.mode === "MANUAL") return null;
     for (const row of bookings.values()) {
       if (row.slotKey === slotKey && row.idempotencyKey !== idempotencyKey && bookingOccupiesCapacity(row.state)) {
-        return providerError("CONFLICT", "That slot is already held or confirmed.");
+        return providerError("CONFLICT", "That slot is already held or confirmed.", "NO_COMMIT");
       }
     }
     return null;
@@ -124,13 +131,14 @@ export function createMockProvider(options: MockOptions): MockProvider {
 
   async function create(input: CreateBookingCommand, state: BookingState, authoritative: boolean): Promise<ProviderResult<ProviderBooking>> {
     const operation: ProviderOperation = state === "HELD" ? "holdReservation" : "createBooking";
-    if (options.ambiguousTimeout) return ambiguousCommit(input, state, authoritative, operation);
+    if (options.ambiguousTimeout) return ambiguousCommit(input, state, authoritative, operation, "TIMEOUT");
+    if (options.commitThen) return ambiguousCommit(input, state, authoritative, operation, options.commitThen);
     const blocked = gate(operation, input.tenantId, input.idempotencyKey, input.requestHash);
     if (blocked) return blocked;
     const replay = replayOrConflict(input.idempotencyKey, input.requestHash);
     if (replay) return replay;
     if (options.mode === "EXTERNAL_API" && options.omitExternalReference) {
-      return providerError("MISSING_REFERENCE", "The external provider did not return a booking reference.");
+      return providerError("MISSING_REFERENCE", "The external provider did not return a booking reference.", "NO_COMMIT");
     }
     const slotKey = slotOf(input);
     const conflict = occupy(slotKey, input.idempotencyKey);
@@ -196,7 +204,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
       const blocked = gate("getQuote", input.tenantId);
       if (blocked) return blocked;
       if (input.unitPriceIdr == null || !Number.isSafeInteger(input.unitPriceIdr) || input.unitPriceIdr < 1) {
-        return providerError("UNAVAILABLE", "No whole-IDR price was supplied. The provider will not invent one.");
+        return providerError("UNAVAILABLE", "No whole-IDR price was supplied. The provider will not invent one.", "NO_COMMIT");
       }
       return { ok: true, replay: false, data: { currency: "IDR", amountIdr: input.unitPriceIdr, guaranteed: false } };
     },
@@ -216,16 +224,16 @@ export function createMockProvider(options: MockOptions): MockProvider {
       if (blocked) return blocked;
       const row = bookings.get(input.bookingRef);
       if (!row || row.tenantId !== input.tenantId) {
-        return providerError("MISSING_REFERENCE", "No booking exists for that reference.");
+        return providerError("MISSING_REFERENCE", "No booking exists for that reference.", "NO_COMMIT");
       }
       if (options.mode === "MANUAL" && !input.merchantConfirmed) {
-        return providerError("NOT_AUTHORITATIVE", "Manual confirmation was not provided. An inquiry is not a booking.");
+        return providerError("NOT_AUTHORITATIVE", "Manual confirmation was not provided. An inquiry is not a booking.", "NO_COMMIT");
       }
       if (options.mode === "EXTERNAL_API" && (options.omitExternalReference || !row.providerReference)) {
-        return providerError("MISSING_REFERENCE", "The external provider did not return a booking reference.");
+        return providerError("MISSING_REFERENCE", "The external provider did not return a booking reference.", "NO_COMMIT");
       }
       const move = transitionBooking(row.state, "CONFIRMED", { supportsHold: capabilities.supportsHold });
-      if (!move.ok) return providerError("UNAVAILABLE", `Cannot confirm from ${row.state}.`);
+      if (!move.ok) return providerError("UNAVAILABLE", `Cannot confirm from ${row.state}.`, "NO_COMMIT");
       row.state = "CONFIRMED";
       if (options.mode === "MANUAL") row.referenceAuthoritative = false;
       return { ok: true, data: toPublic(row), replay: false };
@@ -238,10 +246,10 @@ export function createMockProvider(options: MockOptions): MockProvider {
       if (blocked) return blocked;
       const row = bookings.get(input.bookingRef);
       if (!row || row.tenantId !== input.tenantId) {
-        return providerError("MISSING_REFERENCE", "No booking exists for that reference.");
+        return providerError("MISSING_REFERENCE", "No booking exists for that reference.", "NO_COMMIT");
       }
       const move = transitionBooking(row.state, "CANCELLED", { supportsHold: capabilities.supportsHold });
-      if (!move.ok) return providerError("UNAVAILABLE", `Cannot cancel from ${row.state}.`);
+      if (!move.ok) return providerError("UNAVAILABLE", `Cannot cancel from ${row.state}.`, "NO_COMMIT");
       row.state = "CANCELLED";
       return { ok: true, data: toPublic(row), replay: false };
     },
@@ -279,6 +287,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
     state: BookingState,
     authoritative: boolean,
     operation: ProviderOperation,
+    result: "TIMEOUT" | "RETRYABLE" | "UNAVAILABLE" | "INCOMPLETE_REFERENCE",
   ): ProviderResult<ProviderBooking> {
     calls.push(operation);
     const denied = failTenant(input.tenantId);
@@ -296,7 +305,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
         bookingRef,
         idempotencyKey: `${input.idempotencyKey}#${bookings.size}`,
       });
-      return providerError("TIMEOUT", "Timed out. A second reservation was committed because this provider does not guarantee idempotency.");
+      return uncertainResult(result, "A second reservation was committed because this provider does not guarantee idempotency.");
     }
     const slotKey = slotOf(input);
     const bookingRef = refFromMaterial("CBK", `${input.tenantId}:${input.idempotencyKey}:${slotKey}`);
@@ -315,7 +324,18 @@ export function createMockProvider(options: MockOptions): MockProvider {
     };
     bookings.set(bookingRef, row);
     byKey.set(input.idempotencyKey, bookingRef);
-    return providerError("TIMEOUT", "Timed out after the provider committed a reservation.");
+    if (result === "INCOMPLETE_REFERENCE") {
+      return { ok: true, data: { ...toPublic(row), providerReference: null }, replay: false };
+    }
+    return uncertainResult(result, "The provider committed a reservation and then returned an uncertain result.");
+  }
+
+  function uncertainResult(
+    result: "TIMEOUT" | "RETRYABLE" | "UNAVAILABLE" | "INCOMPLETE_REFERENCE",
+    message: string,
+  ): ProviderResult<ProviderBooking> {
+    if (result === "INCOMPLETE_REFERENCE") return providerError("RETRYABLE", message);
+    return providerError(result, message);
   }
 
   async function lookup(input: BookingLookup, operation: ProviderOperation): Promise<ProviderResult<ProviderBooking>> {
@@ -323,7 +343,7 @@ export function createMockProvider(options: MockOptions): MockProvider {
     if (blocked) return blocked;
     const row = bookings.get(input.bookingRef);
     if (!row || row.tenantId !== input.tenantId) {
-      return providerError("MISSING_REFERENCE", "No booking exists for that reference.");
+      return providerError("MISSING_REFERENCE", "No booking exists for that reference.", "NO_COMMIT");
     }
     return { ok: true, data: toPublic(row), replay: false };
   }

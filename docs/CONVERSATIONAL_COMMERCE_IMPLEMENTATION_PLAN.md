@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **M0 through M1C.1 in memory.** M1C wires the orchestrator through the ports. M1C.1 hardens claim replay, payment trust, and crash recovery. Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document.
+Status: **M0 through M1C.2 in memory.** M1C wires the orchestrator through the ports. M1C.1 hardens claim replay, payment trust, and crash recovery. M1C.2 separates definitive no-commit failures from outcomes that may already be committed, and resolves references by tenant. Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document.
 
 ## Stack
 
@@ -110,7 +110,7 @@ All of these stay true after M1A:
 
 ## M1B — persistence design
 
-M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. M1B.1 corrects copies, provider-mode checks, scoped policy evidence, connection-scoped webhook identity, composite location keys in the sketch, and the concurrency simulation. M1C moves the orchestrator onto those ports and removes the private maps as a second writer. M1C.1 stores the operation envelope with the claim, stops a losing claim from calling the provider, and rejects a forged payment event at the port. It still does not add SQL, a route, or a gateway.
+M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. M1B.1 corrects copies, provider-mode checks, scoped policy evidence, connection-scoped webhook identity, composite location keys in the sketch, and the concurrency simulation. M1C moves the orchestrator onto those ports and removes the private maps as a second writer. M1C.1 stores the operation envelope with the claim, stops a losing claim from calling the provider, and rejects a forged payment event at the port. M1C.2 keeps that envelope for any provider result that is not explicit `NO_COMMIT`, including `RETRYABLE`, `UNAVAILABLE`, and a success that omits a usable booking reference. It also looks up bookings and transactions by the authenticated tenant and the reference. It still does not add SQL, a route, or a gateway.
 
 The slice that was recommended, still without a production migration:
 
@@ -135,15 +135,17 @@ Rejected as the next step: a localhost migration. The production image applies m
 
 ## Open before a SQL adapter
 
-Still open after M1C.1:
+Still open after M1C.2:
 
 - The claim envelope, the single-winner claim, and the absence retry must become one database transaction. That transaction must not call the provider
 - `settleConcurrent` is still an in-memory merge, not a row lock
 - Trusted payment evidence is an in-process marker after the test HMAC. A real adapter must verify the gateway signature or an authoritative read before it can mint that evidence
+- Outcome certainty is an in-process field. A SQL or vendor adapter must set `NO_COMMIT` only with proof that no reservation was created. An error code is not that proof. Unknown certainty stays `PENDING_RESOLUTION`
+- Booking and transaction references are tenant-scoped. Query `tenantId` and the reference together. Do not add a global unique on the reference string. The in-memory compatibility maps that key those rows by reference alone are not tenant-safe and must not become the SQL lookup
 - Exactly-once external delivery is not claimed
 - Offer-specific Meta exception rows are not stored. The test attestation is not Meta approval
 
-Settled through M1C.1, and still not a migration:
+Settled through M1C.2, and still not a migration:
 
 - Payments-PRD words stay mapped as they were: `DISPUTED` → `CHARGEBACK`, `NOT_INITIATED` → `NOT_STARTED`. Unpaid `CANCELLED` stays `FAILED` on the catalog map. Conversational `EXPIRED` and `FAILED` change only after an authoritative provider read
 - The first booking vendor stays unnamed. Mocks only

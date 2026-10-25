@@ -28,10 +28,24 @@ export const PROVIDER_ERROR_CODES = [
 ] as const;
 export type ProviderErrorCode = (typeof PROVIDER_ERROR_CODES)[number];
 
+/**
+ * Whether this response proves the provider did not create a reservation.
+ * NO_COMMIT is safe to close locally.
+ * MAY_COMMIT means the remote call may already have a reservation.
+ * A missing value means the same as MAY_COMMIT.
+ */
+export const OUTCOME_CERTAINTIES = ["NO_COMMIT", "MAY_COMMIT"] as const;
+export type OutcomeCertainty = (typeof OUTCOME_CERTAINTIES)[number];
+
 export type ProviderFailure = {
   ok: false;
   code: ProviderErrorCode;
   retryable: boolean;
+  /**
+   * Independent of `code`. RETRYABLE, UNAVAILABLE, and TIMEOUT do not by
+   * themselves prove that the provider created nothing.
+   */
+  outcomeCertainty: OutcomeCertainty;
   message: string;
 };
 
@@ -169,10 +183,19 @@ export interface BookingProvider {
 
 const RETRYABLE: ReadonlySet<ProviderErrorCode> = new Set(["TIMEOUT", "RETRYABLE", "UNAVAILABLE"]);
 
-export function providerError(code: ProviderErrorCode, message: string): ProviderFailure {
-  return { ok: false, code, retryable: RETRYABLE.has(code), message };
+/**
+ * Builds a provider failure.
+ * Certainty defaults to MAY_COMMIT. Unknown certainty stays unresolved.
+ * Pass NO_COMMIT only when this call proved that no reservation was created.
+ */
+export function providerError(
+  code: ProviderErrorCode,
+  message: string,
+  outcomeCertainty: OutcomeCertainty = "MAY_COMMIT",
+): ProviderFailure {
+  return { ok: false, code, retryable: RETRYABLE.has(code), outcomeCertainty, message };
 }
 
 export function unsupported(operation: ProviderOperation): ProviderFailure {
-  return providerError("UNSUPPORTED", `${operation} is not offered by this provider.`);
+  return providerError("UNSUPPORTED", `${operation} is not offered by this provider.`, "NO_COMMIT");
 }

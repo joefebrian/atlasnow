@@ -1,6 +1,6 @@
 # Conversational commerce persistence (M1B)
 
-Status: **design and in-memory ports.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. M1C runs the orchestrator through those ports and the in-memory adapter. M1C.1 closes the claim, payment, and crash boundaries. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. No gateway client. A SQL adapter is not authorized.
+Status: **design and in-memory ports.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. M1C runs the orchestrator through those ports and the in-memory adapter. M1C.1 closes the claim, payment, and crash boundaries. M1C.2 keeps an uncertain provider result unresolved and looks up tenant-scoped references by the authenticated tenant. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. No gateway client. A SQL adapter is not authorized.
 
 The runnable contract is `src/lib/conversational-commerce/ports.ts` and `memory-store.ts`. This document is the table sketch a reviewer can reject before any SQL is added.
 
@@ -37,7 +37,7 @@ Processing is **at-least-once with idempotent effects**. This design does not cl
 1. Validate the actor, the phone-correlation rule, fail-closed policy, the registry, provider capabilities, and stored approval.
 2. Atomically claim the operation. The same write stores the idempotency row as `IN_PROGRESS`, the inflight envelope, and a `PENDING_RESOLUTION` transaction. The envelope keeps tenant, location, provider connection, idempotency key, request hash, offering, requested start, slot, and the recovery fields. This happens before any provider call.
 3. Call the mock provider only when `claim` returns `replay: false`. That is a new claim, or the single retry after authoritative absence has been consumed inside the claim. `replay: true` rereads the repository. `COMPLETED` returns the stored outcome. `PENDING_RESOLUTION` and `IN_PROGRESS` stay unresolved and do not call the provider. A different payload returns `IDEMPOTENCY_CONFLICT`. Two workers can both pass the precheck; only the worker that wins the claim may create or hold.
-4. Atomically persist the booking, or mark the existing envelope `PENDING_RESOLUTION` when the provider times out. A provider success followed by a failed local write stays unresolved. It is not closed as a denial.
+4. Atomically persist the booking, or keep the existing envelope `PENDING_RESOLUTION` when the provider outcome may already be committed. `providerError` defaults `outcomeCertainty` to `MAY_COMMIT`. A missing certainty is the same. `RETRYABLE`, `UNAVAILABLE`, and `TIMEOUT` do not prove that no reservation exists. A success with a blank booking reference, or an external held or confirmed booking with a blank provider reference, also stays unresolved (`MISSING_REFERENCE`). Only explicit `NO_COMMIT` calls `finishDenied`, completes the idempotency key, and drops the envelope. A provider success followed by a failed local write stays unresolved. It is not closed as a denial. `holdUnresolved` writes only through `runAtomic`. It does not call the provider.
 5. After restart, recovery reads the envelope and queries the original provider. A confirmed external booking is adopted under the original transaction. A missing local row is not proof that the provider has no reservation. Authoritative absence allows one later create. A non-authoritative empty lookup does not. `guaranteesIdempotency` may retry the same operation during reconciliation. It does not let the losing `reserve` call the provider. A terminal provider state fails the transaction. Human release does not authorize another create.
 
 A provider-issued booking reference is copied from the mock result. The command cannot supply one. External checkout never opens a reservation. A manual connection cannot store an authoritative reference.
@@ -50,7 +50,9 @@ Real offer-specific Meta exceptions need another row keyed by offering id. The c
 
 `markApplied` requires write permission on the webhook connection's own tenant and location. Tenant-wide write is not enough for an outlet connection. Webhook dedupe stays `connectionId:eventId`. No webhook route is mounted.
 
-A crash after the claim leaves the envelope in place, so reconciliation can find the original provider. The next `reserve` does not treat a missing local booking as a new create. Restart reloads the snapshot. Reconciliation still uses the original provider. This is not exactly-once delivery.
+A crash after the claim leaves the envelope in place, so reconciliation can find the original provider. The next `reserve` does not treat a missing local booking as a new create. Restart reloads the snapshot. Reconciliation still uses the original provider, connection, location, and idempotency key. This is not exactly-once delivery.
+
+`readBooking`, `openPaymentAttempt`, `recordPayment`, and `cancelReservation` select the row with the actor's `tenantId` and the reference, then apply the location check. A reference that exists only on another tenant returns `CROSS_TENANT` and does not include that row. A missing reference with no other tenant returns `NOT_FOUND`. Two tenants may store the same internal reference string. The sketch primary keys are already `("tenantId", "bookingRef")` and `("tenantId", "transactionRef")`. A SQL adapter must query both columns. Do not add a global unique on the reference string. The in-memory snapshot maps that key a booking or transaction by reference alone are a test view. They are not the lookup for those four operations, and a SQL adapter must not copy that keying.
 
 ## Candidate tables
 
@@ -358,7 +360,7 @@ Webhook delivery is at-least-once. If the process dies after the dedupe insert a
 
 ## Recovery
 
-A timeout stores the original tenant, location, provider, idempotency key, request hash, and slot before anyone treats the call as success or failure. Restart reloads that inflight row. A new create stays blocked.
+An uncertain provider result stores the original tenant, location, provider, idempotency key, request hash, and slot before anyone treats the call as success or failure. A timeout is one such result. `RETRYABLE`, `UNAVAILABLE`, unknown certainty, and a committed booking whose response omits a usable reference use the same envelope. Restart reloads that inflight row. A new create stays blocked. An error code alone is not proof of no commit. The adapter must set `NO_COMMIT` only when it has proof.
 
 An empty provider lookup authorizes a new create only when all of these are true:
 

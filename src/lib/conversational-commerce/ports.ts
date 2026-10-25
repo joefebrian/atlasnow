@@ -464,7 +464,10 @@ export interface IdempotencyRepository {
       category: OfferingCategory;
     },
   ): PortResult<StoredIdempotency>;
-  /** Remembers a denial. Does not create a booking or a transaction. */
+  /**
+   * Closes a definitive no-commit denial. Does not create a booking.
+   * An uncertain provider result must not call this. The envelope stays for reconciliation.
+   */
   finishDenied(
     actor: Actor,
     input: { tenantId: string; locationId: string; idempotencyKey: string; requestHash: string; outcomeCode: string },
