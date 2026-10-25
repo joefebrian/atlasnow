@@ -17,7 +17,7 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npx tsc --noEmit
-      - run: npx tsx --test src/lib/commerce/connection.test.ts src/lib/commerce/validate.test.ts src/lib/nav-access.test.ts
+      - run: npx tsx --test src/lib/commerce/connection.test.ts src/lib/commerce/validate.test.ts src/lib/nav-access.test.ts src/lib/commerce/catalog-import.test.ts src/lib/commerce/catalog-feed.test.ts src/lib/commerce/catalog-publish.test.ts
 
   db:
     runs-on: ubuntu-latest
@@ -48,3 +48,5 @@ jobs:
       - run: npx prisma generate
       - run: npx prisma migrate deploy
       - run: npx tsx --test src/lib/commerce/service.db.test.ts
+      - run: npx tsx --test src/lib/commerce/catalog-import.db.test.ts
+      - run: npx tsx --test src/lib/commerce/catalog-bidirectional.db.test.ts
