@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { listCatalogItems } from "@/lib/commerce/meta-graph";
-import { parseIdrAmount, previewCatalogItem, type CatalogPreviewItem } from "@/lib/commerce/catalog-import";
+import { catalogImportEnabled, parseIdrAmount, previewCatalogItem, type CatalogPreviewItem } from "@/lib/commerce/catalog-import";
 import type { RemoteCatalogRow } from "@/lib/commerce/meta-graph";
 
 const qa = (overrides?: Partial<RemoteCatalogRow>): RemoteCatalogRow => ({
@@ -18,6 +18,31 @@ const qa = (overrides?: Partial<RemoteCatalogRow>): RemoteCatalogRow => ({
   groupId: "",
   variantKeys: [],
   ...overrides,
+});
+
+describe("catalog import gate", () => {
+  it("stays off for every merchant unless that tenant is listed", () => {
+    const previousEnabled = process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
+    const previousTenants = process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+    const qa = "commerceqa20261023tenant";
+    const other = "cmsz2tcnk0001coqz71pqqjul";
+    try {
+      delete process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
+      delete process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+      assert.equal(catalogImportEnabled(qa), false);
+      process.env.COMMERCE_CATALOG_IMPORT_ENABLED = "true";
+      assert.equal(catalogImportEnabled(qa), false);
+      assert.equal(catalogImportEnabled(other), false);
+      process.env.COMMERCE_CATALOG_IMPORT_TENANTS = qa;
+      assert.equal(catalogImportEnabled(qa), true);
+      assert.equal(catalogImportEnabled(other), false);
+    } finally {
+      if (previousEnabled == null) delete process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
+      else process.env.COMMERCE_CATALOG_IMPORT_ENABLED = previousEnabled;
+      if (previousTenants == null) delete process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+      else process.env.COMMERCE_CATALOG_IMPORT_TENANTS = previousTenants;
+    }
+  });
 });
 
 describe("meta catalog price", () => {

@@ -31,6 +31,9 @@ export const LOCAL_FEED_COLUMNS = [
 export const INCOMPLETE_LOCATION_MESSAGE =
   "Location information is missing or incomplete. Give the item one complete location format: a center point with a radius, a closed polygon, postal codes, Comscore markets, or an address with a radius. Then try again.";
 
+export const LOCAL_EXPORT_BLOCKED =
+  "Local catalog export is blocked. Radius and unit are not stored, so AtlasNow does not invent a coverage circle from outlet coordinates.";
+
 export const UNSUPPORTED_RADIUS_UNIT_MESSAGE =
   "The value provided for availability_circle_radius_unit isn't supported. To see the supported values for this field, go to https://www.facebook.com/business/help/120325381656392. Use KM or MI.";
 
@@ -263,6 +266,9 @@ export function buildCatalogFeed(opts: { vertical: string; brand: string; produc
   if (schema.schema === "unsupported" || schema.schema === "unverified") {
     blockers.push({ sku: "", field: "catalog", message: schema.note });
     return { ok: false, ...schema, missing, blockers, csv: "", filename, rowCount: 0 };
+  }
+  if (schema.schema === "local" && !opts.products.some((product) => product.localArea)) {
+    blockers.push({ sku: "", field: "availability_circle_radius", message: LOCAL_EXPORT_BLOCKED });
   }
   const brand = opts.brand.trim();
   if (!brand) blockers.push({ sku: "", field: "brand", message: "The merchant name is required for the brand column." });

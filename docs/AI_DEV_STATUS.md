@@ -108,4 +108,4 @@ Branch `feature/commerce-meta-catalog`. Draft pull request https://github.com/jo
 
 ## Next
 
-Review the Slice 2.5 feed correction on the draft pull request. Do not merge. Do not deploy. Do not set any commerce switch. Do not start payment automation. The catalog tests are in `.github/workflows/commerce.yml` as of `f64502b`. Do not treat the earlier run on `089bb76` as coverage for those files.
+Review `docs/COMMERCE_SLICE_2_5_RELEASE.md` on the draft pull request. Do not merge. Do not deploy. Do not set any commerce switch. The order-capture migration stays out of a Slice 2.5 image until Milestone C is approved on its own. Local catalog export stays blocked. Import stays off unless the QA tenant is listed.

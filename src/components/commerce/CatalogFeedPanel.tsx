@@ -74,7 +74,8 @@ export function CatalogFeedPanel({ tenantId, canRead }: { tenantId: string; canR
       <p className="text-[12px] leading-relaxed text-slate-500">
         Downloads a file for a manual Meta upload. It does not send products to Meta. Live catalog push stays off. The file
         is created only after the catalog type matches a confirmed schema. An unknown type is not treated as commerce. A
-        missing required field stops the file.
+        missing required field stops the file. Local catalog export is blocked. Radius and unit are not stored, so
+        AtlasNow does not invent a coverage circle from outlet coordinates.
       </p>
       {note ? <p className="text-sm text-slate-700">{note}</p> : null}
       {error ? (

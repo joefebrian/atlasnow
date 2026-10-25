@@ -44,6 +44,7 @@ describe("catalog import edit preview and file", { skip: localDb() ? false : "lo
   const stamp = `feed-test-${Date.now()}`;
   const ids: string[] = [];
   const previousImport = process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
+  const previousTenants = process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
   const previousSync = process.env.COMMERCE_CATALOG_SYNC_ENABLED;
   let tenantA = "";
   let tenantB = "";
@@ -56,6 +57,7 @@ describe("catalog import edit preview and file", { skip: localDb() ? false : "lo
     ids.push(a.id, b.id);
     tenantA = a.id;
     tenantB = b.id;
+    process.env.COMMERCE_CATALOG_IMPORT_TENANTS = `${a.id},${b.id}`;
     await prisma.commerceConnection.create({
       data: {
         tenantId: tenantA,
@@ -81,6 +83,8 @@ describe("catalog import edit preview and file", { skip: localDb() ? false : "lo
   after(async () => {
     if (previousImport == null) delete process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
     else process.env.COMMERCE_CATALOG_IMPORT_ENABLED = previousImport;
+    if (previousTenants == null) delete process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+    else process.env.COMMERCE_CATALOG_IMPORT_TENANTS = previousTenants;
     if (previousSync == null) delete process.env.COMMERCE_CATALOG_SYNC_ENABLED;
     else process.env.COMMERCE_CATALOG_SYNC_ENABLED = previousSync;
     if (ids.length) await prisma.tenant.deleteMany({ where: { id: { in: ids } } });

@@ -174,6 +174,7 @@ describe("meta catalog feed file", () => {
     assert.equal(one.ok, false);
     assert.equal(one.csv, "");
     assert.match(messages(one), /Location information is missing or incomplete/);
+    assert.match(messages(one), /Radius and unit are not stored/);
     const two = buildCatalogFeed({
       vertical: "offline_commerce",
       brand: "BabyToys",

@@ -45,8 +45,14 @@ type LocalSku = {
   lastSyncedAt: Date | null;
 };
 
-export function catalogImportEnabled(): boolean {
-  return process.env.COMMERCE_CATALOG_IMPORT_ENABLED === "true";
+/** Import stays off for every merchant unless this tenant id is listed. An empty list allows nobody. */
+export function catalogImportEnabled(tenantId: string): boolean {
+  if (process.env.COMMERCE_CATALOG_IMPORT_ENABLED !== "true") return false;
+  const allowed = (process.env.COMMERCE_CATALOG_IMPORT_TENANTS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return allowed.includes(tenantId);
 }
 
 export function parseIdrAmount(price: string, currency: string): number | null {
@@ -258,7 +264,7 @@ function graphFailure(error: unknown): { ok: false; status: number; error: strin
 
 export async function listMetaCatalogProducts(tenantId: string, fetchImpl: typeof fetch = fetch) {
   if (!tenantId) return { ok: false as const, status: 400, error: "Pick a brand" };
-  if (!catalogImportEnabled()) {
+  if (!catalogImportEnabled(tenantId)) {
     return { ok: true as const, enabled: false as const, catalogId: "", products: [] as CatalogPreviewItem[], truncated: false };
   }
   const connected = await connectedCatalog(tenantId);
@@ -338,7 +344,7 @@ export async function importMetaCatalogProducts(opts: {
   fetchImpl?: typeof fetch;
 }) {
   if (!opts.tenantId) return { ok: false as const, status: 400, error: "Pick a brand" };
-  if (!catalogImportEnabled()) return { ok: false as const, status: 503, error: "Catalog import is off." };
+  if (!catalogImportEnabled(opts.tenantId)) return { ok: false as const, status: 503, error: "Catalog import is off." };
   const wanted = [...new Set(opts.retailerIds.map((id) => id.trim()).filter(Boolean))].slice(0, 40);
   if (!wanted.length) return { ok: false as const, status: 400, error: "Choose a Meta product to import." };
   const connected = await connectedCatalog(opts.tenantId);

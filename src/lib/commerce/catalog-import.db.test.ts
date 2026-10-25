@@ -47,6 +47,7 @@ describe("meta catalog import", { skip: localDb() ? false : "local database only
   const stamp = `import-test-${Date.now()}`;
   const ids: string[] = [];
   const previous = process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
+  const previousTenants = process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
   let tenantA = "";
   let tenantB = "";
 
@@ -57,6 +58,7 @@ describe("meta catalog import", { skip: localDb() ? false : "local database only
     ids.push(a.id, b.id);
     tenantA = a.id;
     tenantB = b.id;
+    process.env.COMMERCE_CATALOG_IMPORT_TENANTS = `${a.id},${b.id}`;
     await prisma.commerceConnection.create({
       data: {
         tenantId: tenantA,
@@ -80,6 +82,8 @@ describe("meta catalog import", { skip: localDb() ? false : "local database only
   after(async () => {
     if (previous == null) delete process.env.COMMERCE_CATALOG_IMPORT_ENABLED;
     else process.env.COMMERCE_CATALOG_IMPORT_ENABLED = previous;
+    if (previousTenants == null) delete process.env.COMMERCE_CATALOG_IMPORT_TENANTS;
+    else process.env.COMMERCE_CATALOG_IMPORT_TENANTS = previousTenants;
     if (ids.length) await prisma.tenant.deleteMany({ where: { id: { in: ids } } });
     await prisma.$disconnect();
   });
