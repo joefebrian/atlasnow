@@ -2,9 +2,9 @@
 
 Updated 2026-10-26. Source of truth for what is in the tree. A feature is listed as working only when a test or a browser check showed it.
 
-## Conversational commerce M0 through M1B
+## Conversational commerce M0 through M1B.1
 
-In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. The Prisma schema is unchanged. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
+In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. M1B.1 copies repository results, binds a reservation to the registered provider mode, scopes policy evidence and webhook identity, and specifies composite location foreign keys. The Prisma schema is unchanged. Not deployed. No migration. No route. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
 
 Working in unit tests only:
 
@@ -34,6 +34,15 @@ M1B, in unit tests only:
 - Caller `VERIFIED` stays unverified. An attested process can pass the existing fail-closed policy
 - Credential ports store a reference and reject secret bytes. Outlet health does not fall through to the tenant default
 - Session mapping follows `canReadCommerce` and `canWriteCommerce`. `BRANCH` stays scoped to `Membership.locationId` and still has no commerce permission
+
+M1B.1, in unit tests only:
+
+- A read-only caller cannot mutate a stored booking, ledger, or connection through a repository result
+- A reservation mode must match the booking connection. External checkout does not create a booking. Manual confirmation cannot invent an authoritative reference
+- Policy evidence is one merchant, one offering category, and one commerce surface. An unmatched scope fails closed
+- Webhook dedupe is the connection id plus the provider event id. Another tenant's connection does not suppress the event
+- Two non-conflicting reservations both keep their transaction, booking, idempotency row, and event. A losing slot does not leave its transaction behind
+- `settleConcurrent` does not claim to prove arbitrary atomic SQL. Composite location keys are documented and not migrated
 
 Not built: SQL tables, a Prisma adapter, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender.
 

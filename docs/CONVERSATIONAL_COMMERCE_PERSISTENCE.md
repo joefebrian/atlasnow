@@ -1,6 +1,6 @@
 # Conversational commerce persistence (M1B)
 
-Status: **design and in-memory ports only.** No change to `prisma/schema.prisma`. No migration folder. No HTTP route. The M1A.2 orchestrator is not rewired onto these ports. M1C is not authorized.
+Status: **design and in-memory ports only.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. The M1A.2 orchestrator is not rewired onto these ports. M1C is not authorized.
 
 The runnable contract is `src/lib/conversational-commerce/ports.ts` and `memory-store.ts`. This document is the table sketch a reviewer can reject before any SQL is added.
 
@@ -16,15 +16,15 @@ Catalog commerce already owns `CommerceConnection`, `CommerceOrder`, and the pay
 |---|---|
 | Intents | Demand before a reservation. Phone numbers are rejected as keys. |
 | Transactions and bookings | Lifecycle, slot occupancy, reschedule, external booking reference. |
-| Connections | Provider capabilities, outlet override, health, credential references. |
-| Payments | Immutable attempt, one ledger per attempt, provider-reference ownership. |
+| Connections | Provider capabilities, outlet override, health, credential references. Booking and payment modes cannot be mixed. |
+| Payments | Immutable attempt, one ledger per attempt, provider-reference ownership. The attempt mode must match the payment connection. |
 | Idempotency | Request hash, timeout inflight, absence claim. |
-| Webhooks | Dedupe key `provider_id:event_id`. |
+| Webhooks | Dedupe key `connection_id:event_id`. The provider id is copied from the trusted connection. |
 | Events | Append-only transaction history. |
 | Attribution | User-level touchpoints and separate aggregate counts. |
-| Policy | Stored approval evidence. A caller enum cannot become `VERIFIED`. |
+| Policy | One approval row per merchant, offering category, and commerce surface. A caller enum cannot become `VERIFIED`. |
 
-`runAtomic` is the in-memory stand-in for one database transaction. `exportSnapshot` plus JSON parse is the restart test. `settleConcurrent` keeps the first writer when two snapshots race.
+Repository results are defensive copies. A caller cannot change a stored booking, ledger, or connection by mutating a read, list, replay, or write result. `runAtomic` is the in-memory stand-in for one database transaction. `exportSnapshot` plus JSON parse is the restart test. `settleConcurrent` copies the first snapshot, then inserts a later reservation or payment only as a whole unit. A rejected unit leaves no transaction, booking, idempotency row, event, or reference behind. It does not field-merge rows that already existed, and it does not prove that arbitrary SQL commits atomically.
 
 Processing is **at-least-once with idempotent effects**. This design does not claim exactly-once delivery to a booking vendor, a gateway, or Meta.
 
@@ -34,11 +34,16 @@ Proposed only. Do not apply this SQL.
 
 ```sql
 -- Not applied. Review sketch for a later migration.
+-- Prerequisite, also not applied: Location.id is already unique, but a composite
+-- foreign key needs UNIQUE ("tenantId", "id") on Location. Do not edit prisma/schema.prisma here.
+-- PostgreSQL MATCH SIMPLE skips the check when locationId is null.
+-- A non-null locationId must belong to the same tenant. A CHECK cannot subquery, so this FK is the enforced design.
+-- ALTER TABLE "Location" ADD CONSTRAINT "Location_tenant_id_key" UNIQUE ("tenantId", "id");
 
 CREATE TABLE "CcIntent" (
   "id" TEXT PRIMARY KEY,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "locationId" TEXT REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT,
   "intentRef" TEXT NOT NULL,
   "experience" TEXT NOT NULL,
   "intentType" TEXT NOT NULL,
@@ -46,13 +51,14 @@ CREATE TABLE "CcIntent" (
   "customerRef" TEXT,
   "commerceOrderRef" TEXT,
   "version" INTEGER NOT NULL,
-  UNIQUE ("tenantId", "intentRef")
+  UNIQUE ("tenantId", "intentRef"),
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE TABLE "CcTransaction" (
   "transactionRef" TEXT NOT NULL,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "locationId" TEXT REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT,
   "intentRef" TEXT,
   "providerId" TEXT NOT NULL,
   "state" TEXT NOT NULL,
@@ -61,13 +67,14 @@ CREATE TABLE "CcTransaction" (
   "paymentStatus" TEXT NOT NULL,
   "verifiedPaid" BOOLEAN NOT NULL,
   "version" INTEGER NOT NULL,
-  PRIMARY KEY ("tenantId", "transactionRef")
+  PRIMARY KEY ("tenantId", "transactionRef"),
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE TABLE "CcBooking" (
   "bookingRef" TEXT NOT NULL,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "locationId" TEXT NOT NULL REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT NOT NULL,
   "transactionRef" TEXT NOT NULL,
   "providerId" TEXT NOT NULL,
   "providerMode" TEXT NOT NULL,
@@ -83,7 +90,8 @@ CREATE TABLE "CcBooking" (
   "version" INTEGER NOT NULL,
   PRIMARY KEY ("tenantId", "bookingRef"),
   UNIQUE ("tenantId", "providerId", "idempotencyKey"),
-  FOREIGN KEY ("tenantId", "transactionRef") REFERENCES "CcTransaction"("tenantId", "transactionRef") ON DELETE RESTRICT
+  FOREIGN KEY ("tenantId", "transactionRef") REFERENCES "CcTransaction"("tenantId", "transactionRef") ON DELETE RESTRICT,
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX "CcBooking_live_slot"
@@ -97,7 +105,7 @@ CREATE UNIQUE INDEX "CcBooking_provider_ref"
 CREATE TABLE "CcProviderConnection" (
   "connectionId" TEXT PRIMARY KEY,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "locationId" TEXT REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT,
   "providerId" TEXT NOT NULL,
   "kind" TEXT NOT NULL,
   "mode" TEXT NOT NULL,
@@ -107,7 +115,9 @@ CREATE TABLE "CcProviderConnection" (
   "lastCheckedAt" TIMESTAMPTZ,
   "credentialRef" TEXT,
   "webhookSecretRef" TEXT,
-  "version" INTEGER NOT NULL
+  "version" INTEGER NOT NULL,
+  UNIQUE ("tenantId", "connectionId"),
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX "CcProviderConnection_scope"
@@ -116,13 +126,14 @@ CREATE UNIQUE INDEX "CcProviderConnection_scope"
 CREATE TABLE "CcProviderCredential" (
   "credentialRef" TEXT PRIMARY KEY,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "connectionId" TEXT NOT NULL REFERENCES "CcProviderConnection"("connectionId") ON DELETE RESTRICT,
+  "connectionId" TEXT NOT NULL,
   "purpose" TEXT NOT NULL,
   "keyVersion" INTEGER NOT NULL,
   "status" TEXT NOT NULL,
   "ciphertext" TEXT,
   "rotatedFromRef" TEXT,
-  "revokedAt" TIMESTAMPTZ
+  "revokedAt" TIMESTAMPTZ,
+  FOREIGN KEY ("tenantId", "connectionId") REFERENCES "CcProviderConnection"("tenantId", "connectionId") ON DELETE RESTRICT
 );
 
 CREATE UNIQUE INDEX "CcProviderCredential_one_active"
@@ -131,18 +142,19 @@ CREATE UNIQUE INDEX "CcProviderCredential_one_active"
 
 CREATE TABLE "CcExternalRef" (
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "locationId" TEXT REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT,
   "owner" TEXT NOT NULL,
   "ownerRef" TEXT NOT NULL,
   "providerId" TEXT NOT NULL,
   "externalId" TEXT NOT NULL,
-  PRIMARY KEY ("tenantId", "providerId", "owner", "externalId")
+  PRIMARY KEY ("tenantId", "providerId", "owner", "externalId"),
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE TABLE "CcPaymentAttempt" (
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
   "attemptRef" TEXT NOT NULL,
-  "locationId" TEXT REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT,
   "transactionRef" TEXT NOT NULL,
   "providerId" TEXT NOT NULL,
   "providerMode" TEXT NOT NULL,
@@ -150,7 +162,8 @@ CREATE TABLE "CcPaymentAttempt" (
   "currency" TEXT NOT NULL,
   "version" INTEGER NOT NULL,
   PRIMARY KEY ("tenantId", "attemptRef"),
-  FOREIGN KEY ("tenantId", "transactionRef") REFERENCES "CcTransaction"("tenantId", "transactionRef") ON DELETE RESTRICT
+  FOREIGN KEY ("tenantId", "transactionRef") REFERENCES "CcTransaction"("tenantId", "transactionRef") ON DELETE RESTRICT,
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE TABLE "CcPaymentLedger" (
@@ -212,19 +225,21 @@ CREATE TABLE "CcInflight" (
   "transactionRef" TEXT NOT NULL,
   "absenceVerified" BOOLEAN NOT NULL,
   "version" INTEGER NOT NULL,
-  PRIMARY KEY ("tenantId", "idempotencyKey")
+  PRIMARY KEY ("tenantId", "idempotencyKey"),
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE TABLE "CcWebhookEvent" (
-  "providerId" TEXT NOT NULL,
+  "connectionId" TEXT NOT NULL,
   "eventId" TEXT NOT NULL,
   "dedupeKey" TEXT NOT NULL,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "connectionId" TEXT NOT NULL REFERENCES "CcProviderConnection"("connectionId") ON DELETE RESTRICT,
+  "providerId" TEXT NOT NULL,
   "eventType" TEXT NOT NULL,
   "status" TEXT NOT NULL,
   "version" INTEGER NOT NULL,
-  PRIMARY KEY ("providerId", "eventId")
+  PRIMARY KEY ("connectionId", "eventId"),
+  FOREIGN KEY ("tenantId", "connectionId") REFERENCES "CcProviderConnection"("tenantId", "connectionId") ON DELETE RESTRICT
 );
 
 CREATE TABLE "CcTransactionEvent" (
@@ -240,7 +255,7 @@ CREATE TABLE "CcTransactionEvent" (
 CREATE TABLE "CcTouchpoint" (
   "touchpointId" TEXT PRIMARY KEY,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "locationId" TEXT REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT,
   "transactionRef" TEXT,
   "intentRef" TEXT,
   "bookingRef" TEXT,
@@ -258,7 +273,8 @@ CREATE TABLE "CcTouchpoint" (
   "qrCampaignId" TEXT,
   "erasedAt" TIMESTAMPTZ,
   "erasureReason" TEXT,
-  "version" INTEGER NOT NULL
+  "version" INTEGER NOT NULL,
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE INDEX "CcTouchpoint_transaction" ON "CcTouchpoint" ("tenantId", "transactionRef");
@@ -266,19 +282,23 @@ CREATE INDEX "CcTouchpoint_transaction" ON "CcTouchpoint" ("tenantId", "transact
 CREATE TABLE "CcAttributionAggregate" (
   "aggregateId" TEXT PRIMARY KEY,
   "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
-  "locationId" TEXT REFERENCES "Location"("id") ON DELETE RESTRICT,
+  "locationId" TEXT,
   "channel" TEXT NOT NULL,
   "count" INTEGER NOT NULL,
-  "version" INTEGER NOT NULL
+  "version" INTEGER NOT NULL,
+  FOREIGN KEY ("tenantId", "locationId") REFERENCES "Location"("tenantId", "id") ON DELETE RESTRICT
 );
 
 CREATE TABLE "CcPolicyEvidence" (
-  "tenantId" TEXT PRIMARY KEY REFERENCES "Tenant"("id") ON DELETE RESTRICT,
+  "tenantId" TEXT NOT NULL REFERENCES "Tenant"("id") ON DELETE RESTRICT,
+  "offeringCategory" TEXT NOT NULL,
+  "experience" TEXT NOT NULL,
   "source" TEXT NOT NULL,
   "status" TEXT NOT NULL,
   "reference" TEXT NOT NULL,
   "validatedBy" TEXT,
-  "version" INTEGER NOT NULL
+  "version" INTEGER NOT NULL,
+  PRIMARY KEY ("tenantId", "offeringCategory", "experience")
 );
 ```
 
@@ -304,7 +324,7 @@ Each boundary is one database transaction in a future adapter. The memory port r
 | Timeout | Inflight row and `PENDING_RESOLUTION` on the same key | A different provider or location |
 | Absence then create | Absence flag, then one booking if the provider rule passes | Empty lookup when the rule is unset or unmet |
 | Payment notice | Ledger version, ledger cache on the transaction, one applied event | Foreign provider reference, second live capture, blank reference |
-| Webhook | Insert `RECEIVED` on `provider_id, event_id`, apply effect, mark `APPLIED` | Existing dedupe key returns the stored row and does not apply again |
+| Webhook | Insert `RECEIVED` on `connection_id, event_id`, apply effect, mark `APPLIED` | The same connection and event id returns the stored row. Another connection is a different event |
 | Cancel or refund | Only the booking, or only the ledger | Neither write may update the other |
 | Reschedule | Pending slot, then slot swap if the new slot is free | Occupied target leaves the old slot in place |
 
@@ -390,9 +410,13 @@ Touchpoints can point at an intent, a booking, a payment attempt, and a transact
 
 ## Policy and authorization
 
-Transactional reserve reads `CcPolicyEvidence` for the tenant. `VERIFIED` counts only when `validatedBy` is set and `approvalIsVerified` passes. A caller-supplied `{ status: VERIFIED }` is stored as `UNVERIFIED` and does not overwrite a validated row.
+Transactional reserve reads `CcPolicyEvidence` for the merchant, the offering category, and the commerce surface. Approval for general goods on WhatsApp Catalog does not authorize an admission ticket or a WhatsApp Flow. A missing or unmatched row fails closed. `VERIFIED` counts only when `validatedBy` is set and `approvalIsVerified` passes. A caller-supplied `{ status: VERIFIED }` is stored as `UNVERIFIED` and does not overwrite a validated row of that same scope.
 
-The in-memory validator is an HMAC over tenant, process id, reference, and outcome, using a key passed into the store factory. The key is not in the snapshot. No Meta call is made. M1C replaces that HMAC with the real evidence-validation job. Until then, a missing key cannot write `VERIFIED`.
+The in-memory validator is an HMAC over tenant, offering category, experience, process id, reference, and outcome, using a key passed into the store factory. The key is not in the snapshot. A signature for one scope does not validate another. No Meta call is made. M1C replaces that HMAC with the real evidence-validation job. Until then, a missing key cannot write `VERIFIED`.
+
+A reservation must use the mode stored on the booking connection. `EXTERNAL_CHECKOUT` does not create or hold a booking. `MANUAL` cannot store a provider reference or an authoritative flag. `referenceAuthoritative` and `providerReference` are accepted only when that connection's capabilities say it issues an authoritative reference. A caller cannot set those fields to skip the check.
+
+Webhook identity is the trusted connection id plus the provider event id. Two merchants can use the same vendor and the same event id without suppressing each other. Duplicate delivery to one connection is a replay. No webhook route is authorized.
 
 `actorFromCommerceSession` maps the current session onto `authorize`:
 
@@ -406,6 +430,8 @@ YOLA FUN stays NO-GO. This milestone creates no tenant, connection, or product f
 ## What M1C must not assume
 
 - The orchestrator maps are still the live M1A.2 state. Moving them onto these ports is a later change and has to keep the existing tests.
-- The snapshot is not an integrity-protected database. A hostile snapshot can set `validatedBy`. Production evidence is written only by the validator job.
+- The snapshot is not an integrity-protected database. A hostile snapshot can set `validatedBy`. Production evidence is written only by the validator job. Result copies protect callers of this process. They are not a security boundary against a forged snapshot.
+- `settleConcurrent` merges new reservation and payment units. It is not evidence that Postgres transactions are atomic.
+- Composite location foreign keys are specified and not enforced. They wait for a migration that is not authorized.
 - `ciphertext` in the sketch is nullable because this milestone stores no secret. A real column must be written only by server code that calls `encryptSecret`.
 - Order-capture database tests stay out of `.github/workflows/commerce.yml`. They need `CommerceOrder`, and they also call inbox ingest. The working tree has uncommitted inbox migrations and a dirty ingest file. The Slice 2.5 job builds a separate database that must not contain `CommerceOrder`. Putting both in one migrate step would either apply the orders migration to that release check or run ingest against a schema this branch has not proven in CI. They were not added.

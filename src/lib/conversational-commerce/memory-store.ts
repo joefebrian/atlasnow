@@ -54,10 +54,19 @@ export type MemoryStoreOptions = {
 
 export function signPolicyAttestation(
   key: string,
-  fields: { tenantId: string; processId: string; reference: string; outcome: "VERIFIED" | "UNVERIFIED" },
+  fields: {
+    tenantId: string;
+    offeringCategory: string;
+    experience: string;
+    processId: string;
+    reference: string;
+    outcome: "VERIFIED" | "UNVERIFIED";
+  },
 ): string {
   return createHmac("sha256", key)
-    .update([fields.tenantId, fields.processId, fields.reference, fields.outcome].join("|"))
+    .update(
+      [fields.tenantId, fields.offeringCategory, fields.experience, fields.processId, fields.reference, fields.outcome].join("|"),
+    )
     .digest("hex");
 }
 
@@ -225,6 +234,8 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
       const denied = requireActor(actor, input.tenantId, input.locationId, "write");
       if (denied) return denied;
       if (input.capabilities.providerId !== input.providerId) return fail("INVALID", "The capability id must match the provider.");
+      const inconsistent = connectionModeConflict(input.kind, input.mode, input.capabilities);
+      if (inconsistent) return inconsistent;
       const existing = state.connections.find(
         (row) =>
           row.tenantId === input.tenantId &&
@@ -232,7 +243,10 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
           row.providerId === input.providerId &&
           row.kind === input.kind,
       );
-      if (existing) return ok(existing, true);
+      if (existing) {
+        if (existing.mode !== input.mode) return fail("SCOPE_MISMATCH", "This connection is already registered with another mode.");
+        return ok(existing, true);
+      }
       const row: StoredConnection = {
         connectionId: refFromMaterial("CON", `${input.tenantId}:${input.locationId ?? ""}:${input.providerId}:${input.kind}`),
         tenantId: input.tenantId,
@@ -240,7 +254,7 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
         providerId: input.providerId,
         kind: input.kind,
         mode: input.mode,
-        capabilities: { ...input.capabilities },
+        capabilities: structuredClone(input.capabilities),
         status: "ACTIVE",
         health: "UNKNOWN",
         lastCheckedAt: null,
@@ -358,6 +372,7 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
       }
       const connection = findConnection(state, input.tenantId, input.locationId, input.providerId, "PAYMENT");
       if (!connection) return fail("NOT_FOUND", "Payment connection not found.");
+      if (connection.mode !== input.providerMode) return fail("SCOPE_MISMATCH", "The attempt mode must match the payment connection.");
       const blocked = connectionBlock(connection, state);
       if (blocked) return fail(blocked, "The payment connection cannot take a new attempt.");
       const row: StoredAttempt = {
@@ -485,24 +500,21 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
 
   ports.webhooks = {
     accept(actor, input) {
-      const denied = requireActor(actor, input.tenantId, null, "write");
-      if (denied && denied.code !== "LOCATION_FORBIDDEN") return denied;
-      const connection = findConnection(state, input.tenantId, null, input.providerId, "BOOKING") ?? findConnection(state, input.tenantId, null, input.providerId, "PAYMENT");
-      if (!connection) return fail("NOT_FOUND", "Webhook connection not found.");
-      const scoped = requireActor(actor, input.tenantId, connection.locationId, "write");
-      if (scoped) return scoped;
-      if (!input.eventId.trim()) return fail("INVALID", "Webhook event id is required.");
-      const dedupeKey = `${input.providerId}:${input.eventId}`;
+      if (!input.connectionId.trim() || !input.eventId.trim()) return fail("INVALID", "Webhook connection and event id are required.");
+      const connection = state.connections.find((row) => row.connectionId === input.connectionId);
+      if (!connection) return tenantMiss(actor, input.tenantId, "write", "Webhook connection not found.");
+      if (connection.tenantId !== input.tenantId) return fail("CROSS_TENANT", "This connection belongs to another tenant.");
+      const denied = requireActor(actor, input.tenantId, connection.locationId, "write");
+      if (denied) return denied;
+      const dedupeKey = `${connection.connectionId}:${input.eventId}`;
       const existing = state.webhooks.find((row) => row.dedupeKey === dedupeKey);
-      if (existing) {
-        if (existing.tenantId !== input.tenantId) return fail("CROSS_TENANT", "This webhook id belongs to another tenant.");
-        return ok(existing, true);
-      }
+      if (existing) return ok(existing, true);
       const row: StoredWebhook = {
         dedupeKey,
-        providerId: input.providerId,
+        connectionId: connection.connectionId,
+        providerId: connection.providerId,
         eventId: input.eventId,
-        tenantId: input.tenantId,
+        tenantId: connection.tenantId,
         eventType: input.eventType,
         status: "RECEIVED",
         version: 1,
@@ -633,14 +645,16 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
   };
 
   ports.policy = {
-    submit(actor, tenantId, submission) {
+    submit(actor, tenantId, scope, submission) {
       const denied = requireActor(actor, tenantId, null, "write");
       if (denied) return denied;
-      const current = state.policyEvidence.find((row) => row.tenantId === tenantId);
+      const current = findEvidence(state, tenantId, scope.offeringCategory, scope.experience);
       if (submission.kind === "CALLER_ENUM") {
         if (current?.status === "VERIFIED" && current.validatedBy) return ok(current, true);
         const row: StoredPolicyEvidence = {
           tenantId,
+          offeringCategory: scope.offeringCategory,
+          experience: scope.experience,
           source: "META_COMMERCE_POLICY",
           status: "UNVERIFIED",
           reference: submission.reference.trim(),
@@ -650,11 +664,13 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
         replaceEvidence(state, row);
         return ok(row, false);
       }
-      if (!policyValidatorKey || !attestationMatches(policyValidatorKey, tenantId, submission)) {
+      if (!policyValidatorKey || !attestationMatches(policyValidatorKey, tenantId, scope, submission)) {
         return fail("POLICY_DENIED", "VERIFIED approval requires an authorized evidence process.");
       }
       const row: StoredPolicyEvidence = {
         tenantId,
+        offeringCategory: scope.offeringCategory,
+        experience: scope.experience,
         source: "META_COMMERCE_POLICY",
         status: submission.outcome,
         reference: submission.reference.trim(),
@@ -664,10 +680,10 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
       replaceEvidence(state, row);
       return ok(row, false);
     },
-    read(actor, tenantId) {
+    read(actor, tenantId, scope) {
       const denied = requireActor(actor, tenantId, null, "read");
       if (denied) return denied;
-      const row = state.policyEvidence.find((item) => item.tenantId === tenantId);
+      const row = findEvidence(state, tenantId, scope.offeringCategory, scope.experience);
       if (!row) return fail("NOT_FOUND", "Policy evidence not found.");
       return ok(row, false);
     },
@@ -689,6 +705,12 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
   return ports;
 }
 
+/**
+ * Copies `first`, then inserts new reservation units and new payment units from `second`.
+ * A rejected unit inserts none of its transaction, booking, idempotency, events, or references.
+ * Rows that already existed in `parent` are not field-merged. This is not a database lock manager
+ * and does not prove that arbitrary SQL commits atomically.
+ */
 export function settleConcurrent(
   parent: PersistenceSnapshot,
   first: PersistenceSnapshot,
@@ -697,21 +719,22 @@ export function settleConcurrent(
   const committed = cloneSnapshot(first);
   const conflicts: ConcurrentConflict[] = [];
   const parentBookings = new Map(parent.bookings.map((row) => [bookingId(row), stableHash(row)]));
-  const committedBookings = new Map(committed.bookings.map((row) => [bookingId(row), row]));
   for (const row of second.bookings) {
     const id = bookingId(row);
     const before = parentBookings.get(id);
-    const now = committedBookings.get(id);
     if (before != null && stableHash(row) === before) continue;
-    if (!now) {
-      if (bookingOccupiesCapacity(row.state) && committed.bookings.some((item) => bookingOccupiesCapacity(item.state) && slotOf(item) === slotOf(row))) {
-        conflicts.push({ code: "SLOT_CONFLICT", key: slotOf(row) });
-        continue;
-      }
-      committed.bookings.push(structuredClone(row));
+    const now = committed.bookings.find((item) => bookingId(item) === id);
+    if (now) {
+      if (stableHash(now) !== stableHash(row)) conflicts.push({ code: before == null ? "SLOT_CONFLICT" : "VERSION_CONFLICT", key: id });
       continue;
     }
-    if (stableHash(now) !== stableHash(row)) conflicts.push({ code: before == null ? "SLOT_CONFLICT" : "VERSION_CONFLICT", key: id });
+    const unit = collectReservationUnit(second, row);
+    const conflict = reservationUnitConflict(committed, unit);
+    if (conflict) {
+      conflicts.push(conflict);
+      continue;
+    }
+    applyReservationUnit(committed, unit);
   }
 
   const seenHooks = new Set(committed.webhooks.map((row) => row.dedupeKey));
@@ -752,6 +775,13 @@ export function settleConcurrent(
       committed.ledgers.push(structuredClone(ledger));
       if (reference) takenRefs.set(refKey(row.tenantId, row.providerId, reference), row.attemptRef);
     }
+    for (const paymentEvent of second.ledgerEvents) {
+      if (paymentEvent.tenantId !== row.tenantId || paymentEvent.attemptRef !== row.attemptRef) continue;
+      const seen = committed.ledgerEvents.some(
+        (item) => item.tenantId === paymentEvent.tenantId && item.attemptRef === paymentEvent.attemptRef && item.eventId === paymentEvent.eventId,
+      );
+      if (!seen) committed.ledgerEvents.push(structuredClone(paymentEvent));
+    }
   }
   return { snapshot: sortSnapshot(committed), conflicts };
 }
@@ -762,7 +792,7 @@ function openReservation(state: PersistenceSnapshot, draft: ReservationDraft): P
   if (phoneCorrelation(draft.idempotencyKey) || phoneCorrelation(draft.offeringId)) {
     return fail("INVALID", "A phone number cannot correlate a booking.");
   }
-  const evidence = storedApproval(state, draft.tenantId);
+  const evidence = storedApproval(state, draft.tenantId, draft.category, draft.experience);
   const policy = evaluateEligibility({
     merchantEligibility: draft.merchantEligibility,
     offeringCategory: draft.category,
@@ -774,7 +804,9 @@ function openReservation(state: PersistenceSnapshot, draft: ReservationDraft): P
   if (!connection) return fail("NOT_FOUND", "Booking connection not found.");
   const blocked = connectionBlock(connection, state);
   if (blocked) return fail(blocked, "The booking connection cannot reserve.");
-  if (connection.mode === "EXTERNAL_API" || connection.mode === "EXTERNAL_CHECKOUT") {
+  const mode = reservationMode(draft, connection);
+  if (mode) return mode;
+  if (connection.mode === "EXTERNAL_API") {
     const fresh = Date.parse(draft.availabilityFreshUntil ?? "");
     if (!Number.isFinite(fresh) || fresh <= Date.parse(draft.nowIso)) {
       return fail("RECONCILIATION_REQUIRED", "External availability is missing or stale.");
@@ -1014,6 +1046,47 @@ function netFor(state: PersistenceSnapshot, tenantId: string, transactionRef: st
   return { ...aggregate, refundedIdr, chargebackIdr };
 }
 
+const BOOKING_MODES = ["NATIVE", "EXTERNAL_API", "EXTERNAL_CHECKOUT", "MANUAL"] as const;
+const PAYMENT_MODES = ["MERCHANT_PAYMENT_GATEWAY", "EXTERNAL_BOOKING_PROVIDER", "OFFLINE_RECONCILIATION"] as const;
+
+function connectionModeConflict(
+  kind: ConnectionKind,
+  mode: StoredConnection["mode"],
+  capabilities: StoredConnection["capabilities"],
+): PortFailure | null {
+  const booking = (BOOKING_MODES as readonly string[]).includes(mode);
+  const payment = (PAYMENT_MODES as readonly string[]).includes(mode);
+  if (kind === "BOOKING" && !booking) return fail("INVALID", "A booking connection needs a booking mode.");
+  if (kind === "PAYMENT" && !payment) return fail("INVALID", "A payment connection needs a payment mode.");
+  if (mode === "MANUAL" || mode === "EXTERNAL_CHECKOUT") {
+    if (capabilities.issuesAuthoritativeReference) return fail("INVALID", "This mode cannot issue an authoritative reservation.");
+    if (capabilities.supportsHold) return fail("INVALID", "This mode cannot hold a booking.");
+  }
+  if (mode !== "NATIVE" && capabilities.holdExpiryOwner === "NATIVE_POLICY") {
+    return fail("INVALID", "Native hold policy applies only to a native connection.");
+  }
+  return null;
+}
+
+function reservationMode(draft: ReservationDraft, connection: StoredConnection): PortFailure | null {
+  if (connection.mode !== draft.providerMode) {
+    return fail("SCOPE_MISMATCH", "The reservation mode must match the registered connection.");
+  }
+  if (connection.mode === "EXTERNAL_CHECKOUT") {
+    return fail("INVALID", "External checkout does not create or hold a booking.");
+  }
+  if (connection.mode === "MANUAL" && (draft.referenceAuthoritative || Boolean(draft.providerReference?.trim()))) {
+    return fail("INVALID", "A manual connection cannot invent an authoritative reservation.");
+  }
+  if ((draft.referenceAuthoritative || Boolean(draft.providerReference?.trim())) && !connection.capabilities.issuesAuthoritativeReference) {
+    return fail("INVALID", "This provider cannot issue an authoritative reference.");
+  }
+  if (draft.referenceAuthoritative && !draft.providerReference?.trim()) {
+    return fail("INVALID", "An authoritative reservation needs the provider reference.");
+  }
+  return null;
+}
+
 function initialBookingState(draft: ReservationDraft, connection: StoredConnection): BookingState {
   if (draft.providerMode === "MANUAL") return "REQUESTED";
   if (connection.capabilities.supportsHold) return "HELD";
@@ -1021,11 +1094,27 @@ function initialBookingState(draft: ReservationDraft, connection: StoredConnecti
   return "REQUESTED";
 }
 
-function storedApproval(state: PersistenceSnapshot, tenantId: string) {
-  const row = state.policyEvidence.find((item) => item.tenantId === tenantId);
+function storedApproval(
+  state: PersistenceSnapshot,
+  tenantId: string,
+  offeringCategory: StoredPolicyEvidence["offeringCategory"],
+  experience: StoredPolicyEvidence["experience"],
+) {
+  const row = findEvidence(state, tenantId, offeringCategory, experience);
   if (!row?.validatedBy) return null;
   const evidence = { source: row.source, status: row.status, reference: row.reference } as const;
   return approvalIsVerified(evidence) ? evidence : null;
+}
+
+function findEvidence(
+  state: PersistenceSnapshot,
+  tenantId: string,
+  offeringCategory: StoredPolicyEvidence["offeringCategory"],
+  experience: StoredPolicyEvidence["experience"],
+): StoredPolicyEvidence | undefined {
+  return state.policyEvidence.find(
+    (item) => item.tenantId === tenantId && item.offeringCategory === offeringCategory && item.experience === experience,
+  );
 }
 
 function findConnection(
@@ -1118,14 +1207,23 @@ function touchTransaction(state: PersistenceSnapshot, tenantId: string, transact
 }
 
 function replaceEvidence(state: PersistenceSnapshot, row: StoredPolicyEvidence): void {
-  state.policyEvidence = state.policyEvidence.filter((item) => item.tenantId !== row.tenantId);
+  state.policyEvidence = state.policyEvidence.filter(
+    (item) => item.tenantId !== row.tenantId || item.offeringCategory !== row.offeringCategory || item.experience !== row.experience,
+  );
   state.policyEvidence.push(row);
 }
 
-function attestationMatches(key: string, tenantId: string, submission: Extract<EvidenceSubmission, { kind: "AUTHORIZED_PROCESS" }>): boolean {
+function attestationMatches(
+  key: string,
+  tenantId: string,
+  scope: { offeringCategory: string; experience: string },
+  submission: Extract<EvidenceSubmission, { kind: "AUTHORIZED_PROCESS" }>,
+): boolean {
   if (!submission.processId.trim() || !submission.reference.trim()) return false;
   const expected = signPolicyAttestation(key, {
     tenantId,
+    offeringCategory: scope.offeringCategory,
+    experience: scope.experience,
     processId: submission.processId,
     reference: submission.reference,
     outcome: submission.outcome,
@@ -1167,7 +1265,7 @@ function fail(code: PortCode, message: string): PortFailure {
 }
 
 function ok<T>(value: T, replay: boolean): PortResult<T> {
-  return { ok: true, replay, value };
+  return { ok: true, replay, value: structuredClone(value) };
 }
 
 function emptySnapshot(): PersistenceSnapshot {
@@ -1213,8 +1311,93 @@ function sortSnapshot(snapshot: PersistenceSnapshot): PersistenceSnapshot {
   by(snapshot.events, (row) => `${row.tenantId}:${row.eventId}`);
   by(snapshot.touchpoints, (row) => row.touchpointId);
   by(snapshot.aggregates, (row) => row.aggregateId);
-  by(snapshot.policyEvidence, (row) => row.tenantId);
+  by(snapshot.policyEvidence, (row) => `${row.tenantId}:${row.offeringCategory}:${row.experience}`);
   return snapshot;
+}
+
+function collectReservationUnit(snapshot: PersistenceSnapshot, booking: StoredBooking) {
+  return {
+    booking,
+    transaction: snapshot.transactions.find((row) => row.tenantId === booking.tenantId && row.transactionRef === booking.transactionRef) ?? null,
+    idempotency: snapshot.idempotency.filter(
+      (row) => row.tenantId === booking.tenantId && (row.transactionRef === booking.transactionRef || row.idempotencyKey === booking.idempotencyKey),
+    ),
+    events: snapshot.events.filter((row) => row.tenantId === booking.tenantId && row.transactionRef === booking.transactionRef),
+    externalRefs: snapshot.externalRefs.filter(
+      (row) => row.tenantId === booking.tenantId && row.owner === "BOOKING" && row.ownerRef === booking.bookingRef,
+    ),
+    inflight: snapshot.inflight.filter((row) => row.tenantId === booking.tenantId && row.idempotencyKey === booking.idempotencyKey),
+  };
+}
+
+function reservationUnitConflict(
+  committed: PersistenceSnapshot,
+  unit: ReturnType<typeof collectReservationUnit>,
+): ConcurrentConflict | null {
+  const booking = unit.booking;
+  if (
+    bookingOccupiesCapacity(booking.state) &&
+    committed.bookings.some((item) => item.bookingRef !== booking.bookingRef && bookingOccupiesCapacity(item.state) && slotOf(item) === slotOf(booking))
+  ) {
+    return { code: "SLOT_CONFLICT", key: slotOf(booking) };
+  }
+  for (const row of unit.idempotency) {
+    const current = committed.idempotency.find(
+      (item) => item.tenantId === row.tenantId && item.scope === row.scope && item.idempotencyKey === row.idempotencyKey,
+    );
+    if (current && (current.requestHash !== row.requestHash || current.transactionRef !== row.transactionRef)) {
+      return { code: "IDEMPOTENCY_CONFLICT", key: row.idempotencyKey };
+    }
+  }
+  for (const row of unit.externalRefs) {
+    const current = committed.externalRefs.find(
+      (item) => item.tenantId === row.tenantId && item.providerId === row.providerId && item.owner === row.owner && item.externalId === row.externalId,
+    );
+    if (current && current.ownerRef !== row.ownerRef) return { code: "REFERENCE_CONFLICT", key: row.externalId };
+  }
+  if (unit.transaction) {
+    const current = committed.transactions.find(
+      (item) => item.tenantId === unit.transaction?.tenantId && item.transactionRef === unit.transaction.transactionRef,
+    );
+    if (current && stableHash(current) !== stableHash(unit.transaction)) {
+      return { code: "VERSION_CONFLICT", key: unit.transaction.transactionRef };
+    }
+  }
+  return null;
+}
+
+function applyReservationUnit(committed: PersistenceSnapshot, unit: ReturnType<typeof collectReservationUnit>): void {
+  committed.bookings.push(structuredClone(unit.booking));
+  if (
+    unit.transaction &&
+    !committed.transactions.some((row) => row.tenantId === unit.transaction?.tenantId && row.transactionRef === unit.transaction.transactionRef)
+  ) {
+    committed.transactions.push(structuredClone(unit.transaction));
+  }
+  for (const row of unit.idempotency) {
+    if (!committed.idempotency.some((item) => item.tenantId === row.tenantId && item.scope === row.scope && item.idempotencyKey === row.idempotencyKey)) {
+      committed.idempotency.push(structuredClone(row));
+    }
+  }
+  for (const row of unit.events) {
+    if (!committed.events.some((item) => item.tenantId === row.tenantId && item.eventId === row.eventId)) {
+      committed.events.push(structuredClone(row));
+    }
+  }
+  for (const row of unit.externalRefs) {
+    if (
+      !committed.externalRefs.some(
+        (item) => item.tenantId === row.tenantId && item.providerId === row.providerId && item.owner === row.owner && item.externalId === row.externalId,
+      )
+    ) {
+      committed.externalRefs.push(structuredClone(row));
+    }
+  }
+  for (const row of unit.inflight) {
+    if (!committed.inflight.some((item) => item.tenantId === row.tenantId && item.idempotencyKey === row.idempotencyKey)) {
+      committed.inflight.push(structuredClone(row));
+    }
+  }
 }
 
 function bookingId(row: { tenantId: string; bookingRef: string }): string {

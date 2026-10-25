@@ -71,6 +71,8 @@ export type ConnectionCapabilities = {
   guaranteesIdempotency: boolean;
   absenceConsistencyRequirement: string | null;
   holdExpiryOwner: HoldExpiryOwner;
+  /** True only when this connection's provider may issue the booking reference. */
+  issuesAuthoritativeReference: boolean;
 };
 
 export type StoredIntent = CommerceIntent & { version: number };
@@ -177,7 +179,9 @@ export type StoredInflight = {
 };
 
 export type StoredWebhook = {
+  /** `connectionId:eventId`. Not global across merchants that share a vendor. */
   dedupeKey: string;
+  connectionId: string;
   providerId: string;
   eventId: string;
   tenantId: string;
@@ -208,8 +212,16 @@ export type StoredAggregate = {
   version: number;
 };
 
+export type PolicyScope = {
+  offeringCategory: OfferingCategory;
+  experience: CustomerExperience;
+};
+
+/** One approval covers one merchant, one offering category, and one commerce surface. */
 export type StoredPolicyEvidence = {
   tenantId: string;
+  offeringCategory: OfferingCategory;
+  experience: CustomerExperience;
   source: "META_COMMERCE_POLICY";
   status: "VERIFIED" | "UNVERIFIED";
   reference: string;
@@ -401,7 +413,7 @@ export interface IdempotencyRepository {
 export interface WebhookRepository {
   accept(
     actor: Actor,
-    input: { tenantId: string; providerId: string; eventId: string; eventType: string },
+    input: { tenantId: string; connectionId: string; eventId: string; eventType: string },
   ): PortResult<StoredWebhook>;
   markApplied(actor: Actor, tenantId: string, dedupeKey: string): PortResult<StoredWebhook>;
 }
@@ -447,8 +459,8 @@ export interface AttributionRepository {
 }
 
 export interface PolicyRepository {
-  submit(actor: Actor, tenantId: string, submission: EvidenceSubmission): PortResult<StoredPolicyEvidence>;
-  read(actor: Actor, tenantId: string): PortResult<StoredPolicyEvidence>;
+  submit(actor: Actor, tenantId: string, scope: PolicyScope, submission: EvidenceSubmission): PortResult<StoredPolicyEvidence>;
+  read(actor: Actor, tenantId: string, scope: PolicyScope): PortResult<StoredPolicyEvidence>;
 }
 
 export interface CommercePersistence {

@@ -4,7 +4,7 @@ import { canReadCommerce, canWriteCommerce } from "@/lib/commerce/access";
 import { ROLES, type Role } from "@/lib/roles";
 import type { Actor } from "./auth";
 import { createMemoryCommerceStore, settleConcurrent, signPolicyAttestation } from "./memory-store";
-import type { CommercePersistence, ConnectionCapabilities, ReservationDraft } from "./ports";
+import type { CommercePersistence, ConnectionCapabilities, PolicyScope, ReservationDraft } from "./ports";
 import { actorFromCommerceSession } from "./session-actor";
 import type { VerifiedPaymentEvent } from "./payment";
 
@@ -25,11 +25,14 @@ function capabilities(providerId: string, patch: Partial<ConnectionCapabilities>
     guaranteesIdempotency: false,
     absenceConsistencyRequirement: "mock-absence-v1",
     holdExpiryOwner: "PROVIDER",
+    issuesAuthoritativeReference: true,
     ...patch,
   };
 }
 
-function verified(store: CommercePersistence, tenantId: string, by = actor(tenantId)) {
+const GOODS_CATALOG: PolicyScope = { offeringCategory: "GENERAL_GOODS", experience: "WHATSAPP_CATALOG" };
+
+function verified(store: CommercePersistence, tenantId: string, by = actor(tenantId), scope: PolicyScope = GOODS_CATALOG) {
   const submission = {
     kind: "AUTHORIZED_PROCESS" as const,
     processId: "policy-job",
@@ -37,12 +40,14 @@ function verified(store: CommercePersistence, tenantId: string, by = actor(tenan
     outcome: "VERIFIED" as const,
     attestation: signPolicyAttestation(POLICY_KEY, {
       tenantId,
+      offeringCategory: scope.offeringCategory,
+      experience: scope.experience,
       processId: "policy-job",
       reference: "policy-record-1",
       outcome: "VERIFIED",
     }),
   };
-  const saved = store.policy.submit(by, tenantId, submission);
+  const saved = store.policy.submit(by, tenantId, scope, submission);
   assert.equal(saved.ok, true);
 }
 
@@ -136,7 +141,7 @@ describe("commerce persistence ports", () => {
   it("denies a caller-supplied VERIFIED enum and still allows an attested process", () => {
     const store = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
     connect(store, "tenant-a", "book-1", "loc-1", "BOOKING");
-    const caller = store.policy.submit(actor("tenant-a"), "tenant-a", {
+    const caller = store.policy.submit(actor("tenant-a"), "tenant-a", GOODS_CATALOG, {
       kind: "CALLER_ENUM",
       status: "VERIFIED",
       reference: "policy-record-1",
@@ -181,6 +186,11 @@ describe("commerce persistence ports", () => {
     assert.equal(settled.conflicts.some((item) => item.code === "SLOT_CONFLICT"), true);
     assert.equal(settled.snapshot.bookings.length, 1);
     assert.equal(settled.snapshot.bookings[0]?.bookingRef, "BK-LEFT");
+    assert.equal(settled.snapshot.transactions.some((row) => row.transactionRef === "TX-LEFT"), true);
+    assert.equal(settled.snapshot.transactions.some((row) => row.transactionRef === "TX-RIGHT"), false);
+    assert.equal(settled.snapshot.idempotency.some((row) => row.idempotencyKey === "reserve-1"), true);
+    assert.equal(settled.snapshot.idempotency.some((row) => row.idempotencyKey === "reserve-right"), false);
+    assert.equal(settled.snapshot.bookings[0]?.transactionRef, "TX-LEFT");
   });
 
   it("rehydrates a timeout and does not create a second booking until that provider allows it", () => {
@@ -465,9 +475,11 @@ describe("commerce persistence ports", () => {
   it("accepts one webhook id and rolls back an event when the state write conflicts", () => {
     const store = ready();
     assert.equal(store.bookings.openReservation(draft()).ok, true);
-    connect(store, "tenant-a", "pay-1", null, "PAYMENT");
-    const first = store.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", providerId: "pay-1", eventId: "wh-1", eventType: "payment.paid" });
-    const second = store.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", providerId: "pay-1", eventId: "wh-1", eventType: "payment.paid" });
+    const payment = connect(store, "tenant-a", "pay-1", null, "PAYMENT");
+    assert.equal(payment.ok, true);
+    if (!payment.ok) return;
+    const first = store.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", connectionId: payment.value.connectionId, eventId: "wh-1", eventType: "payment.paid" });
+    const second = store.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", connectionId: payment.value.connectionId, eventId: "wh-1", eventType: "payment.paid" });
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
     if (!second.ok) return;
@@ -477,8 +489,8 @@ describe("commerce persistence ports", () => {
     const parent = store.exportSnapshot();
     const left = createMemoryCommerceStore({ snapshot: parent });
     const right = createMemoryCommerceStore({ snapshot: parent });
-    assert.equal(left.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", providerId: "pay-1", eventId: "wh-2", eventType: "payment.paid" }).ok, true);
-    assert.equal(right.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", providerId: "pay-1", eventId: "wh-2", eventType: "payment.paid" }).ok, true);
+    assert.equal(left.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", connectionId: payment.value.connectionId, eventId: "wh-2", eventType: "payment.paid" }).ok, true);
+    assert.equal(right.webhooks.accept(actor("tenant-a"), { tenantId: "tenant-a", connectionId: payment.value.connectionId, eventId: "wh-2", eventType: "payment.paid" }).ok, true);
     const settled = settleConcurrent(parent, left.exportSnapshot(), right.exportSnapshot());
     assert.equal(settled.conflicts.some((item) => item.code === "DUPLICATE"), true);
     assert.equal(settled.snapshot.webhooks.filter((row) => row.eventId === "wh-2").length, 1);
@@ -740,6 +752,401 @@ describe("commerce persistence ports", () => {
     assert.equal(reused.ok, false);
     if (reused.ok) return;
     assert.equal(reused.code, "REFERENCE_CONFLICT");
+  });
+
+  it("returns copies so a read-only caller cannot change stored booking, payment, or connection state", () => {
+    const store = ready();
+    const opened = store.bookings.openReservation(draft());
+    assert.equal(opened.ok, true);
+    if (!opened.ok) return;
+    const storedVersion = opened.value.booking.version;
+    opened.value.booking.state = "CANCELLED";
+    opened.value.booking.version = 99;
+    opened.value.transaction.state = "CLOSED";
+    const reader = actor("tenant-a", null, ["read"]);
+    const read = store.bookings.read(reader, "tenant-a", "BK-1");
+    assert.equal(read.ok, true);
+    if (!read.ok) return;
+    assert.equal(read.value.state, "HELD");
+    assert.equal(read.value.version, storedVersion);
+    read.value.state = "CANCELLED";
+    read.value.providerReference = "mutated-by-reader";
+    read.value.version = 99;
+    const listed = store.bookings.list(reader, "tenant-a", "loc-1");
+    assert.equal(listed.ok, true);
+    if (!listed.ok) return;
+    const first = listed.value[0];
+    assert.ok(first);
+    first.state = "EXPIRED";
+    listed.value.length = 0;
+    const again = store.bookings.read(reader, "tenant-a", "BK-1");
+    assert.equal(again.ok, true);
+    if (!again.ok) return;
+    assert.equal(again.value.state, "HELD");
+    assert.equal(again.value.providerReference, "ext-book-1");
+    assert.equal(again.value.version, storedVersion);
+    assert.equal(store.exportSnapshot().bookings.length, 1);
+
+    const payment = connect(store, "tenant-a", "pay-1", "loc-1", "PAYMENT");
+    assert.equal(payment.ok, true);
+    if (!payment.ok) return;
+    assert.equal(store.payments.openAttempt(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      transactionRef: "TX-1",
+      attemptRef: "attempt-1",
+      providerId: "pay-1",
+      providerMode: "MERCHANT_PAYMENT_GATEWAY",
+      expectedAmountIdr: 10000,
+    }).ok, true);
+    const paid = store.payments.applyEvent(actor("tenant-a"), event());
+    assert.equal(paid.ok, true);
+    if (!paid.ok) return;
+    paid.value.ledger.status = "FAILED";
+    paid.value.ledger.amountIdr = 1;
+    paid.value.netRevenueIdr = 0;
+    const net = store.payments.net(reader, "tenant-a", "TX-1");
+    assert.equal(net.ok, true);
+    if (!net.ok) return;
+    assert.equal(net.value.status, "PAID");
+    assert.equal(net.value.netRevenueIdr, 10000);
+
+    const resolved = store.connections.resolve(reader, "tenant-a", "loc-1", "book-1", "BOOKING");
+    assert.equal(resolved.ok, true);
+    if (!resolved.ok) return;
+    resolved.value.health = "UNREACHABLE";
+    resolved.value.status = "REVOKED";
+    resolved.value.capabilities.supportsHold = false;
+    const fresh = store.connections.resolve(reader, "tenant-a", "loc-1", "book-1", "BOOKING");
+    assert.equal(fresh.ok, true);
+    if (!fresh.ok) return;
+    assert.equal(fresh.value.health, "UNKNOWN");
+    assert.equal(fresh.value.status, "ACTIVE");
+    assert.equal(fresh.value.capabilities.supportsHold, true);
+
+    const blocked = store.bookings.transition(reader, {
+      tenantId: "tenant-a",
+      bookingRef: "BK-1",
+      expectedVersion: storedVersion,
+      to: "CANCELLED",
+      nowIso: NOW,
+    });
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) return;
+    assert.equal(blocked.code, "FORBIDDEN");
+    const moved = store.bookings.transition(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      bookingRef: "BK-1",
+      expectedVersion: storedVersion,
+      to: "CANCELLED",
+      nowIso: NOW,
+    });
+    assert.equal(moved.ok, true);
+    const after = store.bookings.read(reader, "tenant-a", "BK-1");
+    assert.equal(after.ok, true);
+    if (!after.ok) return;
+    assert.equal(after.value.state, "CANCELLED");
+    assert.equal(after.value.version, storedVersion + 1);
+  });
+
+  it("rejects a reservation mode that disagrees with the registered connection", () => {
+    const native = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
+    verified(native, "tenant-a");
+    connect(native, "tenant-a", "book-1", "loc-1", "BOOKING");
+    const mismatch = native.bookings.openReservation(draft({ providerMode: "EXTERNAL_API" }));
+    assert.equal(mismatch.ok, false);
+    if (mismatch.ok) return;
+    assert.equal(mismatch.code, "SCOPE_MISMATCH");
+    assert.equal(native.exportSnapshot().bookings.length, 0);
+
+    const checkout = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
+    verified(checkout, "tenant-a");
+    const checkoutConnection = checkout.connections.register(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      providerId: "book-1",
+      kind: "BOOKING",
+      mode: "EXTERNAL_CHECKOUT",
+      capabilities: capabilities("book-1", { issuesAuthoritativeReference: false, supportsHold: false, holdExpiryOwner: "NONE" }),
+    });
+    assert.equal(checkoutConnection.ok, true);
+    const direct = checkout.bookings.openReservation(draft({
+      providerMode: "EXTERNAL_CHECKOUT",
+      referenceAuthoritative: true,
+      providerReference: "checkout-ref",
+    }));
+    assert.equal(direct.ok, false);
+    if (direct.ok) return;
+    assert.equal(direct.code, "INVALID");
+    assert.equal(checkout.exportSnapshot().bookings.length, 0);
+    const held = checkout.connections.register(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-2",
+      providerId: "book-hold",
+      kind: "BOOKING",
+      mode: "EXTERNAL_CHECKOUT",
+      capabilities: capabilities("book-hold", { supportsHold: true, issuesAuthoritativeReference: false, holdExpiryOwner: "NONE" }),
+    });
+    assert.equal(held.ok, false);
+    if (held.ok) return;
+    assert.equal(held.code, "INVALID");
+
+    const manual = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
+    verified(manual, "tenant-a");
+    assert.equal(manual.connections.register(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      providerId: "book-1",
+      kind: "BOOKING",
+      mode: "MANUAL",
+      capabilities: capabilities("book-1", { issuesAuthoritativeReference: false, supportsHold: false, holdExpiryOwner: "NONE" }),
+    }).ok, true);
+    const invented = manual.bookings.openReservation(draft({
+      providerMode: "MANUAL",
+      referenceAuthoritative: true,
+      providerReference: "staff-made-this",
+    }));
+    assert.equal(invented.ok, false);
+    if (invented.ok) return;
+    assert.equal(invented.code, "INVALID");
+    const referenceOnly = manual.bookings.openReservation(draft({
+      providerMode: "MANUAL",
+      referenceAuthoritative: false,
+      providerReference: "staff-made-this",
+    }));
+    assert.equal(referenceOnly.ok, false);
+    if (referenceOnly.ok) return;
+    assert.equal(referenceOnly.code, "INVALID");
+    const requested = manual.bookings.openReservation(draft({
+      providerMode: "MANUAL",
+      referenceAuthoritative: false,
+      providerReference: null,
+    }));
+    assert.equal(requested.ok, true);
+    if (!requested.ok) return;
+    assert.equal(requested.value.booking.state, "REQUESTED");
+    assert.equal(requested.value.booking.referenceAuthoritative, false);
+    assert.equal(requested.value.booking.providerReference, null);
+
+    const weak = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
+    verified(weak, "tenant-a");
+    connect(weak, "tenant-a", "book-1", "loc-1", "BOOKING", { issuesAuthoritativeReference: false });
+    const forged = weak.bookings.openReservation(draft({ referenceAuthoritative: true, providerReference: "forged-ref" }));
+    assert.equal(forged.ok, false);
+    if (forged.ok) return;
+    assert.equal(forged.code, "INVALID");
+    const forgedReference = weak.bookings.openReservation(draft({ referenceAuthoritative: false, providerReference: "forged-ref" }));
+    assert.equal(forgedReference.ok, false);
+    if (forgedReference.ok) return;
+    assert.equal(forgedReference.code, "INVALID");
+    assert.equal(weak.exportSnapshot().bookings.length, 0);
+
+    const mixed = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
+    const paymentMode = mixed.connections.register(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      providerId: "book-1",
+      kind: "BOOKING",
+      mode: "MERCHANT_PAYMENT_GATEWAY",
+      capabilities: capabilities("book-1"),
+    });
+    assert.equal(paymentMode.ok, false);
+    if (paymentMode.ok) return;
+    assert.equal(paymentMode.code, "INVALID");
+
+    const pay = ready();
+    assert.equal(pay.bookings.openReservation(draft()).ok, true);
+    connect(pay, "tenant-a", "pay-1", "loc-1", "PAYMENT");
+    const wrongAttempt = pay.payments.openAttempt(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      transactionRef: "TX-1",
+      attemptRef: "attempt-1",
+      providerId: "pay-1",
+      providerMode: "EXTERNAL_BOOKING_PROVIDER",
+      expectedAmountIdr: 10000,
+    });
+    assert.equal(wrongAttempt.ok, false);
+    if (wrongAttempt.ok) return;
+    assert.equal(wrongAttempt.code, "SCOPE_MISMATCH");
+    assert.equal(pay.exportSnapshot().attempts.length, 0);
+  });
+
+  it("keeps policy evidence inside one merchant, offering, and commerce surface", () => {
+    const store = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
+    connect(store, "tenant-a", "book-1", "loc-1", "BOOKING");
+    verified(store, "tenant-a");
+    const ticket = store.bookings.openReservation(draft({ category: "ADMISSION_TICKET" }));
+    assert.equal(ticket.ok, false);
+    if (ticket.ok) return;
+    assert.equal(ticket.code, "POLICY_DENIED");
+    const flow = store.bookings.openReservation(draft({ experience: "WHATSAPP_FLOW" }));
+    assert.equal(flow.ok, false);
+    if (flow.ok) return;
+    assert.equal(flow.code, "POLICY_DENIED");
+    const unknownMerchant = store.bookings.openReservation(draft({ merchantEligibility: "UNKNOWN" }));
+    assert.equal(unknownMerchant.ok, false);
+    if (unknownMerchant.ok) return;
+    assert.equal(unknownMerchant.code, "POLICY_DENIED");
+    assert.equal(store.exportSnapshot().bookings.length, 0);
+
+    const reused = store.policy.submit(actor("tenant-a"), "tenant-a", { offeringCategory: "ADMISSION_TICKET", experience: "WHATSAPP_CATALOG" }, {
+      kind: "AUTHORIZED_PROCESS",
+      processId: "policy-job",
+      reference: "policy-record-1",
+      outcome: "VERIFIED",
+      attestation: signPolicyAttestation(POLICY_KEY, {
+        tenantId: "tenant-a",
+        offeringCategory: "GENERAL_GOODS",
+        experience: "WHATSAPP_CATALOG",
+        processId: "policy-job",
+        reference: "policy-record-1",
+        outcome: "VERIFIED",
+      }),
+    });
+    assert.equal(reused.ok, false);
+    if (reused.ok) return;
+    assert.equal(reused.code, "POLICY_DENIED");
+    const caller = store.policy.submit(actor("tenant-a"), "tenant-a", { offeringCategory: "ADMISSION_TICKET", experience: "WHATSAPP_CATALOG" }, {
+      kind: "CALLER_ENUM",
+      status: "VERIFIED",
+      reference: "ticket-caller",
+    });
+    assert.equal(caller.ok, true);
+    if (!caller.ok) return;
+    assert.equal(caller.value.status, "UNVERIFIED");
+    assert.equal(caller.value.validatedBy, null);
+    const goods = store.policy.read(actor("tenant-a"), "tenant-a", GOODS_CATALOG);
+    assert.equal(goods.ok, true);
+    if (!goods.ok) return;
+    assert.equal(goods.value.status, "VERIFIED");
+    assert.equal(goods.value.offeringCategory, "GENERAL_GOODS");
+    const stillTicket = store.bookings.openReservation(draft({
+      category: "ADMISSION_TICKET",
+      bookingRef: "BK-TICKET",
+      transactionRef: "TX-TICKET",
+      idempotencyKey: "reserve-ticket",
+      requestHash: "hash-ticket",
+      providerReference: "ext-ticket",
+    }));
+    assert.equal(stillTicket.ok, false);
+    if (stillTicket.ok) return;
+    assert.equal(stillTicket.code, "POLICY_DENIED");
+    const allowed = store.bookings.openReservation(draft());
+    assert.equal(allowed.ok, true);
+    assert.equal(store.exportSnapshot().policyEvidence.some((row) => row.tenantId.toLowerCase().includes("yola")), false);
+    const yola = store.bookings.openReservation(draft({
+      actor: actor("yola-fun"),
+      tenantId: "yola-fun",
+      merchantEligibility: "UNKNOWN",
+      bookingRef: "BK-YOLA",
+      transactionRef: "TX-YOLA",
+      idempotencyKey: "reserve-yola",
+      requestHash: "hash-yola",
+      providerReference: "ext-yola",
+    }));
+    assert.equal(yola.ok, false);
+    if (yola.ok) return;
+    assert.equal(yola.code, "POLICY_DENIED");
+    assert.equal(store.exportSnapshot().bookings.some((row) => row.tenantId === "yola-fun"), false);
+  });
+
+  it("dedupes webhook events per connection and does not let one tenant suppress another", () => {
+    const store = createMemoryCommerceStore({ policyValidatorKey: POLICY_KEY });
+    const left = connect(store, "tenant-a", "vendor-1", "loc-a", "PAYMENT");
+    const right = connect(store, "tenant-b", "vendor-1", "loc-b", "PAYMENT");
+    assert.equal(left.ok, true);
+    assert.equal(right.ok, true);
+    if (!left.ok || !right.ok) return;
+    const first = store.webhooks.accept(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      connectionId: left.value.connectionId,
+      eventId: "evt-shared",
+      eventType: "payment.paid",
+    });
+    const other = store.webhooks.accept(actor("tenant-b"), {
+      tenantId: "tenant-b",
+      connectionId: right.value.connectionId,
+      eventId: "evt-shared",
+      eventType: "payment.paid",
+    });
+    const replay = store.webhooks.accept(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      connectionId: left.value.connectionId,
+      eventId: "evt-shared",
+      eventType: "payment.paid",
+    });
+    assert.equal(first.ok, true);
+    assert.equal(other.ok, true);
+    assert.equal(replay.ok, true);
+    if (!first.ok || !other.ok || !replay.ok) return;
+    assert.equal(replay.replay, true);
+    assert.notEqual(first.value.dedupeKey, other.value.dedupeKey);
+    assert.equal(first.value.dedupeKey, `${left.value.connectionId}:evt-shared`);
+    assert.equal(other.value.dedupeKey, `${right.value.connectionId}:evt-shared`);
+    const crossed = store.webhooks.accept(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      connectionId: right.value.connectionId,
+      eventId: "evt-other",
+      eventType: "payment.paid",
+    });
+    assert.equal(crossed.ok, false);
+    if (crossed.ok) return;
+    assert.equal(crossed.code, "CROSS_TENANT");
+    const snapshot = store.exportSnapshot();
+    assert.equal(snapshot.webhooks.length, 2);
+    assert.equal(new Set(snapshot.webhooks.map((row) => row.dedupeKey)).size, 2);
+  });
+
+  it("keeps both reservations when concurrent creates use different slots", () => {
+    const store = ready();
+    const parent = store.exportSnapshot();
+    const left = createMemoryCommerceStore({ snapshot: parent, policyValidatorKey: POLICY_KEY });
+    const right = createMemoryCommerceStore({ snapshot: parent, policyValidatorKey: POLICY_KEY });
+    assert.equal(left.bookings.openReservation(draft({
+      bookingRef: "BK-A",
+      transactionRef: "TX-A",
+      idempotencyKey: "reserve-a",
+      requestHash: "hash-a",
+      offeringId: "offer-a",
+      providerReference: "ext-a",
+    })).ok, true);
+    assert.equal(left.events.append(actor("tenant-a"), {
+      eventId: "evt-a",
+      tenantId: "tenant-a",
+      transactionRef: "TX-A",
+      type: "reserved",
+      at: NOW,
+      payload: { slot: "a" },
+    }).ok, true);
+    assert.equal(right.bookings.openReservation(draft({
+      bookingRef: "BK-B",
+      transactionRef: "TX-B",
+      idempotencyKey: "reserve-b",
+      requestHash: "hash-b",
+      offeringId: "offer-b",
+      startsAt: "2026-10-28T09:00:00.000Z",
+      providerReference: "ext-b",
+    })).ok, true);
+    assert.equal(right.events.append(actor("tenant-a"), {
+      eventId: "evt-b",
+      tenantId: "tenant-a",
+      transactionRef: "TX-B",
+      type: "reserved",
+      at: NOW,
+      payload: { slot: "b" },
+    }).ok, true);
+    const settled = settleConcurrent(parent, left.exportSnapshot(), right.exportSnapshot());
+    assert.equal(settled.conflicts.length, 0);
+    assert.equal(settled.snapshot.bookings.length, 2);
+    for (const ref of ["A", "B"] as const) {
+      const booking = settled.snapshot.bookings.find((row) => row.bookingRef === `BK-${ref}`);
+      assert.ok(booking);
+      assert.equal(booking.transactionRef, `TX-${ref}`);
+      assert.equal(settled.snapshot.transactions.some((row) => row.transactionRef === `TX-${ref}` && row.bookingRef === `BK-${ref}`), true);
+      assert.equal(settled.snapshot.idempotency.some((row) => row.idempotencyKey === `reserve-${ref.toLowerCase()}` && row.transactionRef === `TX-${ref}`), true);
+      assert.equal(settled.snapshot.events.some((row) => row.eventId === `evt-${ref.toLowerCase()}` && row.transactionRef === `TX-${ref}`), true);
+    }
   });
 
   it("maps commerce sessions through the existing read and write rules", () => {

@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **M0 through M1B design and in-memory ports.** Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document. M1C is not authorized.
+Status: **M0 through M1B.1 design and in-memory ports.** Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document. M1C is not authorized.
 
 ## Stack
 
@@ -110,7 +110,7 @@ All of these stay true after M1A:
 
 ## M1B — persistence design
 
-M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. The M1A.2 orchestrator still owns its own maps. M1C is not authorized.
+M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. The M1A.2 orchestrator still owns its own maps. M1B.1 corrects copies, provider-mode checks, scoped policy evidence, connection-scoped webhook identity, composite location keys in the sketch, and the concurrency simulation. M1C is not authorized.
 
 The slice that was recommended, still without a production migration:
 

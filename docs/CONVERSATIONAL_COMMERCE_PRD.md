@@ -1,6 +1,6 @@
 # Conversational commerce PRD
 
-Status: **M0 contract, M1A foundation, M1A.1–M1A.2 contract hardening, and M1B persistence design.** Not deployed. No production migration. No live booking, payment, WhatsApp Flow, or Meta write. M1C is not authorized.
+Status: **M0 contract, M1A foundation, M1A.1–M1A.2 contract hardening, M1B persistence design, and M1B.1 contract corrections.** Not deployed. No production migration. No live booking, payment, WhatsApp Flow, or Meta write. M1C is not authorized.
 
 Date: 2026-10-25. Parent branch: `feature/commerce-meta-catalog` (draft PR #1, unmerged). This work is a separate branch. It does not activate Milestone C order capture.
 

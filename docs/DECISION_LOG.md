@@ -98,6 +98,10 @@ The poll worker loads the product again after `check_batch_request_status` and t
 
 `POST /api/internal/commerce/poll` accepts a bearer `COMMERCE_POLL_SECRET` and polls only when `COMMERCE_CATALOG_POLL_ENABLED=true`. Both are unset. The server process does not start a timer. The row lock stays with the worker until that tick returns.
 
+## 2026-10-26 — Conversational commerce M1B.1 closes the persistence contract holes
+
+Repository results are copies, so a read-only caller cannot edit a stored booking, ledger, or connection. A reservation must match the registered connection mode. External checkout does not create a booking, and a manual connection cannot invent an authoritative reference. Policy evidence is scoped to one merchant, one offering category, and one commerce surface. Unknown scope fails closed. Webhook identity is the trusted connection id plus the provider event id. The schema sketch uses composite tenant and location foreign keys, and composite tenant and connection keys for credentials and webhooks. That SQL is not applied. `settleConcurrent` merges whole new reservation and payment units and does not prove database transactions. YOLA FUN stays NO-GO. M1C is not started.
+
 ## 2026-10-26 — Conversational commerce M1B is ports and a schema sketch
 
 Persistence boundaries for the orchestrator are repository interfaces and a deterministic in-memory store. The schema sketch is `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It is not applied. `prisma/schema.prisma` is unchanged. `CommerceOrder` stays the catalog-order domain and is not a foreign key. Provider secrets stay references. The existing AES-256-GCM helper is the future ciphertext writer, and this milestone does not store a secret. `VERIFIED` policy evidence requires an attested process. There is no universal hold TTL and no universal click-id retention period. External delivery is at-least-once with idempotent effects. Split tender is not implemented. The M1A.2 orchestrator is not moved onto the ports. YOLA FUN stays NO-GO. M1C is not started.
