@@ -754,6 +754,10 @@ const en: Messages = {
         label: "WhatsApp broadcast",
         description: "Write once to people who already messaged HQ",
       },
+      "/commerce": {
+        label: "Commerce",
+        description: "Products for this brand. Catalog sync is off.",
+      },
       "/customers": {
         label: "Customers",
         description: "Join QR members and people who messaged HQ or a branch",
@@ -1574,6 +1578,10 @@ const id: Messages = {
       "/broadcast": {
         label: "Broadcast WhatsApp",
         description: "Tulis sekali ke orang yang sudah chat HQ",
+      },
+      "/commerce": {
+        label: "Commerce",
+        description: "Produk merek ini. Sinkron katalog belum nyala.",
       },
       "/customers": {
         label: "Pelanggan",

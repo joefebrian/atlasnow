@@ -96,6 +96,7 @@ export async function middleware(request: NextRequest) {
       pathname.startsWith("/channels") ||
       pathname.startsWith("/conversations") ||
       pathname.startsWith("/broadcast") ||
+      pathname.startsWith("/commerce") ||
       pathname.startsWith("/customers") ||
       pathname.startsWith("/loyalty") ||
       pathname.startsWith("/action-center") ||

@@ -124,6 +124,12 @@ export const APP_NAV: NavItem[] = [
     fase: "E3",
   },
   {
+    href: "/commerce",
+    label: "Commerce",
+    description: "Products for this brand. Catalog sync is off.",
+    fase: "E3",
+  },
+  {
     href: "/customers",
     label: "Customers",
     description: "Join QR and WhatsApp people",

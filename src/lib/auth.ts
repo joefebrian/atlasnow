@@ -48,6 +48,11 @@ export async function createSessionToken(payload: SessionPayload) {
     .sign(secretKey());
 }
 
+export async function readSessionToken(): Promise<string | undefined> {
+  const jar = await cookies();
+  return jar.get(COOKIE)?.value;
+}
+
 export async function readSession(): Promise<SessionPayload | null> {
   const jar = await cookies();
   const token = jar.get(COOKIE)?.value;

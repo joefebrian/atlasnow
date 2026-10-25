@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { captureWhatsAppOrders, orderCaptureEnabled, whatsappPostPlan } from "@/lib/commerce/order-capture";
 import { ingestCloudWhatsAppPayload } from "@/lib/conversations/cloud-ingest";
 import { cloudSignatureValid } from "@/lib/conversations/cloud-signature";
 import { cloudWebhookSecrets } from "@/lib/conversations/cloud-verify";
@@ -20,7 +21,12 @@ export async function POST(request: Request) {
   const raw = await request.text();
   const secrets = await cloudWebhookSecrets();
   const sig = request.headers.get("x-hub-signature-256");
-  if (secrets.appSecret && !cloudSignatureValid(raw, sig, secrets.appSecret)) {
+  const plan = whatsappPostPlan({
+    appSecret: secrets.appSecret,
+    signatureValid: cloudSignatureValid(raw, sig, secrets.appSecret),
+    captureEnabled: orderCaptureEnabled(),
+  });
+  if ("status" in plan) {
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }
   let body: unknown;
@@ -29,9 +35,9 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
+  let results;
   try {
-    const { results } = await ingestCloudWhatsAppPayload(body);
-    return NextResponse.json({ ok: true, results });
+    results = (await ingestCloudWhatsAppPayload(body)).results;
   } catch (e) {
     await logAppError({
       source: "WhatsApp Cloud webhook",
@@ -39,5 +45,19 @@ export async function POST(request: Request) {
       detail: e instanceof Error ? e.message : String(e),
     });
     return NextResponse.json({ error: "ingest_failed" }, { status: 500 });
+  }
+  if (!plan.capture) {
+    return NextResponse.json({ ok: true, results });
+  }
+  try {
+    const orders = await captureWhatsAppOrders(body);
+    return NextResponse.json({ ok: true, results, orders });
+  } catch {
+    await logAppError({
+      source: "WhatsApp Cloud webhook",
+      title: "Commerce order capture failed",
+      detail: "capture_failed",
+    });
+    return NextResponse.json({ error: "capture_failed" }, { status: 500 });
   }
 }
