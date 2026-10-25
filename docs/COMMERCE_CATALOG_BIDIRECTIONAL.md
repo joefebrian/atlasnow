@@ -7,8 +7,8 @@ Slice 2.5 adds three merchant actions on top of the product master. AtlasNow sta
 ## What is built
 
 - Import stays the read path from commit `34f07c7`. It runs only when `COMMERCE_CATALOG_IMPORT_ENABLED=true`. That switch stays unset. An import stores the Meta product id, retailer id, review status, and a JSON copy of the imported fields (`sourceSnapshot`). A second import does not overwrite the product. A conflicting SKU is not changed.
-- Publish preview builds CREATE or UPDATE from the stored mapping. UPDATE requires a current mapping, the same catalog, and the same retailer id. A SKU that does not match is blocked and no item is sent. The preview returns `networkCalled: false`. A finished batch is still not a Meta approval. `lastSyncedAt` stays empty until the existing confirmed-batch path says so.
-- The catalog file is `POST /api/commerce/catalog/export`. It reads the product master for that merchant only. Commerce catalogs use `id, title, description, availability, condition, price, link, image_link, brand, item_group_id`. Local catalogs (`offline_commerce`, `local_service_businesses`, or a type whose name contains `local`) also require one outlet address, latitude, and longitude. Any missing required field returns the report and an empty file. The route does not call Graph.
+- Publish preview builds CREATE or UPDATE from the stored mapping. UPDATE requires a current mapping, the same catalog, and the same retailer id. A SKU that does not match is an execution blocker and no item is sent. Product-data blockers are separate. A saved https product link is not reported as missing. The preview still returns `wouldSend: false` and `networkCalled: false`, including when the live switch is on, because the live route does not read that saved link. A finished batch is still not a Meta approval. `lastSyncedAt` stays empty until the existing confirmed-batch path says so.
+- The catalog file is `POST /api/commerce/catalog/export`. It reads the product master for that merchant only. A confirmed commerce type (`commerce`, `ecommerce`, `products`, or `product`) uses `id, title, description, availability, condition, link, image_link, brand, price`. `item_group_id` is added only when a product has an active variant. A confirmed local type also needs `address.city`, `address.country`, `address.region`, `availability_circle_origin.latitude`, `availability_circle_origin.longitude`, `availability_circle_radius`, and `availability_circle_radius_unit` of `KM` or `MI`. Those values come from the uploaded Jakarta Barat file. An address, latitude, and longitude are not enough. Radius and unit are never invented, and they are not stored, so the export route cannot emit a local file yet. An empty or unknown catalog type is unverified and returns no file. `activities` stays unsupported. The route does not call Graph.
 
 ## Gates that stay shut
 
@@ -17,18 +17,27 @@ Slice 2.5 adds three merchant actions on top of the product master. AtlasNow sta
 - `COMMERCE_CATALOG_IMPORT_ENABLED`, `COMMERCE_CATALOG_POLL_ENABLED`, `COMMERCE_ORDER_CAPTURE_ENABLED`, and `COMMERCE_PAYMENTS_ENABLED` stay unset.
 - The QA WhatsApp catalog stays a commerce `PRODUCT_ITEM` catalog. This slice does not change it to a local or activities catalog.
 
-## Migration
+## Migration assessment
 
-`20261024220000_commerce_catalog_feed` adds `CommerceProduct.publicUrl`, `CommerceCatalogLink.sourceSnapshot`, and `CommerceConnection.catalogVertical`. It was applied on localhost:5433 only.
+Three migrations are in the branch and are not on production. Production history is 37 applied migrations through `20261024100000_commerce_batch_poll`. That count is the 35 tracked folders through the batch-poll migration plus the two production inbox migrations `20261004120000_wa_message_image` and `20261004143000_inbox_image_retention`. Those inbox folders are on the production host and are untracked in this working tree. They are not part of this branch. An image that drops them will make `prisma migrate deploy` stop because the database history and the image history diverge. A later overlay must keep both folders.
 
-These earlier commerce migrations are also still local only:
+This review did not open a production database session and did not run a migration.
 
-- `20261024180000_commerce_orders`
-- `20261024200000_commerce_catalog_import`
+| Migration | Slice | SQL | Production |
+| --- | --- | --- | --- |
+| `20261024180000_commerce_orders` | Milestone C order capture. Not Slice 2.5. | Creates `CommerceOrder` and `CommerceOrderLine`, indexes, and foreign keys. No `DROP`. Does not enable payment or catalog sync. | Not applied |
+| `20261024200000_commerce_catalog_import` | Catalog import. | Adds nullable `CommerceCatalogLink.lastImportedAt`. No backfill. | Not applied |
+| `20261024220000_commerce_catalog_feed` | Slice 2.5 file and preview. | Adds `CommerceProduct.publicUrl`, `CommerceCatalogLink.sourceSnapshot`, and `CommerceConnection.catalogVertical`, each `TEXT NOT NULL DEFAULT ''`. No location columns. | Applied on localhost:5433 only |
 
-The production entrypoint runs `prisma migrate deploy` before start. Do not rebuild the production image until this proposal, the import proposal, and the order-capture proposal are accepted, a new backup is taken, and only those additive files are confirmed.
+All three are additive and ordered after `20261024100000_commerce_batch_poll`. They do not alter inbox, loyalty, or broadcast tables. They are compatible with the tables created by the 37 applied migrations. Compatibility is not approval to run them.
 
-`catalogVertical` is filled when the merchant links a catalog, or when Find catalogs returns a vertical for the catalog that is already linked. An empty value means the file uses the commerce schema and says the type is not stored.
+`deploy/docker-entrypoint.sh` runs `prisma migrate deploy` before the server starts. A rebuilt image applies every pending migration in that image. Do not rebuild production. Do not put the order-capture migration in a production image until `docs/COMMERCE_ORDER_CAPTURE.md` is accepted. Do not put the import or feed migrations in a production image until this proposal is accepted. A branch image contains all three, so building from this branch would apply all three.
+
+`catalogVertical` is filled when the merchant links a catalog, or when Find catalogs returns a vertical for the catalog that is already linked. An empty value is unverified. The file is not created and a live batch is not sent until the type is a confirmed commerce or local schema. `activities` stays unsupported.
+
+## CI
+
+`.github/workflows/commerce.yml` still runs the older unit files and `service.db.test.ts` only. The GitHub token for this repo cannot edit workflow files. `docs/COMMERCE_CI_WORKFLOW.patch` adds `catalog-import.test.ts`, `catalog-feed.test.ts`, and `catalog-publish.test.ts` to the unit job, and runs `catalog-import.db.test.ts` and `catalog-bidirectional.db.test.ts` as separate database steps. Those database files disconnect Prisma in `after()`, so they cannot share one process. Do not treat that patch as a passing Actions run until an authorized maintainer applies it and the run is green.
 
 ## Deploy sequence, after a separate approval
 

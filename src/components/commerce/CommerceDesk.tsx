@@ -391,6 +391,9 @@ export function CommerceDesk({
         error?: string;
         message?: string;
         blockers?: string[];
+        productBlockers?: string[];
+        executionBlockers?: string[];
+        readiness?: string;
         networkCalled?: boolean;
         wouldSend?: boolean;
         hasSnapshot?: boolean;
@@ -400,6 +403,7 @@ export function CommerceDesk({
         lastSyncedAt?: string | null;
         diffs?: { field: string; imported: string; current: string; changed: boolean }[];
         methods?: { retailerId: string; method: string }[];
+        mappings?: { retailerId?: string; externalProductId?: string; metaProductId?: string };
         acceptanceNote?: string;
       };
       if (!response.ok) {
@@ -417,6 +421,10 @@ export function CommerceDesk({
           ? `Differences: ${diffs.map((row) => `${row.field} ${row.imported} → ${row.current}`).join("; ")}`
           : "Differences: none.";
       const methods = body.methods?.map((row) => `${row.retailerId} ${row.method}`).join(", ") || "none";
+      const productBlockers = body.productBlockers || body.blockers || [];
+      const mapping = body.mappings?.externalProductId
+        ? `${body.mappings.retailerId || product.sku} ${body.mappings.externalProductId}`
+        : "no Meta id";
       const when = (value?: string | null) => (value ? value.slice(0, 16).replace("T", " ") : "");
       setPreviewText(
         [
@@ -425,9 +433,12 @@ export function CommerceDesk({
           `Meta review: ${body.reviewStatus || "UNKNOWN"}`,
           `Last imported: ${when(body.lastImportedAt) || "Not imported"}`,
           `Last successful publish: ${when(body.lastSyncedAt) || "Not synced"}`,
+          `Mapping: ${mapping}`,
           diffLine,
           `Simulated publish: ${methods}`,
-          body.blockers?.length ? body.blockers.join(" ") : body.message || "Nothing to send",
+          `Readiness: ${body.readiness || (productBlockers.length ? "Blocked by product data." : "Product data is ready. Live send stays off.")}`,
+          productBlockers.length ? `Product data: ${productBlockers.join(" ")}` : "Product data: ready.",
+          body.executionBlockers?.length ? `Not sent: ${body.executionBlockers.join(" ")}` : "Not sent.",
           "No request was sent.",
           body.acceptanceNote || "A Meta batch acceptance is not a Meta product approval.",
         ].join("\n")

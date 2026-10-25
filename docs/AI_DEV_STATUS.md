@@ -65,6 +65,8 @@ Inbound WhatsApp `type=order` capture is implemented behind `COMMERCE_ORDER_CAPT
 
 2026-10-24, catalog file and publish preview: `catalog-feed.test.ts` 7 passed, `catalog-publish.test.ts` 6 passed, `catalog-bidirectional.db.test.ts` 1 passed, `catalog-import.db.test.ts` 3 passed, `service.db.test.ts` 16 passed, and `tsc --noEmit` passed. No `items_batch` call was made by the file or the preview. `.github/workflows/commerce.yml` does not list the new tests. The GitHub token cannot edit that workflow. `COMMERCE_CATALOG_SYNC_ENABLED` stays unset. The local demo brand page rendered the catalog file section. Its export returned no file because a required link was missing, and its preview returned `networkCalled: false`.
 
+2026-10-25, feed schema review: `catalog-feed.test.ts` 11 passed, `catalog-publish.test.ts` 9 passed, `catalog-import.test.ts` 6 passed, `connection.test.ts` 13 passed, `validate.test.ts` 12 passed, `nav-access.test.ts` 8 passed, `catalog-import.db.test.ts` 3 passed, `catalog-bidirectional.db.test.ts` 1 passed, `service.db.test.ts` 17 passed, `order-capture.test.ts` 11 passed, `order-capture.db.test.ts` 4 passed, and `tsc --noEmit` passed. No live Graph call. GitHub Actions does not run the new tests. The prepared patch is `docs/COMMERCE_CI_WORKFLOW.patch`. `COMMERCE_CATALOG_SYNC_ENABLED` stays unset.
+
 2026-10-24, order capture: `npx tsx --test src/lib/commerce/order-capture.test.ts` — **11 passed, 0 failed**. `npx tsx --test src/lib/commerce/order-capture.db.test.ts` on localhost:5433 — **4 passed, 0 failed**. `npx tsc --noEmit` passed. The Commerce page for the local demo brand rendered "Catalog orders", the empty state, and, with a fixture row that was deleted afterward, the reference, SKU, `IDR 28,780` estimate, review label, and "Not started". The orders API omitted the sender id. Anonymous `GET /api/commerce/orders` returned 401. No payment call was made.
 
 `.github/workflows/commerce.yml` runs that typecheck, the older unit files, and `service.db.test.ts` against a Postgres 16 service. `COMMERCE_CATALOG_SYNC_ENABLED` is not set in that file. The workflow was added in `6a7df29`. The order-capture test files are not listed there yet. A push that edits `.github/workflows/commerce.yml` was refused because the GitHub token has no `workflow` scope. Run `order-capture.test.ts` and `order-capture.db.test.ts` locally until that file can be updated.
@@ -80,7 +82,11 @@ Applied on localhost:5433 only:
 - `20261023210000_commerce_catalog_connection`
 - `20261023233000_commerce_sync_hardening` — `processedPayloadHash`, `processedPublicUrl`, `batchHandle`, `itemResults`, `CommerceOAuthNonce`
 - `20261024100000_commerce_batch_poll` — `mappingCurrent`, `catalogId`, `publicUrl`, `pollAttempts`, `nextPollAt`, `lockedAt`, `lockToken`
-- `20261024180000_commerce_orders` — `CommerceOrder`, `CommerceOrderLine`. Local only until the order-capture deploy is approved. Production entrypoint applies pending migrations on boot, so this file must not ship in a production image before that approval.
+- `20261024180000_commerce_orders` — Milestone C order capture, not Slice 2.5. `CommerceOrder`, `CommerceOrderLine`. Local only until the order-capture deploy is approved.
+- `20261024200000_commerce_catalog_import` — nullable `lastImportedAt`. Local only.
+- `20261024220000_commerce_catalog_feed` — `publicUrl`, `sourceSnapshot`, `catalogVertical`. Local only. No radius column.
+
+Production remains 37 applied migrations through `20261024100000_commerce_batch_poll`, including the two inbox migrations that are not in this branch. The entrypoint applies every pending file in the image. Do not rebuild.
 
 `migrate deploy` applied `20261024100000_commerce_batch_poll` on localhost:5433. The same five commerce migrations, with the rest of the migration history, applied on a disposable Postgres 16 at `127.0.0.1:5434`. That container was removed. There is no staging database. Server migrate has not been run.
 
@@ -102,4 +108,4 @@ Branch `feature/commerce-meta-catalog`. Draft pull request https://github.com/jo
 
 ## Next
 
-Review Milestone C on the draft pull request. Do not merge. Do not deploy. Do not set `COMMERCE_ORDER_CAPTURE_ENABLED`. Do not start payment automation. The deploy steps are in `docs/COMMERCE_ORDER_CAPTURE.md`.
+Review the Slice 2.5 feed correction on the draft pull request. Do not merge. Do not deploy. Do not set any commerce switch. Do not start payment automation. An authorized maintainer can apply `docs/COMMERCE_CI_WORKFLOW.patch`. The current token cannot edit `.github/workflows/commerce.yml`.

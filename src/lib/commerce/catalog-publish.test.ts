@@ -72,9 +72,34 @@ describe("simulated catalog publish", () => {
     assert.equal(price?.current, "30000");
     assert.equal(price?.changed, true);
     assert.equal(name?.changed, true);
-    assert.match(plan.blockers.join(" "), /Live catalog push is off/);
-    assert.match(plan.blockers.join(" "), /https product link/);
+    assert.equal(plan.productBlockers.some((row) => /https product link|no public URL/.test(row)), false);
+    assert.match(plan.executionBlockers.join(" "), /Live catalog push is off/);
+    assert.match(plan.executionBlockers.join(" "), /does not read the saved product link/);
+    assert.equal(plan.readiness, "Product data is ready. Live send stays off.");
+    assert.equal(plan.message, "Product data is ready. No request was sent.");
+    assert.notEqual(plan.syncStatus, "PENDING");
     assert.match(plan.acceptanceNote, /not a Meta product approval/);
+  });
+
+  it("reports a missing saved URL as product data and still does not send", () => {
+    const plan = preview({ storedPublicUrl: "", liveSwitch: true });
+    assert.equal(plan.wouldSend, false);
+    assert.equal(plan.networkCalled, false);
+    assert.equal(plan.batch, null);
+    assert.match(plan.productBlockers.join(" "), /https product link/);
+    assert.equal(plan.readiness, "Blocked by product data.");
+    assert.equal(plan.executionBlockers.some((row) => /Live catalog push is off/.test(row)), false);
+  });
+
+  it("stays wouldSend false when the live switch is on", () => {
+    const plan = preview({ liveSwitch: true });
+    assert.equal(plan.wouldSend, false);
+    assert.equal(plan.networkCalled, false);
+    assert.equal(plan.methods[0]?.method, "UPDATE");
+    assert.equal(plan.batch?.requests[0]?.method, "UPDATE");
+    assert.equal(plan.executionBlockers.some((row) => /Live catalog push is off/.test(row)), false);
+    assert.match(plan.executionBlockers.join(" "), /does not read the saved product link/);
+    assert.notEqual(plan.syncStatus, "PENDING");
   });
 
   it("uses CREATE when the product has no Meta id", () => {
@@ -105,27 +130,38 @@ describe("simulated catalog publish", () => {
     const plan = preview({ parent: { ...mapping, retailerId: "OLD-SKU" } });
     assert.equal(plan.methods[0]?.method, "BLOCKED");
     assert.equal(plan.batch, null);
-    assert.match(plan.blockers.join(" "), /does not match the stored Meta retailer id/);
+    assert.match(plan.executionBlockers.join(" "), /does not match the stored Meta retailer id/);
+    assert.equal(plan.productBlockers.some((row) => /retailer id/.test(row)), false);
   });
 
-  it("does not simulate a local publish without coordinates", () => {
+  it("does not simulate a local publish from an address without a radius", () => {
     const plan = preview({
       vertical: "offline_commerce",
       outlets: [
         {
-          addressLine1: "Jl. QA",
+          addressLine1: "Jl. Panjang",
           addressLine2: "",
-          city: "Tangerang",
-          region: "",
+          city: "Jakarta Barat",
+          region: "DKI Jakarta",
           postalCode: "",
           country: "ID",
-          latitude: null,
-          longitude: null,
+          latitude: -6.183295,
+          longitude: 106.751824,
         },
       ],
     });
     assert.equal(plan.batch, null);
-    assert.match(plan.blockers.join(" "), /latitude/);
+    assert.match(plan.executionBlockers.join(" "), /Location information is missing or incomplete/);
+    assert.equal(plan.productBlockers.some((row) => /https product link/.test(row)), false);
+    assert.equal(plan.networkCalled, false);
+    assert.equal(plan.wouldSend, false);
+  });
+
+  it("requires verification before an unknown catalog type can be previewed as a batch", () => {
+    const plan = preview({ vertical: "" });
+    assert.equal(plan.batch, null);
+    assert.match(plan.executionBlockers.join(" "), /Confirm the Meta catalog type/);
+    assert.equal(plan.wouldSend, false);
     assert.equal(plan.networkCalled, false);
   });
 

@@ -1,0 +1,17 @@
+--- a/.github/workflows/commerce.yml	2026-10-24 03:06:22
++++ b/.github/workflows/commerce.yml	2026-10-25 07:57:34
+@@ -17,7 +17,7 @@
+       - run: npm ci
+       - run: npx prisma generate
+       - run: npx tsc --noEmit
+-      - run: npx tsx --test src/lib/commerce/connection.test.ts src/lib/commerce/validate.test.ts src/lib/nav-access.test.ts
++      - run: npx tsx --test src/lib/commerce/connection.test.ts src/lib/commerce/validate.test.ts src/lib/nav-access.test.ts src/lib/commerce/catalog-import.test.ts src/lib/commerce/catalog-feed.test.ts src/lib/commerce/catalog-publish.test.ts
+ 
+   db:
+     runs-on: ubuntu-latest
+@@ -48,3 +48,5 @@
+       - run: npx prisma generate
+       - run: npx prisma migrate deploy
+       - run: npx tsx --test src/lib/commerce/service.db.test.ts
++      - run: npx tsx --test src/lib/commerce/catalog-import.db.test.ts
++      - run: npx tsx --test src/lib/commerce/catalog-bidirectional.db.test.ts

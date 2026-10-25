@@ -24,7 +24,7 @@ import {
   type CatalogItem,
   type SyncProduct,
 } from "@/lib/commerce/catalog-sync";
-import { feedSchemaForVertical, localLocation } from "@/lib/commerce/catalog-feed";
+import { feedSchemaForVertical, localAreaFromOutlets } from "@/lib/commerce/catalog-feed";
 import { loadFeedOutlets } from "@/lib/commerce/catalog-export";
 import { publishMethods, simulatedCatalogPublish, updateRetailerIds } from "@/lib/commerce/catalog-publish";
 import {
@@ -506,6 +506,9 @@ export async function previewCatalogSync(tenantId: string, productId: string) {
     syncStatus: plan.syncStatus,
     message: plan.message,
     blockers: plan.blockers,
+    productBlockers: plan.productBlockers,
+    executionBlockers: plan.executionBlockers,
+    readiness: plan.readiness,
     items: plan.items,
     reviewStatus: plan.reviewStatus,
     methods: plan.methods,
@@ -717,22 +720,12 @@ export async function requestCatalogSync(opts: {
   const methodBlockers = methods.filter((row) => row.reason).map((row) => row.reason);
   const vertical = feedSchemaForVertical(connection.catalogVertical);
   const localBlockers: string[] = [];
+  // Radius and unit are not stored, so a local catalog cannot add circle columns here.
   let dataExtras: Record<string, Record<string, string>> | undefined;
-  if (vertical.schema === "unsupported") localBlockers.push(vertical.note);
+  if (vertical.schema === "unsupported" || vertical.schema === "unverified") localBlockers.push(vertical.note);
   if (vertical.schema === "local" && opts.productId) {
     const outlets = await loadFeedOutlets(opts.tenantId, opts.productId);
-    const located = localLocation(outlets);
-    if (!located.ok) localBlockers.push(located.message);
-    else {
-      dataExtras = {};
-      for (const item of decision.items) {
-        dataExtras[item.retailerId] = {
-          address: located.address,
-          latitude: located.latitude,
-          longitude: located.longitude,
-        };
-      }
-    }
+    localBlockers.push(...localAreaFromOutlets(outlets).messages);
   }
   const blockedMessage = !decision.execute ? decision.message : methodBlockers[0] || localBlockers[0] || decision.message;
   const canSend =

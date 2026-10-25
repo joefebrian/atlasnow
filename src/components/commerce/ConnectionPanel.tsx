@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CommerceConnectionView } from "@/lib/commerce/connection";
+import { feedSchemaForVertical } from "@/lib/commerce/catalog-feed";
 
 type Asset = { id: string; name: string };
 type Phone = { id: string; wabaId: string; wabaName: string; masked: string };
@@ -227,9 +228,7 @@ export function ConnectionPanel({
       {connection.catalogId ? (
         <p className="text-[12px] text-slate-500">
           Linked catalog {connection.catalogName || connection.catalogId}.{" "}
-          {connection.catalogVertical
-            ? `Catalog type ${connection.catalogVertical}.`
-            : "Catalog type is not stored. A feed file uses the commerce schema until Find catalogs returns a type."}{" "}
+          {feedSchemaForVertical(connection.catalogVertical).note}{" "}
           Offer status stays separate from Meta review.
         </p>
       ) : null}

@@ -158,7 +158,11 @@ describe("catalog import edit preview and file", { skip: localDb() ? false : "lo
     assert.equal(preview.mappings.externalProductId, "meta-shape-1");
     assert.equal(preview.diffs.find((row) => row.field === "unitPriceIdr")?.imported, "28780");
     assert.equal(preview.diffs.find((row) => row.field === "unitPriceIdr")?.current, "30000");
-    assert.match(preview.blockers.join(" "), /Live catalog push is off/);
+    assert.equal(preview.wouldSend, false);
+    assert.equal(preview.productBlockers.some((row) => /https product link|no public URL/.test(row)), false);
+    assert.match(preview.executionBlockers.join(" "), /Live catalog push is off/);
+    assert.equal(preview.readiness, "Product data is ready. Live send stays off.");
+    assert.equal(preview.methods[0]?.method, "UPDATE");
 
     const file = await exportTenantCatalogFeed(tenantA, [productId]);
     assert.equal(file.ok, true);
@@ -196,7 +200,7 @@ describe("catalog import edit preview and file", { skip: localDb() ? false : "lo
     const local = await exportTenantCatalogFeed(tenantA, [productId]);
     assert.equal(local.ok, false);
     assert.equal(local.csv, "");
-    assert.match(local.blockers.map((row) => row.message).join(" "), /one outlet/);
+    assert.match(local.blockers.map((row) => row.message).join(" "), /stored outlet|Location information is missing or incomplete/);
     assert.equal(calls.some((url) => url.includes("items_batch")), false);
     assert.notEqual(process.env.COMMERCE_CATALOG_SYNC_ENABLED, "true");
   });

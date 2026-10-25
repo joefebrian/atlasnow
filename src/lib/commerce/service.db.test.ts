@@ -250,6 +250,28 @@ describe("commerce persistence", { skip: localDb() ? false : "local database onl
     assert.equal(leaked.ok, false);
   });
 
+  it("does not send a batch when the catalog type is not stored", async () => {
+    const seeded = await connectedProduct("unverified-vertical");
+    await prisma.commerceConnection.update({ where: { tenantId: seeded.tenantId }, data: { catalogVertical: "" } });
+    const calls: string[] = [];
+    const result = await requestCatalogSync({
+      tenantId: seeded.tenantId,
+      productId: seeded.product.id,
+      actorId: "missing-user",
+      liveSwitch: true,
+      publicUrl: "https://brand.example/pass",
+      fetchImpl: (async (url: RequestInfo | URL) => {
+        calls.push(String(url));
+        return json({ handles: ["should-not"], validation_status: [] });
+      }) as typeof fetch,
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.plan.networkCalled, false);
+    assert.equal(calls.some((url) => url.includes("items_batch")), false);
+    assert.match(result.blockers.join(" "), /Confirm the Meta catalog type/);
+  });
+
   const app = { appId: "app-test", appSecret: "app-secret" };
   const scopes = ["business_management", "whatsapp_business_management", "catalog_management"];
 
@@ -274,6 +296,7 @@ describe("commerce persistence", { skip: localDb() ? false : "local database onl
         businessName: "First",
         catalogId: "cat-1",
         catalogName: "Shop",
+        catalogVertical: "commerce",
         wabaId: "waba-1",
         phoneNumberId: "phone-1",
         phoneMasked: "•••• 2222",
@@ -762,7 +785,9 @@ describe("commerce persistence", { skip: localDb() ? false : "local database onl
       const href = String(url);
       if (href.includes("debug_token")) return json({ data: { app_id: "app-test", is_valid: true, expires_at: 0, scopes } });
       if (href.includes("/me/businesses")) return json({ data: [{ id: "biz-2", name: "Second" }] });
-      if (href.includes("/biz-2/owned_product_catalogs")) return json({ data: [{ id: "cat-new", name: "New shop" }] });
+      if (href.includes("/biz-2/owned_product_catalogs")) {
+        return json({ data: [{ id: "cat-new", name: "New shop", vertical: "commerce" }] });
+      }
       if (href.includes("/biz-2/owned_whatsapp_business_accounts")) return json({ data: [{ id: "waba-2", name: "New WA" }] });
       if (href.includes("/waba-2/phone_numbers")) return json({ data: [{ id: "phone-2", display_phone_number: "+62 812 0000 3333" }] });
       return json({ data: [] });

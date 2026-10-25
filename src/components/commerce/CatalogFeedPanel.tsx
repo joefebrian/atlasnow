@@ -72,8 +72,9 @@ export function CatalogFeedPanel({ tenantId, canRead }: { tenantId: string; canR
         </button>
       </div>
       <p className="text-[12px] leading-relaxed text-slate-500">
-        Downloads a file for a manual Meta upload. It does not send products to Meta. Live catalog push stays off. A missing
-        required field stops the file.
+        Downloads a file for a manual Meta upload. It does not send products to Meta. Live catalog push stays off. The file
+        is created only after the catalog type matches a confirmed schema. An unknown type is not treated as commerce. A
+        missing required field stops the file.
       </p>
       {note ? <p className="text-sm text-slate-700">{note}</p> : null}
       {error ? (
