@@ -37,7 +37,7 @@ All three are additive and ordered after `20261024100000_commerce_batch_poll`. T
 
 ## CI
 
-`.github/workflows/commerce.yml` still runs the older unit files and `service.db.test.ts` only. The GitHub token for this repo cannot edit workflow files. `docs/COMMERCE_CI_WORKFLOW.patch` adds `catalog-import.test.ts`, `catalog-feed.test.ts`, and `catalog-publish.test.ts` to the unit job, and runs `catalog-import.db.test.ts` and `catalog-bidirectional.db.test.ts` as separate database steps. Those database files disconnect Prisma in `after()`, so they cannot share one process. Do not treat that patch as a passing Actions run until an authorized maintainer applies it and the run is green.
+`.github/workflows/commerce.yml` at `f64502b` runs `catalog-import.test.ts`, `catalog-feed.test.ts`, and `catalog-publish.test.ts` with the older unit files. The database job runs `service.db.test.ts`, then `catalog-import.db.test.ts`, then `catalog-bidirectional.db.test.ts` as separate steps, because each file disconnects Prisma in `after()`. Push run https://github.com/joefebrian/atlasnow/actions/runs/40149503443 passed on that commit. The `gh` CLI token still has no `workflow` scope. The file was updated through the GitHub connection that can edit Actions. `docs/COMMERCE_CI_WORKFLOW.patch` is the same diff.
 
 ## Deploy sequence, after a separate approval
 
