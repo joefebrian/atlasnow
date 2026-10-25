@@ -14,6 +14,7 @@ import {
   aggregateAttemptLedgers,
   applyPaymentNotice,
   emptyLedger,
+  readTrustedPayment,
   type PaymentEffect,
   type PaymentLedger,
   type VerifiedPaymentEvent,
@@ -400,7 +401,9 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
       });
       return ok(row, false);
     },
-    applyEvent(actor, event) {
+    applyEvent(actor, evidence) {
+      const event = readTrustedPayment(evidence);
+      if (!event) return fail("INVALID", "Payment settlement requires trusted evidence from the payment verifier.");
       return applyAttemptEvent(state, actor, event);
     },
     reconcileTerminal(actor, input) {
@@ -439,6 +442,20 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
           return fail("SCOPE_MISMATCH", "Timeout recovery stays on the original provider and location.");
         }
         if (existing.requestHash !== input.requestHash) return fail("IDEMPOTENCY_CONFLICT", "The timeout request hash does not match.");
+        const idem = state.idempotency.find(
+          (item) => item.tenantId === input.tenantId && item.scope === "RESERVE" && item.idempotencyKey === input.idempotencyKey,
+        );
+        if (idem && idem.status !== "PENDING_RESOLUTION") {
+          idem.status = "PENDING_RESOLUTION";
+          idem.transactionRef = existing.transactionRef;
+          idem.outcomeCode = null;
+          idem.version += 1;
+        }
+        const pending = findTransaction(state, input.tenantId, existing.transactionRef);
+        if (pending && pending.state !== "COMMITTED" && pending.state !== "CLOSED" && pending.state !== "FAILED" && pending.state !== "PENDING_RESOLUTION") {
+          pending.state = "PENDING_RESOLUTION";
+          pending.version += 1;
+        }
         return ok(existing, true);
       }
       const idem = state.idempotency.find((item) => item.tenantId === input.tenantId && item.scope === "RESERVE" && item.idempotencyKey === input.idempotencyKey);
@@ -492,6 +509,8 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
         merchantConfirmed: input.merchantConfirmed ?? false,
         experience: input.experience ?? "WHATSAPP_CATALOG",
         category: input.category ?? "GENERAL_GOODS",
+        offeringId: input.offeringId ?? "",
+        startsAt: input.startsAt ?? "",
         absenceVerified: false,
         adoptBookingRef: null,
         version: 1,
@@ -519,14 +538,29 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
     claim(actor, input) {
       const denied = requireActor(actor, input.tenantId, input.locationId, "write");
       if (denied) return denied;
-      if (!input.idempotencyKey.trim() || !input.requestHash.trim() || !input.transactionRef.trim()) {
-        return fail("INVALID", "A claim needs a key, a hash, and a transaction id.");
+      if (!input.idempotencyKey.trim() || !input.requestHash.trim() || !input.transactionRef.trim() || !input.offeringId.trim() || !input.startsAt.trim()) {
+        return fail("INVALID", "A claim needs a key, a hash, a transaction id, an offering, and a start time.");
       }
       const existing = state.idempotency.find(
         (item) => item.tenantId === input.tenantId && item.scope === "RESERVE" && item.idempotencyKey === input.idempotencyKey,
       );
       if (existing) {
         if (existing.requestHash !== input.requestHash) return fail("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.");
+        const inflight = findInflight(state, input.tenantId, input.idempotencyKey);
+        if (
+          inflight?.absenceVerified &&
+          inflight.requestHash === input.requestHash &&
+          inflight.providerId === input.providerId &&
+          inflight.locationId === input.locationId
+        ) {
+          inflight.absenceVerified = false;
+          inflight.version += 1;
+          existing.status = "IN_PROGRESS";
+          existing.outcomeCode = null;
+          existing.transactionRef = inflight.transactionRef;
+          existing.version += 1;
+          return ok(existing, false);
+        }
         return ok(existing, true);
       }
       const row: StoredIdempotency = {
@@ -540,6 +574,38 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
         version: 1,
       };
       state.idempotency.push(row);
+      if (!findTransaction(state, input.tenantId, input.transactionRef)) {
+        state.transactions.push({
+          transactionRef: input.transactionRef,
+          tenantId: input.tenantId,
+          locationId: input.locationId,
+          intentRef: null,
+          providerId: input.providerId,
+          state: "PENDING_RESOLUTION",
+          bookingRef: null,
+          orderRef: null,
+          paymentStatus: "NOT_STARTED",
+          verifiedPaid: false,
+          version: 1,
+        });
+      }
+      state.inflight.push({
+        tenantId: input.tenantId,
+        locationId: input.locationId,
+        providerId: input.providerId,
+        idempotencyKey: input.idempotencyKey,
+        requestHash: input.requestHash,
+        slotKey: input.slotKey,
+        transactionRef: input.transactionRef,
+        merchantConfirmed: input.merchantConfirmed,
+        experience: input.experience,
+        category: input.category,
+        offeringId: input.offeringId,
+        startsAt: input.startsAt,
+        absenceVerified: false,
+        adoptBookingRef: null,
+        version: 1,
+      });
       return ok(row, false);
     },
     finishDenied(actor, input) {
@@ -560,6 +626,17 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
       }
       if (existing?.status === "COMPLETED" && existing.outcomeCode === input.outcomeCode) return ok(existing, true);
       if (existing) {
+        const transactionRef = existing.transactionRef;
+        if (transactionRef) {
+          const transaction = findTransaction(state, input.tenantId, transactionRef);
+          const booking = state.bookings.find((row) => row.tenantId === input.tenantId && row.transactionRef === transactionRef);
+          if (transaction && !booking && transaction.state === "PENDING_RESOLUTION") {
+            transaction.state = "FAILED";
+            transaction.version += 1;
+          }
+        }
+        const inflightAt = state.inflight.findIndex((row) => row.tenantId === input.tenantId && row.idempotencyKey === input.idempotencyKey);
+        if (inflightAt >= 0) state.inflight.splice(inflightAt, 1);
         existing.status = "COMPLETED";
         existing.outcomeCode = input.outcomeCode;
         existing.transactionRef = null;
@@ -991,6 +1068,7 @@ function openReservation(state: PersistenceSnapshot, draft: ReservationDraft): P
       if (!moved.ok) return fail("TERMINAL", "The unresolved transaction cannot accept a booking.");
       prior.state = transaction.state;
     }
+    if (draft.intentRef) prior.intentRef = draft.intentRef;
     prior.bookingRef = draft.bookingRef;
     prior.providerId = draft.providerId;
     prior.version += 1;
@@ -1423,6 +1501,8 @@ function normalizeLoadedSnapshot(state: PersistenceSnapshot): void {
     if (row.merchantConfirmed === undefined) row.merchantConfirmed = false;
     if (row.experience === undefined) row.experience = "WHATSAPP_CATALOG";
     if (row.category === undefined) row.category = "GENERAL_GOODS";
+    if (row.offeringId === undefined) row.offeringId = "";
+    if (row.startsAt === undefined) row.startsAt = "";
   }
   for (const row of state.policyEvidence) {
     if (row.integrity === undefined) row.integrity = null;

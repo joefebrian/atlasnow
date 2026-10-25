@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **M0 through M1C in memory.** M1C wires the orchestrator through the ports. Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document.
+Status: **M0 through M1C.1 in memory.** M1C wires the orchestrator through the ports. M1C.1 hardens claim replay, payment trust, and crash recovery. Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document.
 
 ## Stack
 
@@ -110,7 +110,7 @@ All of these stay true after M1A:
 
 ## M1B — persistence design
 
-M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. M1B.1 corrects copies, provider-mode checks, scoped policy evidence, connection-scoped webhook identity, composite location keys in the sketch, and the concurrency simulation. M1C moves the orchestrator onto those ports and removes the private maps as a second writer. It still does not add SQL, a route, or a gateway.
+M1B is the in-memory ports and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. It does not add a migration. M1B.1 corrects copies, provider-mode checks, scoped policy evidence, connection-scoped webhook identity, composite location keys in the sketch, and the concurrency simulation. M1C moves the orchestrator onto those ports and removes the private maps as a second writer. M1C.1 stores the operation envelope with the claim, stops a losing claim from calling the provider, and rejects a forged payment event at the port. It still does not add SQL, a route, or a gateway.
 
 The slice that was recommended, still without a production migration:
 
@@ -135,7 +135,15 @@ Rejected as the next step: a localhost migration. The production image applies m
 
 ## Open before a SQL adapter
 
-Settled through M1C, and still not a migration:
+Still open after M1C.1:
+
+- The claim envelope, the single-winner claim, and the absence retry must become one database transaction. That transaction must not call the provider
+- `settleConcurrent` is still an in-memory merge, not a row lock
+- Trusted payment evidence is an in-process marker after the test HMAC. A real adapter must verify the gateway signature or an authoritative read before it can mint that evidence
+- Exactly-once external delivery is not claimed
+- Offer-specific Meta exception rows are not stored. The test attestation is not Meta approval
+
+Settled through M1C.1, and still not a migration:
 
 - Payments-PRD words stay mapped as they were: `DISPUTED` → `CHARGEBACK`, `NOT_INITIATED` → `NOT_STARTED`. Unpaid `CANCELLED` stays `FAILED` on the catalog map. Conversational `EXPIRED` and `FAILED` change only after an authoritative provider read
 - The first booking vendor stays unnamed. Mocks only

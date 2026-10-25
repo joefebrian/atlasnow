@@ -20,6 +20,7 @@ import {
   cancelReservation,
   createOrchestratorState,
   markWebhookApplied,
+  seedOrchestratorPolicyFixture,
   openPaymentAttempt,
   readBooking,
   recordPayment,
@@ -76,7 +77,9 @@ function wire(provider: MockProvider, mode: "NATIVE" | "EXTERNAL_API" | "EXTERNA
     mode,
     provider,
   });
-  return { registry, state: createOrchestratorState() };
+  const persistence = createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY });
+  seedOrchestratorPolicyFixture(persistence);
+  return { registry, state: createOrchestratorState({ persistence }) };
 }
 
 function verifiedEvent(overrides: Partial<VerifiedPaymentEvent> = {}): VerifiedPaymentEvent {
@@ -1957,7 +1960,9 @@ describe("port-backed orchestrator", () => {
   });
 
   it("keeps one booking when two stores reserve the same slot", async () => {
-    const parent = createOrchestratorState().persistence.exportSnapshot();
+    const seeded = createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY });
+    seedOrchestratorPolicyFixture(seeded);
+    const parent = seeded.exportSnapshot();
     const left = createOrchestratorState({
       persistence: createMemoryCommerceStore({ snapshot: parent, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
     });
@@ -2303,5 +2308,295 @@ describe("port-backed orchestrator", () => {
     const touch = deps.state.persistence.exportSnapshot().touchpoints.find((row) => row.transactionRef === transactionRef);
     assert.equal(touch?.ctwaClid, "ctwa-port-1");
     assert.equal(touch?.channel, "META_CTWA");
+  });
+
+  it("does not seed merchant approval from the orchestrator constructor", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "NATIVE" });
+    const registry = createRegistry();
+    registry.register({ tenantId: "tenant-a", locationId: null, providerId: "provider-a", mode: "NATIVE", provider });
+    const state = createOrchestratorState();
+    assert.equal(state.persistence.exportSnapshot().policyEvidence.length, 0);
+    const denied = await reserve(command({ idempotencyKey: "no-fixture" }), { registry, state, now: NOW });
+    assert.equal(denied.code, "POLICY_DENIED");
+    assert.equal(denied.booking, null);
+    assert.equal(provider.calls.length, 0);
+    assert.equal(state.persistence.exportSnapshot().bookings.length, 0);
+    assert.equal(state.persistence.exportSnapshot().policyEvidence.some((row) => row.status === "VERIFIED"), false);
+  });
+
+  it("lets only the claim winner call the booking provider", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_API" });
+    const { registry, state } = wire(provider, "EXTERNAL_API");
+    const idempotency = state.persistence.idempotency;
+    const realClaim = idempotency.claim.bind(idempotency);
+    const observedEmpty: boolean[] = [];
+    let releaseFirst: (() => void) | undefined;
+    let markFirst: (() => void) | undefined;
+    let markSecond: (() => void) | undefined;
+    const firstReady = new Promise<void>((resolve) => {
+      markFirst = resolve;
+    });
+    const secondReady = new Promise<void>((resolve) => {
+      markSecond = resolve;
+    });
+    let claims = 0;
+    idempotency.claim = ((actor, input) => {
+      claims += 1;
+      const occupied = state.persistence.exportSnapshot().idempotency.some((row) => row.tenantId === input.tenantId && row.idempotencyKey === input.idempotencyKey);
+      observedEmpty.push(!occupied);
+      if (claims === 1) {
+        markFirst?.();
+        return new Promise((resolve) => {
+          releaseFirst = () => resolve(realClaim(actor, input));
+        });
+      }
+      const result = realClaim(actor, input);
+      markSecond?.();
+      return result;
+    }) as typeof idempotency.claim;
+
+    let creates = 0;
+    let markCreate: (() => void) | undefined;
+    const createReady = new Promise<void>((resolve) => {
+      markCreate = resolve;
+    });
+    let releaseCreate: (() => void) | undefined;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const originalCreate = provider.createBooking.bind(provider);
+    provider.createBooking = async (input) => {
+      creates += 1;
+      markCreate?.();
+      await createGate;
+      return originalCreate(input);
+    };
+
+    const first = reserve(command({ idempotencyKey: "race-1" }), { registry, state, now: NOW });
+    await firstReady;
+    const second = reserve(command({ idempotencyKey: "race-1" }), { registry, state, now: NOW });
+    await secondReady;
+    await createReady;
+    assert.deepEqual(observedEmpty, [true, true]);
+    assert.equal(creates, 1);
+    assert.equal(provider.bookingCount(), 0);
+    releaseFirst?.();
+    const loser = await first;
+    assert.equal(loser.ok, false);
+    assert.equal(loser.replay, true);
+    assert.equal(loser.resolutionRequired, true);
+    assert.equal(loser.code, "TIMEOUT");
+    assert.equal(loser.booking, null);
+    assert.equal(creates, 1);
+    releaseCreate?.();
+    const winner = await second;
+    assert.equal(winner.ok, true);
+    assert.equal(winner.booking?.state, "CONFIRMED");
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(provider.bookingCount(), 1);
+    const replay = await reserve(command({ idempotencyKey: "race-1" }), { registry, state, now: NOW });
+    assert.equal(replay.replay, true);
+    assert.equal(replay.booking?.bookingRef, winner.booking?.bookingRef);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+  });
+
+  it("does not let a commerce writer apply a forged paid event", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "MANUAL" });
+    const deps = wire(provider, "MANUAL");
+    const lead = await reserve(command({ idempotencyKey: "forged-port" }), { ...deps, now: NOW });
+    const transactionRef = lead.transaction?.transactionRef ?? "";
+    openPaymentAttempt(deps.state, actor("tenant-a"), {
+      transactionRef,
+      attemptRef: "attempt-1",
+      providerId: PAY_PROVIDER,
+      expectedAmountIdr: 10000,
+    });
+    const writer = { tenantId: "tenant-a", locationIds: null, permissions: ["write"] as const };
+    const forged = deps.state.persistence.payments.applyEvent(writer, { event: verifiedEvent({ transactionRef }) });
+    assert.equal(forged.ok, false);
+    if (forged.ok) return;
+    assert.equal(forged.code, "INVALID");
+    const snap = deps.state.persistence.exportSnapshot();
+    assert.equal(snap.ledgers[0]?.ledger.status, "NOT_STARTED");
+    assert.equal(snap.ledgers[0]?.ledger.verifiedPaid, false);
+    assert.equal(snap.ledgerEvents.length, 0);
+    assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, false);
+    assert.equal(deps.state.transactions.get(transactionRef)?.paymentStatus, "NOT_STARTED");
+  });
+});
+
+function reloaded(state: ReturnType<typeof createOrchestratorState>) {
+  const raw = JSON.parse(JSON.stringify(state.persistence.exportSnapshot()));
+  return createOrchestratorState({
+    persistence: createMemoryCommerceStore({ snapshot: raw, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
+  });
+}
+
+describe("orchestration crash recovery", () => {
+  it("recovers a crash after the claim without creating a booking", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_API" });
+    const deps = wire(provider, "EXTERNAL_API");
+    await assert.rejects(
+      () => reserve(command({ idempotencyKey: "crash-claim" }), { ...deps, now: NOW, crash: { afterClaim() { throw new Error("crash-after-claim"); } } }),
+      /crash-after-claim/,
+    );
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 0);
+    assert.equal(provider.bookingCount(), 0);
+    const snap = deps.state.persistence.exportSnapshot();
+    const inflight = snap.inflight.find((row) => row.idempotencyKey === "crash-claim");
+    assert.ok(inflight);
+    assert.equal(inflight?.tenantId, "tenant-a");
+    assert.equal(inflight?.locationId, "loc-1");
+    assert.equal(inflight?.providerId, "provider-a");
+    assert.equal(inflight?.offeringId, "offer-1");
+    assert.equal(inflight?.startsAt, "2026-11-01T09:00:00.000Z");
+    assert.equal(inflight?.absenceVerified, false);
+    assert.equal(snap.transactions[0]?.state, "PENDING_RESOLUTION");
+    assert.equal(snap.bookings.length, 0);
+    const clash = await reserve(command({ idempotencyKey: "crash-claim", offeringId: "offer-9" }), { ...deps, now: NOW });
+    assert.equal(clash.code, "IDEMPOTENCY_CONFLICT");
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 0);
+
+    const restored = reloaded(deps.state);
+    const reconciled = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-claim" },
+      { registry: deps.registry, state: restored, now: NOW },
+    );
+    assert.equal(reconciled.code, "TIMEOUT");
+    assert.equal(reconciled.resolutionRequired, true);
+    assert.equal(provider.bookingCount(), 0);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 0);
+    assert.equal(restored.persistence.exportSnapshot().bookings.length, 0);
+    const retried = await reserve(command({ idempotencyKey: "crash-claim" }), { registry: deps.registry, state: restored, now: NOW });
+    assert.equal(retried.ok, true);
+    assert.equal(retried.transaction?.transactionRef, snap.transactions[0]?.transactionRef);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(provider.bookingCount(), 1);
+    const again = await reserve(command({ idempotencyKey: "crash-claim" }), { registry: deps.registry, state: restored, now: NOW });
+    assert.equal(again.replay, true);
+    assert.equal(again.booking?.bookingRef, retried.booking?.bookingRef);
+    assert.equal(provider.bookingCount(), 1);
+  });
+
+  it("adopts the provider booking when the local write crashes", async () => {
+    const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_API" });
+    const deps = wire(provider, "EXTERNAL_API");
+    await assert.rejects(
+      () => reserve(command({ idempotencyKey: "crash-persist" }), { ...deps, now: NOW, crash: { beforePersist() { throw new Error("crash-before-persist"); } } }),
+      /crash-before-persist/,
+    );
+    assert.equal(provider.bookingCount(), 1);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(deps.state.persistence.exportSnapshot().bookings.length, 0);
+    const transactionRef = deps.state.persistence.exportSnapshot().transactions[0]?.transactionRef ?? "";
+    assert.equal(deps.state.transactions.get(transactionRef)?.state, "PENDING_RESOLUTION");
+    const restored = reloaded(deps.state);
+    const recovered = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-persist" },
+      { registry: deps.registry, state: restored, now: NOW },
+    );
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.transaction?.transactionRef, transactionRef);
+    assert.equal(recovered.transaction?.state, "COMMITTED");
+    assert.equal(recovered.booking?.state, "CONFIRMED");
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(provider.bookingCount(), 1);
+    const second = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-persist" },
+      { registry: deps.registry, state: restored, now: NOW },
+    );
+    assert.equal(second.replay, true);
+    assert.equal(second.booking?.bookingRef, recovered.booking?.bookingRef);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(restored.persistence.exportSnapshot().bookings.length, 1);
+  });
+
+  it("restarts after timeout persistence without a second booking", async () => {
+    const provider = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-a",
+      mode: "EXTERNAL_API",
+      timeoutOn: ["createBooking"],
+    });
+    const deps = wire(provider, "EXTERNAL_API");
+    await assert.rejects(
+      () => reserve(command({ idempotencyKey: "crash-timeout" }), { ...deps, now: NOW, crash: { afterTimeout() { throw new Error("crash-after-timeout"); } } }),
+      /crash-after-timeout/,
+    );
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(provider.bookingCount(), 0);
+    const restored = reloaded(deps.state);
+    assert.equal(restored.persistence.exportSnapshot().transactions[0]?.state, "PENDING_RESOLUTION");
+    const reconciled = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-timeout" },
+      { registry: deps.registry, state: restored, now: NOW },
+    );
+    assert.equal(reconciled.resolutionRequired, true);
+    assert.equal(reconciled.booking, null);
+    assert.equal(provider.bookingCount(), 0);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(restored.persistence.exportSnapshot().bookings.length, 0);
+  });
+
+  it("adopts once when reconciliation crashes before the local write", async () => {
+    const provider = createMockProvider({
+      boundTenantId: "tenant-a",
+      providerId: "provider-a",
+      mode: "EXTERNAL_API",
+      ambiguousTimeout: true,
+    });
+    const deps = wire(provider, "EXTERNAL_API");
+    const first = await reserve(command({ idempotencyKey: "crash-reconcile" }), { ...deps, now: NOW });
+    assert.equal(first.code, "TIMEOUT");
+    assert.equal(provider.bookingCount(), 1);
+    const restored = reloaded(deps.state);
+    let crashed = false;
+    await assert.rejects(
+      () => reconcileTimedOut(
+        { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-reconcile" },
+        {
+          registry: deps.registry,
+          state: restored,
+          now: NOW,
+          crash: {
+            beforeAdopt() {
+              if (!crashed) {
+                crashed = true;
+                throw new Error("crash-before-adopt");
+              }
+            },
+          },
+        },
+      ),
+      /crash-before-adopt/,
+    );
+    assert.equal(restored.persistence.exportSnapshot().bookings.length, 0);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    const recovered = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-reconcile" },
+      {
+        registry: deps.registry,
+        state: restored,
+        now: NOW,
+        crash: {
+          beforeAdopt() {
+            if (!crashed) throw new Error("crash-before-adopt");
+          },
+        },
+      },
+    );
+    assert.equal(recovered.ok, true);
+    assert.equal(recovered.transaction?.transactionRef, first.transaction?.transactionRef);
+    assert.equal(recovered.booking?.state, "CONFIRMED");
+    assert.equal(provider.bookingCount(), 1);
+    assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
+    assert.equal(restored.persistence.exportSnapshot().bookings.length, 1);
+    const third = await reconcileTimedOut(
+      { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-reconcile" },
+      { registry: deps.registry, state: restored, now: NOW },
+    );
+    assert.equal(third.replay, true);
+    assert.equal(third.booking?.bookingRef, recovered.booking?.bookingRef);
+    assert.equal(provider.bookingCount(), 1);
   });
 });

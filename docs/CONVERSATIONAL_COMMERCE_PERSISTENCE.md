@@ -1,6 +1,6 @@
 # Conversational commerce persistence (M1B)
 
-Status: **design and in-memory ports.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. M1C runs the orchestrator through those ports and the in-memory adapter. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. No gateway client. A SQL adapter is not authorized.
+Status: **design and in-memory ports.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. M1C runs the orchestrator through those ports and the in-memory adapter. M1C.1 closes the claim, payment, and crash boundaries. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. No gateway client. A SQL adapter is not authorized.
 
 The runnable contract is `src/lib/conversational-commerce/ports.ts` and `memory-store.ts`. This document is the table sketch a reviewer can reject before any SQL is added.
 
@@ -32,25 +32,25 @@ Processing is **at-least-once with idempotent effects**. This design does not cl
 
 `CommercePersistence` is the source of truth. `OrchestratorState` exposes `bookings`, `transactions`, `ledgers`, and `paymentAttempts` as a read-only snapshot view for the existing tests. Those maps are not a second writer.
 
-`reserve` uses five stages. Provider I/O stays outside `runAtomic`.
+`reserve` uses five stages. Provider I/O stays outside `runAtomic`. A future SQL adapter must keep that rule: no network call inside the claim transaction.
 
-1. Validate the actor, the phone-correlation rule, fail-closed policy, the registry, and provider capabilities.
-2. Atomically claim the idempotency key. A second call with the same key does not call the provider again.
-3. Call the mock provider.
-4. Atomically persist the booking, or record `PENDING_RESOLUTION` when the provider times out.
-5. Resolve an unknown outcome only through the original provider and location. Authoritative absence allows one retry. A found booking is adopted. A terminal provider state fails the transaction. Human release does not authorize another create.
+1. Validate the actor, the phone-correlation rule, fail-closed policy, the registry, provider capabilities, and stored approval.
+2. Atomically claim the operation. The same write stores the idempotency row as `IN_PROGRESS`, the inflight envelope, and a `PENDING_RESOLUTION` transaction. The envelope keeps tenant, location, provider connection, idempotency key, request hash, offering, requested start, slot, and the recovery fields. This happens before any provider call.
+3. Call the mock provider only when `claim` returns `replay: false`. That is a new claim, or the single retry after authoritative absence has been consumed inside the claim. `replay: true` rereads the repository. `COMPLETED` returns the stored outcome. `PENDING_RESOLUTION` and `IN_PROGRESS` stay unresolved and do not call the provider. A different payload returns `IDEMPOTENCY_CONFLICT`. Two workers can both pass the precheck; only the worker that wins the claim may create or hold.
+4. Atomically persist the booking, or mark the existing envelope `PENDING_RESOLUTION` when the provider times out. A provider success followed by a failed local write stays unresolved. It is not closed as a denial.
+5. After restart, recovery reads the envelope and queries the original provider. A confirmed external booking is adopted under the original transaction. A missing local row is not proof that the provider has no reservation. Authoritative absence allows one later create. A non-authoritative empty lookup does not. `guaranteesIdempotency` may retry the same operation during reconciliation. It does not let the losing `reserve` call the provider. A terminal provider state fails the transaction. Human release does not authorize another create.
 
 A provider-issued booking reference is copied from the mock result. The command cannot supply one. External checkout never opens a reservation. A manual connection cannot store an authoritative reference.
 
-`createOrchestratorState()` seeds one attested fixture for the M1A harness: tenant `tenant-a`, category `GENERAL_GOODS`, surface `WHATSAPP_CATALOG`. It does not copy `approvalEvidence` from the command. An injected store is not seeded. On load, `validatedBy` is kept only when `integrity` matches the in-process validator key. A forged snapshot cannot grant approval. The key is not part of the snapshot. This seal is not a Meta signature.
+`createOrchestratorState()` does not seed merchant approval. Tests that need the old harness call `seedOrchestratorPolicyFixture` for tenant `tenant-a`, category `GENERAL_GOODS`, surface `WHATSAPP_CATALOG`. That helper is not called by the constructor. The orchestrator does not copy `approvalEvidence` from the command. On load, `validatedBy` is kept only when `integrity` matches the in-process validator key. A forged snapshot cannot grant approval. The key is not part of the snapshot. This seal is not a Meta signature and it does not stand in for Meta approval.
 
 Real offer-specific Meta exceptions need another row keyed by offering id. The current row is one merchant, one offering category, and one commerce surface. That column is not added here. YOLA FUN stays NO-GO.
 
-`payments.applyEvent` is privileged. `recordPayment` verifies the caller proof first and is the only orchestration entry. It does not accept a caller-built `VerifiedPaymentEvent`. There is no gateway HTTP client.
+`payments.applyEvent` accepts only trusted evidence. A Commerce write permission does not settle money. A caller cannot build a `VerifiedPaymentEvent`, cast it, and mark a transaction paid. `trustPaymentNotice` mints that evidence only after `verifyPaymentNotice` checks the in-process HMAC. Raw notices stay outside the ledger. A future gateway adapter must verify the gateway's official signature or an authoritative API response before it calls `trustPaymentNotice`. This HMAC is not that check. There is no gateway HTTP client. Amount, currency, tenant, provider, attempt, reference, refund, and chargeback checks still run after the trust check.
 
 `markApplied` requires write permission on the webhook connection's own tenant and location. Tenant-wide write is not enough for an outlet connection. Webhook dedupe stays `connectionId:eventId`. No webhook route is mounted.
 
-A crash between the idempotency claim and the provider result stays unresolved. The next call does not invent a second booking. Restart reloads the snapshot, and reconciliation still uses the original provider.
+A crash after the claim leaves the envelope in place, so reconciliation can find the original provider. The next `reserve` does not treat a missing local booking as a new create. Restart reloads the snapshot. Reconciliation still uses the original provider. This is not exactly-once delivery.
 
 ## Candidate tables
 

@@ -74,7 +74,10 @@ export type PaymentExpectation = {
   amountIdr: number;
 };
 
-/** Internal event. Only verifyPaymentNotice may construct one. */
+/**
+ * Internal event shape. Constructing this object is not proof.
+ * Settlement accepts only TrustedPaymentEvidence from trustPaymentNotice.
+ */
 export type VerifiedPaymentEvent = {
   eventId: string;
   type: PaymentNoticeType;
@@ -92,6 +95,23 @@ export type VerifiedPaymentEvent = {
 export type PaymentVerifyResult =
   | { ok: true; event: VerifiedPaymentEvent }
   | { ok: false; code: "UNVERIFIED" | "MISMATCH" | "REJECTED_EVIDENCE" };
+
+/**
+ * Runtime trust marker. Not exported. Symbol.for would be forgeable by another module.
+ * A type cast cannot set this property.
+ */
+const PAYMENT_TRUST = Symbol("atlasnow.payment.trusted-evidence");
+
+/**
+ * Carrier for settlement. The type is not the trust boundary.
+ * readTrustedPayment accepts it only when this module attached PAYMENT_TRUST
+ * after verifyPaymentNotice. A future gateway adapter must verify the gateway's
+ * official signature or an authoritative API response, then pass that notice
+ * through trustPaymentNotice. This in-process HMAC is not that check.
+ */
+export type TrustedPaymentEvidence = {
+  readonly event: VerifiedPaymentEvent;
+};
 
 export function signPaymentProof(secret: string, fields: Omit<PaymentProof, "signature">): string {
   return createHmac("sha256", secret).update(proofMaterial(fields)).digest("hex");
@@ -146,20 +166,74 @@ export function verifyPaymentNotice(input: {
   }
   return {
     ok: true,
-    event: {
-      eventId: notice.eventId,
-      type: notice.type,
-      amountIdr: notice.amountIdr,
-      currency: "IDR",
-      occurredAt: notice.occurredAt,
-      providerReference: proof.providerReference,
-      sequence: notice.sequence,
-      tenantId: expected.tenantId,
-      providerId: expected.providerId,
-      attemptRef: expected.attemptRef,
-      transactionRef: expected.transactionRef,
-    },
+    event: sealVerifiedEvent(notice, proof, expected),
   };
+}
+
+/**
+ * Mints trusted settlement evidence only after verifyPaymentNotice succeeds.
+ * There is no function that seals an arbitrary VerifiedPaymentEvent.
+ * A future real gateway adapter must verify the gateway's official signature
+ * or an authoritative API response before it calls this function.
+ * The HMAC checked here is not that verification.
+ */
+export function trustPaymentNotice(input: {
+  notice: RawPaymentNotice;
+  proof: PaymentProof | null;
+  secret: string;
+  expectation: PaymentExpectation;
+}): { ok: true; evidence: TrustedPaymentEvidence } | { ok: false; code: "UNVERIFIED" | "MISMATCH" | "REJECTED_EVIDENCE" } {
+  const verified = verifyPaymentNotice(input);
+  if (!verified.ok) return verified;
+  return { ok: true, evidence: markTrusted(verified.event) };
+}
+
+/** Returns the sealed event, or null when the runtime trust marker is absent. */
+export function readTrustedPayment(value: unknown): VerifiedPaymentEvent | null {
+  if (!value || typeof value !== "object") return null;
+  if ((value as { [PAYMENT_TRUST]?: unknown })[PAYMENT_TRUST] !== true) return null;
+  const event = (value as { event?: unknown }).event;
+  if (!isVerifiedShape(event)) return null;
+  return event;
+}
+
+function sealVerifiedEvent(notice: RawPaymentNotice, proof: PaymentProof, expected: PaymentExpectation): VerifiedPaymentEvent {
+  return {
+    eventId: notice.eventId,
+    type: notice.type,
+    amountIdr: notice.amountIdr,
+    currency: "IDR",
+    occurredAt: notice.occurredAt,
+    providerReference: proof.providerReference,
+    sequence: notice.sequence,
+    tenantId: expected.tenantId,
+    providerId: expected.providerId,
+    attemptRef: expected.attemptRef,
+    transactionRef: expected.transactionRef,
+  };
+}
+
+function markTrusted(event: VerifiedPaymentEvent): TrustedPaymentEvidence {
+  const evidence: TrustedPaymentEvidence = { event: structuredClone(event) };
+  Object.defineProperty(evidence, PAYMENT_TRUST, { value: true, enumerable: false, writable: false, configurable: false });
+  return evidence;
+}
+
+function isVerifiedShape(value: unknown): value is VerifiedPaymentEvent {
+  if (!value || typeof value !== "object") return false;
+  const event = value as Partial<VerifiedPaymentEvent>;
+  return (
+    typeof event.eventId === "string" &&
+    typeof event.type === "string" &&
+    event.currency === "IDR" &&
+    typeof event.amountIdr === "number" &&
+    typeof event.occurredAt === "string" &&
+    typeof event.providerReference === "string" &&
+    typeof event.tenantId === "string" &&
+    typeof event.providerId === "string" &&
+    typeof event.attemptRef === "string" &&
+    typeof event.transactionRef === "string"
+  );
 }
 
 function amountMatchesExpectation(type: PaymentNoticeType, amountIdr: number, expectedAmountIdr: number): boolean {

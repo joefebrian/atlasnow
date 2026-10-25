@@ -4,7 +4,7 @@
  */
 
 import type { Actor } from "./auth";
-import type { PaymentEffect, PaymentLedger, VerifiedPaymentEvent } from "./payment";
+import type { PaymentEffect, PaymentLedger, TrustedPaymentEvidence } from "./payment";
 import type { ApprovalEvidence, MerchantEligibility, OfferingCategory } from "./policy";
 import type {
   AttributionChannel,
@@ -180,6 +180,10 @@ export type StoredInflight = {
   merchantConfirmed: boolean;
   experience: CustomerExperience;
   category: OfferingCategory;
+  /** Original offering. Recovery must not invent a different one from a missing local booking. */
+  offeringId: string;
+  /** Original requested start. Recovery must query this operation, not a new slot. */
+  startsAt: string;
   absenceVerified: boolean;
   /** Set only when lookup found this provider booking. It is not proof of absence. */
   adoptBookingRef: string | null;
@@ -392,11 +396,15 @@ export interface PaymentRepository {
     },
   ): PortResult<StoredAttempt>;
   /**
-   * Privileged. The event must already be a VerifiedPaymentEvent produced inside this process.
-   * Orchestration verifies the caller proof first and must not accept a caller-built event as proof.
+   * Privileged server-side settlement. A Commerce write permission is not enough.
+   * The argument must be trusted evidence produced by trustPaymentNotice in this process.
+   * A plain object, a type cast, or a caller-built VerifiedPaymentEvent is rejected.
    * This method does not re-check an HMAC and it is not a gateway client.
+   * A future gateway adapter must verify that gateway's official signature or an
+   * authoritative API response before it asks trustPaymentNotice for evidence.
+   * The in-process HMAC is not that verification.
    */
-  applyEvent(actor: Actor, event: VerifiedPaymentEvent): PortResult<{ ledger: PaymentLedger; effect: PaymentEffect; netRevenueIdr: number }>;
+  applyEvent(actor: Actor, evidence: TrustedPaymentEvidence): PortResult<{ ledger: PaymentLedger; effect: PaymentEffect; netRevenueIdr: number }>;
   reconcileTerminal(
     actor: Actor,
     input: {
@@ -427,9 +435,18 @@ export interface IdempotencyRepository {
       merchantConfirmed?: boolean;
       experience?: CustomerExperience;
       category?: OfferingCategory;
+      offeringId?: string;
+      startsAt?: string;
     },
   ): PortResult<StoredInflight>;
-  /** Registers the key before the provider call. Does not create a transaction or an inflight row. */
+  /**
+   * Atomically stores the idempotency row, the operation envelope, and a
+   * PENDING_RESOLUTION transaction before any provider call.
+   * replay false means this caller acquired the provider attempt: a new claim,
+   * or the one retry after authoritative absence was consumed.
+   * replay true means another worker already owns the attempt. The caller must
+   * reread and must not call the provider.
+   */
   claim(
     actor: Actor,
     input: {
@@ -440,6 +457,11 @@ export interface IdempotencyRepository {
       requestHash: string;
       slotKey: string;
       transactionRef: string;
+      offeringId: string;
+      startsAt: string;
+      merchantConfirmed: boolean;
+      experience: CustomerExperience;
+      category: OfferingCategory;
     },
   ): PortResult<StoredIdempotency>;
   /** Remembers a denial. Does not create a booking or a transaction. */

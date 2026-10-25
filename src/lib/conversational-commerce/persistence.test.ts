@@ -6,7 +6,7 @@ import type { Actor } from "./auth";
 import { createMemoryCommerceStore, settleConcurrent, signPolicyAttestation } from "./memory-store";
 import type { CommercePersistence, ConnectionCapabilities, PolicyScope, ReservationDraft } from "./ports";
 import { actorFromCommerceSession } from "./session-actor";
-import type { VerifiedPaymentEvent } from "./payment";
+import { signPaymentProof, trustPaymentNotice, type VerifiedPaymentEvent } from "./payment";
 
 const NOW = "2026-10-26T00:00:00.000Z";
 const LATER = "2026-10-26T02:00:00.000Z";
@@ -96,6 +96,41 @@ function ready() {
   const connection = connect(store, "tenant-a", "book-1", "loc-1", "BOOKING");
   assert.equal(connection.ok, true);
   return store;
+}
+
+function trusted(patch: Partial<VerifiedPaymentEvent> = {}, expectedAmountIdr = 10000) {
+  const verified = event(patch);
+  const notice = { ...verified, evidence: "VERIFIED_PROVIDER_EVENT" as const };
+  const secret = "persistence-payment-secret";
+  const fields = {
+    tenantId: notice.tenantId,
+    providerId: notice.providerId,
+    attemptRef: notice.attemptRef,
+    transactionRef: notice.transactionRef,
+    providerReference: notice.providerReference,
+    currency: "IDR" as const,
+    amountIdr: notice.amountIdr,
+    eventId: notice.eventId,
+    type: notice.type,
+    occurredAt: notice.occurredAt,
+    sequence: notice.sequence,
+  };
+  const proof = { ...fields, signature: signPaymentProof(secret, fields) };
+  const result = trustPaymentNotice({
+    notice,
+    proof,
+    secret,
+    expectation: {
+      tenantId: verified.tenantId,
+      providerId: verified.providerId,
+      attemptRef: verified.attemptRef,
+      transactionRef: verified.transactionRef,
+      currency: "IDR" as const,
+      amountIdr: expectedAmountIdr,
+    },
+  });
+  if (!result.ok) throw new Error(result.code);
+  return result.evidence;
 }
 
 function event(patch: Partial<VerifiedPaymentEvent> = {}): VerifiedPaymentEvent {
@@ -296,11 +331,11 @@ describe("commerce persistence ports", () => {
     if (changed.ok) return;
     assert.equal(changed.code, "ATTEMPT_CONFLICT");
 
-    const paid = store.payments.applyEvent(actor("tenant-a"), event());
+    const paid = store.payments.applyEvent(actor("tenant-a"), trusted());
     assert.equal(paid.ok, true);
     if (!paid.ok) return;
     assert.equal(paid.value.netRevenueIdr, 10000);
-    const duplicate = store.payments.applyEvent(actor("tenant-a"), event({ eventId: "pay-evt-1b" }));
+    const duplicate = store.payments.applyEvent(actor("tenant-a"), trusted({ eventId: "pay-evt-1b" }));
     assert.equal(duplicate.ok, true);
     if (!duplicate.ok) return;
     assert.equal(duplicate.value.effect, "duplicate");
@@ -317,7 +352,7 @@ describe("commerce persistence ports", () => {
       expectedAmountIdr: 10000,
     });
     assert.equal(second.ok, true);
-    const split = store.payments.applyEvent(actor("tenant-a"), event({ eventId: "pay-evt-2", attemptRef: "attempt-2", providerReference: "gw-2" }));
+    const split = store.payments.applyEvent(actor("tenant-a"), trusted({ eventId: "pay-evt-2", attemptRef: "attempt-2", providerReference: "gw-2" }));
     assert.equal(split.ok, false);
     if (split.ok) return;
     assert.equal(split.code, "ATTEMPT_CONFLICT");
@@ -332,7 +367,7 @@ describe("commerce persistence ports", () => {
       expectedAmountIdr: 10000,
     });
     assert.equal(other.ok, true);
-    const stolen = store.payments.applyEvent(actor("tenant-a"), event({
+    const stolen = store.payments.applyEvent(actor("tenant-a"), trusted({
       eventId: "pay-evt-3",
       attemptRef: "attempt-3",
       transactionRef: "TX-2",
@@ -395,7 +430,7 @@ describe("commerce persistence ports", () => {
       providerMode: "MERCHANT_PAYMENT_GATEWAY",
       expectedAmountIdr: 10000,
     }).ok, true);
-    const paid = store.payments.applyEvent(actor("tenant-a"), event({ eventId: "pay-evt-2", attemptRef: "attempt-2", providerReference: "gw-2" }));
+    const paid = store.payments.applyEvent(actor("tenant-a"), trusted({ eventId: "pay-evt-2", attemptRef: "attempt-2", providerReference: "gw-2" }));
     assert.equal(paid.ok, true);
     if (!paid.ok) return;
     assert.equal(paid.value.netRevenueIdr, 10000);
@@ -428,7 +463,7 @@ describe("commerce persistence ports", () => {
       providerMode: "MERCHANT_PAYMENT_GATEWAY",
       expectedAmountIdr: 10000,
     }).ok, true);
-    assert.equal(store.payments.applyEvent(actor("tenant-a"), event()).ok, true);
+    assert.equal(store.payments.applyEvent(actor("tenant-a"), trusted()).ok, true);
     const cancelled = store.bookings.transition(actor("tenant-a"), {
       tenantId: "tenant-a",
       bookingRef: "BK-1",
@@ -442,7 +477,7 @@ describe("commerce persistence ports", () => {
     if (!stillPaid.ok) return;
     assert.equal(stillPaid.value.status, "PAID");
     assert.equal(stillPaid.value.netRevenueIdr, 10000);
-    const partial = store.payments.applyEvent(actor("tenant-a"), event({ eventId: "refund-1", type: "payment.partially_refunded", amountIdr: 4000 }));
+    const partial = store.payments.applyEvent(actor("tenant-a"), trusted({ eventId: "refund-1", type: "payment.partially_refunded", amountIdr: 4000 }));
     assert.equal(partial.ok, true);
     if (!partial.ok) return;
     assert.equal(partial.value.netRevenueIdr, 6000);
@@ -456,7 +491,7 @@ describe("commerce persistence ports", () => {
     assert.equal(booking.ok, true);
     if (!booking.ok) return;
     assert.equal(booking.value.state, "CANCELLED");
-    const charge = store.payments.applyEvent(actor("tenant-a"), event({ eventId: "cb-1", type: "payment.chargeback", amountIdr: 10000 }));
+    const charge = store.payments.applyEvent(actor("tenant-a"), trusted({ eventId: "cb-1", type: "payment.chargeback", amountIdr: 10000 }));
     assert.equal(charge.ok, true);
     if (!charge.ok) return;
     assert.equal(charge.value.effect, "applied");
@@ -470,6 +505,38 @@ describe("commerce persistence ports", () => {
     assert.equal(stillCancelled.ok, true);
     if (!stillCancelled.ok) return;
     assert.equal(stillCancelled.value.state, "CANCELLED");
+  });
+
+  it("rejects a forged paid event submitted directly to the payment port", () => {
+    const store = ready();
+    assert.equal(store.bookings.openReservation(draft()).ok, true);
+    assert.equal(connect(store, "tenant-a", "pay-1", "loc-1", "PAYMENT").ok, true);
+    assert.equal(store.payments.openAttempt(actor("tenant-a"), {
+      tenantId: "tenant-a",
+      locationId: "loc-1",
+      transactionRef: "TX-1",
+      attemptRef: "attempt-1",
+      providerId: "pay-1",
+      providerMode: "MERCHANT_PAYMENT_GATEWAY",
+      expectedAmountIdr: 10000,
+    }).ok, true);
+    const forged = store.payments.applyEvent(actor("tenant-a"), { event: event() });
+    assert.equal(forged.ok, false);
+    if (forged.ok) return;
+    assert.equal(forged.code, "INVALID");
+    const writer = store.payments.applyEvent(actor("tenant-a", null, ["write"]), { event: event({ eventId: "forged-write" }) });
+    assert.equal(writer.ok, false);
+    if (writer.ok) return;
+    assert.equal(writer.code, "INVALID");
+    const ledger = store.exportSnapshot().ledgers[0];
+    assert.equal(ledger?.ledger.status, "NOT_STARTED");
+    assert.equal(ledger?.ledger.verifiedPaid, false);
+    assert.equal(store.exportSnapshot().ledgerEvents.length, 0);
+    const paid = store.payments.applyEvent(actor("tenant-a"), trusted());
+    assert.equal(paid.ok, true);
+    if (!paid.ok) return;
+    assert.equal(paid.value.ledger.status, "PAID");
+    assert.equal(paid.value.ledger.verifiedPaid, true);
   });
 
   it("accepts one webhook id and rolls back an event when the state write conflicts", () => {
@@ -799,7 +866,7 @@ describe("commerce persistence ports", () => {
       providerMode: "MERCHANT_PAYMENT_GATEWAY",
       expectedAmountIdr: 10000,
     }).ok, true);
-    const paid = store.payments.applyEvent(actor("tenant-a"), event());
+    const paid = store.payments.applyEvent(actor("tenant-a"), trusted());
     assert.equal(paid.ok, true);
     if (!paid.ok) return;
     paid.value.ledger.status = "FAILED";

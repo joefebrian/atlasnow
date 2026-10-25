@@ -8,17 +8,17 @@
  * Provider calls run outside runAtomic. A timeout stays PENDING_RESOLUTION.
  * This module does not claim exactly-once delivery to a provider.
  *
- * createOrchestratorState() seeds one attested fixture: tenant-a, GENERAL_GOODS,
- * WHATSAPP_CATALOG. It does not copy command.approvalEvidence. An injected store
- * is not seeded. A snapshot cannot grant VERIFIED approval without the validator seal.
- * Real offer-specific Meta exceptions need a per-offering row. This fixture is not that,
- * and it does not approve YOLA FUN.
+ * createOrchestratorState() does not seed merchant approval. Tests that need the
+ * old harness call seedOrchestratorPolicyFixture. That fixture is not Meta approval.
+ * The orchestrator does not copy command.approvalEvidence. A snapshot cannot grant
+ * VERIFIED approval without the validator seal. Real offer-specific Meta exceptions
+ * need a per-offering row. YOLA FUN is not approved.
  */
 
 import { authorize, type Actor } from "./auth";
 import { refFromMaterial, phoneCorrelation, stableHash } from "./ids";
 import { createMemoryCommerceStore, signPolicyAttestation } from "./memory-store";
-import { verifyPaymentNotice, type PaymentLedger, type PaymentProof, type RawPaymentNotice } from "./payment";
+import { trustPaymentNotice, type PaymentLedger, type PaymentProof, type RawPaymentNotice } from "./payment";
 import { evaluateEligibility, type ApprovalEvidence, type MerchantEligibility, type OfferingCategory } from "./policy";
 import type { ProviderErrorCode } from "./provider";
 import type {
@@ -83,6 +83,14 @@ export type StoredPaymentAttempt = {
 
 /** Same string persistence tests use. It is an in-process fixture key, not a Meta secret. */
 export const ORCHESTRATOR_POLICY_KEY = "test-policy-validator";
+
+/** Test-only crash points. Production callers omit this. Hooks throw outside runAtomic. */
+export type OrchestratorCrash = {
+  afterClaim?: () => void;
+  beforePersist?: () => void;
+  afterTimeout?: () => void;
+  beforeAdopt?: () => void;
+};
 const FIXTURE_PROCESS = "orchestrator-compat-fixture";
 const FIXTURE_REFERENCE = "orchestrator-compat-goods-catalog";
 const MOCK_ABSENCE = "mock-absence-v1";
@@ -98,8 +106,7 @@ export type OrchestratorState = {
 };
 
 export function createOrchestratorState(options?: { persistence?: CommercePersistence }): OrchestratorState {
-  const persistence = options?.persistence ?? createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY });
-  if (!options?.persistence) seedCompatibilityPolicy(persistence);
+  const persistence = options?.persistence ?? createMemoryCommerceStore();
   return {
     persistence,
     get bookings() {
@@ -119,7 +126,7 @@ export function createOrchestratorState(options?: { persistence?: CommercePersis
 
 export async function reserve(
   command: ReserveCommand,
-  deps: { registry: ProviderRegistry; state: OrchestratorState; now: string },
+  deps: { registry: ProviderRegistry; state: OrchestratorState; now: string; crash?: OrchestratorCrash },
 ): Promise<ReserveResult> {
   const allowed = authorize(command.actor, { tenantId: command.tenantId, locationId: command.locationId }, "write");
   if (!allowed.ok) return failure(allowed.code, authMessage(allowed.code), false);
@@ -159,16 +166,29 @@ export async function reserve(
   if (!registered.ok) return failure(asReserveCode(registered.code), registered.message, false);
 
   const transactionRef = refFromMaterial("CTX", `${command.tenantId}:${command.idempotencyKey}`);
-  const claimed = ports.idempotency.claim(command.actor, {
-    tenantId: command.tenantId,
-    locationId: command.locationId,
-    providerId: command.providerId,
-    idempotencyKey: command.idempotencyKey,
-    requestHash: hash,
-    slotKey: slotKeyOf(command),
-    transactionRef,
-  });
+  const claimed = await Promise.resolve(
+    ports.idempotency.claim(command.actor, {
+      tenantId: command.tenantId,
+      locationId: command.locationId,
+      providerId: command.providerId,
+      idempotencyKey: command.idempotencyKey,
+      requestHash: hash,
+      slotKey: slotKeyOf(command),
+      transactionRef,
+      offeringId: command.offeringId,
+      startsAt: command.startsAt,
+      merchantConfirmed: command.merchantConfirmed,
+      experience: command.experience,
+      category: command.category,
+    }),
+  );
   if (!claimed.ok) return failure(asReserveCode(claimed.code), claimed.message, false);
+  if (claimed.replay) {
+    const reread = replayReserve(ports.exportSnapshot(), command, hash);
+    if (reread) return reread;
+    return { ...unresolved("TIMEOUT", "The reservation was claimed and has no authoritative outcome.", null), replay: true };
+  }
+  deps.crash?.afterClaim?.();
 
   const request = {
     tenantId: command.tenantId,
@@ -194,6 +214,8 @@ export async function reserve(
         merchantConfirmed: command.merchantConfirmed,
         experience: command.experience,
         category: command.category,
+        offeringId: command.offeringId,
+        startsAt: command.startsAt,
       });
       if (!timeout.ok) return timeout;
       if (timeout.value.absenceVerified) {
@@ -207,6 +229,7 @@ export async function reserve(
       });
     });
     if (!persisted.ok) return failure(asReserveCode(persisted.code), persisted.message, false);
+    deps.crash?.afterTimeout?.();
     const transaction = findTransaction(ports.exportSnapshot(), command.tenantId, transactionRef);
     if (!transaction) return unresolved("TIMEOUT", response.message, null);
     return unresolved("TIMEOUT", response.message, publicTransaction(transaction));
@@ -218,6 +241,7 @@ export async function reserve(
   if ((response.data.state === "CONFIRMED" || response.data.state === "HELD") && external && !response.data.providerReference) {
     return deny(ports, command, hash, "MISSING_REFERENCE", "The external provider did not return a booking reference.");
   }
+  deps.crash?.beforePersist?.();
 
   const persisted = ports.runAtomic((draft): PortResult<{ transaction: StoredTransaction; booking: StoredBooking }> => {
     const inflight = findInflight(draft.exportSnapshot(), command.tenantId, command.idempotencyKey);
@@ -277,7 +301,7 @@ export function releaseTimedOut(
  */
 export async function reconcileTimedOut(
   command: { actor: Actor; tenantId: string; locationId: string; providerId: string; idempotencyKey: string },
-  deps: { registry: ProviderRegistry; state: OrchestratorState; now: string },
+  deps: { registry: ProviderRegistry; state: OrchestratorState; now: string; crash?: OrchestratorCrash },
 ): Promise<ReserveResult> {
   const ports = deps.state.persistence;
   const snap = ports.exportSnapshot();
@@ -310,7 +334,7 @@ export async function reconcileTimedOut(
     if (!response.ok) {
       return unresolved("TIMEOUT", "The provider still has not returned an authoritative result. No second booking was authorized.", publicTransaction(transaction));
     }
-    return adoptProviderBooking(ports, command.actor, pending, resolved.mode, response.data, deps.now);
+    return adoptProviderBooking(ports, command.actor, pending, resolved.mode, response.data, deps.now, deps.crash);
   }
 
   const lookup = await resolved.provider.findByIdempotencyKey({
@@ -335,7 +359,7 @@ export async function reconcileTimedOut(
       if (!failed.ok) return failure(asReserveCode(failed.code), failed.message, false);
       return terminalReplay(failed.value);
     }
-    return adoptProviderBooking(ports, command.actor, pending, resolved.mode, lookup.data.found, deps.now);
+    return adoptProviderBooking(ports, command.actor, pending, resolved.mode, lookup.data.found, deps.now, deps.crash);
   }
   if (lookup.data.authoritative) {
     const noted = ports.idempotency.noteAbsence(command.actor, pending.tenantId, pending.idempotencyKey, {
@@ -477,7 +501,7 @@ export function recordPayment(
   if (input.connection.tenantId !== transaction.tenantId || input.connection.providerId !== attempt.providerId) {
     return { ok: false, code: "MISMATCH" };
   }
-  const verified = verifyPaymentNotice({
+  const verified = trustPaymentNotice({
     notice: input.notice,
     proof: input.proof,
     secret: input.connection.secret,
@@ -492,10 +516,10 @@ export function recordPayment(
   });
   if (!verified.ok) return { ok: false, code: verified.code };
   const ledger = snap.ledgers.find((row) => row.tenantId === attempt.tenantId && row.attemptRef === attempt.attemptRef);
-  if (ledger?.ledger.providerReference && ledger.ledger.providerReference !== verified.event.providerReference) {
+  if (ledger?.ledger.providerReference && ledger.ledger.providerReference !== verified.evidence.event.providerReference) {
     return { ok: false, code: "MISMATCH" };
   }
-  const applied = state.persistence.payments.applyEvent(actor, verified.event);
+  const applied = state.persistence.payments.applyEvent(actor, verified.evidence);
   if (!applied.ok) {
     if (applied.code === "REFERENCE_CONFLICT") return { ok: false, code: "MISMATCH" };
     return paymentFailure(applied.code);
@@ -545,7 +569,12 @@ export function recordTouchpoint(
   return state.persistence.attribution.saveTouchpoint(actor, input);
 }
 
-function seedCompatibilityPolicy(persistence: CommercePersistence): void {
+/**
+ * Test-only goods/catalog attestation for tenant-a.
+ * The normal orchestrator constructor does not call this.
+ * The HMAC is not Meta approval and does not approve YOLA FUN.
+ */
+export function seedOrchestratorPolicyFixture(persistence: CommercePersistence): void {
   const actor = { tenantId: "tenant-a", locationIds: null };
   const saved = persistence.policy.submit(
     actor,
@@ -591,8 +620,8 @@ function replayReserve(
     if (inflight.requestHash !== hash) return failure("IDEMPOTENCY_CONFLICT", "This idempotency key is waiting on a different request.", false);
     return { ...unresolved("TIMEOUT", "The original reservation is still unresolved.", transaction ? publicTransaction(transaction) : null), replay: true };
   }
-  if (idem.status === "IN_PROGRESS") {
-    return { ...unresolved("TIMEOUT", "The reservation was claimed and has no authoritative outcome.", null), replay: true };
+  if (idem.status === "IN_PROGRESS" && !inflight?.absenceVerified) {
+    return { ...unresolved("TIMEOUT", "The reservation was claimed and has no authoritative outcome.", transaction ? publicTransaction(transaction) : null), replay: true };
   }
   return null;
 }
@@ -616,6 +645,7 @@ function adoptProviderBooking(
   mode: BookingProviderMode,
   data: { bookingRef: string; state: BookingState; slotKey: string; providerReference: string | null; referenceAuthoritative: boolean },
   now: string,
+  crash?: OrchestratorCrash,
 ): ReserveResult {
   if (data.slotKey !== pending.slotKey) {
     const transaction = findTransaction(ports.exportSnapshot(), pending.tenantId, pending.transactionRef);
@@ -634,6 +664,7 @@ function adoptProviderBooking(
     return result;
   }
   const request = requestFromInflight(pending);
+  crash?.beforeAdopt?.();
   const persisted = ports.runAtomic((draft): PortResult<{ transaction: StoredTransaction; booking: StoredBooking }> => {
     const noted = draft.idempotency.noteFound(actor, pending.tenantId, pending.idempotencyKey, {
       providerId: pending.providerId,
@@ -858,8 +889,8 @@ function requestFromInflight(pending: StoredInflight) {
     locationId: pending.locationId,
     idempotencyKey: pending.idempotencyKey,
     requestHash: pending.requestHash,
-    offeringId: split >= 0 ? rest.slice(0, split) : rest,
-    startsAt: split >= 0 ? rest.slice(split + 1) : "",
+    offeringId: pending.offeringId || (split >= 0 ? rest.slice(0, split) : rest),
+    startsAt: pending.startsAt || (split >= 0 ? rest.slice(split + 1) : ""),
     merchantConfirmed: pending.merchantConfirmed,
   };
 }
