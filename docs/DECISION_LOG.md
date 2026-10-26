@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — Conversational M2.2 release readiness is a review
+
+`docs/M2_2_RELEASE_READINESS.md` records the git migration inventory at `df3e7f2`, the documented production inventory of 37 migrations, and the boot path that runs `migrate deploy`. Production history was not queried. Staging implementation is NO-GO until that inventory is verified from a backup and application boot stops applying every folder in the image. No schema change. No `migrate resolve`. YOLA FUN stays NO-GO.
+
 ## 2026-10-26 — Conversational M2.1B rolls back direct SQL when an atomic write returns failure
 
 `registerConnection()` inserted a new `CcProviderConnection` on the open `runAtomic` transaction. Prisma commits a callback that returns, so a later `{ ok: false }` skipped the diff flush and still committed that insert. The adapter now throws that failure inside the transaction and returns the same `PortResult` after rollback. A thrown exception still rolls back. A successful atomic callback still commits the nested connection. Claim SQL stays in its own transaction and does not run while a row scope is already open. No schema change.
