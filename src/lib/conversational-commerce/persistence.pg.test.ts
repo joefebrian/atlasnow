@@ -688,13 +688,15 @@ describe("PostgreSQL conversational persistence", () => {
 
     const beforeThrow = await inspect();
     await assert.rejects(
-      () => store.runAtomic(async (ports) => {
-        const registered = await ports.connections.register(actor("tenant-a"), connectionInput("atomic-throw-provider"));
-        if (!registered.ok) return registered;
-        const saved = await ports.intents.save(actor("tenant-a"), intentInput("intent-atomic-throw"));
-        if (!saved.ok) return saved;
-        throw new Error("atomic-rollback-probe");
-      }),
+      async () => {
+        await store.runAtomic(async (ports) => {
+          const registered = await ports.connections.register(actor("tenant-a"), connectionInput("atomic-throw-provider"));
+          if (!registered.ok) return registered;
+          const saved = await ports.intents.save(actor("tenant-a"), intentInput("intent-atomic-throw"));
+          if (!saved.ok) return saved;
+          throw new Error("atomic-rollback-probe");
+        });
+      },
       /atomic-rollback-probe/,
     );
     assert.deepEqual(await inspect(), beforeThrow);
