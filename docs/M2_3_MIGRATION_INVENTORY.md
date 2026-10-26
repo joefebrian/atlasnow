@@ -39,7 +39,7 @@ Forbidden on this visit: `docker compose config`, `docker inspect`, `prisma migr
 
 ### 3.1 Confirm the compose project
 
-The documented deployment is compose project `atlasnow` at `/opt/atlasnow`, with running services `postgres` (`postgres:16`), `waha` (`devlikeapro/waha`), `atlas`, and `caddy` (`caddy:2`, host ports 80 and 443). `postgres` has no published host port. The public app is `https://atlasnow.co`.
+The documented deployment is compose project `atlasnow` at `/opt/atlasnow`. `compose.yaml` declares `postgres` image `postgres:16-alpine`, `waha` image `devlikeapro/waha:latest`, and `caddy` image `caddy:2-alpine`. `atlas` is the locally built application image: that service has `build` and no `image` key. `caddy` publishes host ports 80 and 443. `postgres`, `waha`, and `atlas` publish no host port. The public app is `https://atlasnow.co`.
 
 ```sh
 cd /opt/atlasnow
@@ -52,16 +52,18 @@ Expected `pwd`: `/opt/atlasnow`.
 
 Expected `docker compose ls`: one row named `atlasnow`, status running, config file under `/opt/atlasnow/compose.yaml`.
 
-Expected `docker compose ps`: four running services.
+Expected `docker compose ps`: four running services. Compare each reported Image value with the Compose image named in this table. A shorter tag is not a match.
 
-| Service | Image | Ports |
+| Service | Documented Compose image | Ports |
 |---|---|---|
-| `postgres` | `postgres:16` | empty |
-| `waha` | `devlikeapro/waha` | empty |
-| `atlas` | the built app image | empty |
-| `caddy` | `caddy:2` | `80` and `443` |
+| `postgres` | `postgres:16-alpine` | empty |
+| `waha` | `devlikeapro/waha:latest` | empty |
+| `atlas` | locally built application image; project `atlasnow` reports `atlasnow-atlas` or `atlasnow-atlas:latest` | empty |
+| `caddy` | `caddy:2-alpine` | `80` and `443` |
 
-STOP when the directory, project name, config path, a service, the Postgres 16 image, a published port on `postgres`, `waha`, or `atlas`, or the caddy ports do not match. Do not run the later commands. Do not search for another directory.
+`atlas` has no `image` key in `compose.yaml`. Any other `atlas` repository, registry, or tag is a difference.
+
+STOP when the directory, project name, config path, a service, a reported image, or a port does not match. Record the service, the reported image, and the documented image. Do not treat the difference as acceptable. Do not retag, pull, edit, restart, recreate, or otherwise change a running service. Do not run the later commands. Do not search for another directory.
 
 ### 3.2 Database metadata
 
