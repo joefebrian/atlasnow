@@ -1846,7 +1846,13 @@ describe("existing commerce compatibility", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const files = readdirSync(here).filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
     assert.ok(files.includes("orchestrator.ts"));
-    const prismaFiles = new Set(["postgres-store.ts", "postgres-booking.ts", "qa-database.ts"]);
+    const prismaFiles = new Set(["postgres-store.ts", "postgres-booking.ts", "postgres-finance.ts", "qa-database.ts"]);
+    for (const file of ["postgres-store.ts", "postgres-booking.ts", "postgres-finance.ts"]) {
+      const adapter = readFileSync(join(here, file), "utf8");
+      assert.equal(adapter.includes("writeSnapshot"), false, file);
+      assert.equal(adapter.includes("pg_advisory_xact_lock"), false, file);
+      assert.equal(adapter.includes(".deleteMany()"), false, file);
+    }
     for (const file of files) {
       const text = readFileSync(join(here, file), "utf8");
       if (!prismaFiles.has(file)) {

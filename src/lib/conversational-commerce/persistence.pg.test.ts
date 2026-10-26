@@ -612,6 +612,118 @@ describe("PostgreSQL conversational persistence", () => {
     assert.equal(await client.commerceProduct.count(), 0);
   });
 
+  it("rolls back a connection registered inside an atomic write that does not succeed", async () => {
+    const counts = async (db: PrismaClient) => ({
+      connections: await db.ccProviderConnection.count(),
+      intents: await db.ccIntent.count(),
+      transactions: await db.ccTransaction.count(),
+      bookings: await db.ccBooking.count(),
+      idempotency: await db.ccIdempotency.count(),
+      inflight: await db.ccInflight.count(),
+      events: await db.ccTransactionEvent.count(),
+      attempts: await db.ccPaymentAttempt.count(),
+      ledgers: await db.ccPaymentLedger.count(),
+      paymentEvents: await db.ccPaymentEvent.count(),
+      credentials: await db.ccProviderCredential.count(),
+      webhooks: await db.ccWebhookEvent.count(),
+      externalRefs: await db.ccExternalRef.count(),
+      touchpoints: await db.ccTouchpoint.count(),
+      aggregates: await db.ccAttributionAggregate.count(),
+      policy: await db.ccPolicyEvidence.count(),
+    });
+    const inspect = async () => {
+      const probe = new PrismaClient({ datasources: { db: { url: qa.databaseUrl } } });
+      try {
+        await qa.assertIdentity(probe);
+        return counts(probe);
+      } finally {
+        await probe.$disconnect();
+      }
+    };
+    const connectionInput = (providerId: string) => ({
+      tenantId: "tenant-a",
+      locationId: "loc-a" as string | null,
+      providerId,
+      kind: "BOOKING" as const,
+      mode: "NATIVE" as const,
+      capabilities: {
+        providerId,
+        supportsHold: true,
+        mock: true,
+        guaranteesIdempotency: false,
+        absenceConsistencyRequirement: null,
+        holdExpiryOwner: "NONE" as const,
+        issuesAuthoritativeReference: false,
+      },
+    });
+    const intentInput = (intentRef: string) => ({
+      intentRef,
+      tenantId: "tenant-a",
+      locationId: "loc-a" as string | null,
+      experience: "WHATSAPP_CATALOG" as const,
+      intentType: "BOOKING_REQUEST" as const,
+      qualified: false,
+      customerRef: null,
+      commerceOrderRef: null,
+    });
+
+    const beforeFailure = await inspect();
+    const failed = await store.runAtomic(async (ports) => {
+      const registered = await ports.connections.register(actor("tenant-a"), connectionInput("atomic-fail-provider"));
+      if (!registered.ok) return registered;
+      const saved = await ports.intents.save(actor("tenant-a"), intentInput("intent-atomic-fail"));
+      if (!saved.ok) return saved;
+      return ports.transactions.compareAndSwap(actor("tenant-a"), {
+        tenantId: "tenant-a",
+        transactionRef: "tx-atomic-fail-missing",
+        expectedVersion: 1,
+      });
+    });
+    assert.equal(failed.ok, false);
+    if (failed.ok) return;
+    assert.equal(failed.code, "NOT_FOUND");
+    assert.equal(failed.message, "Transaction not found.");
+    assert.deepEqual(await inspect(), beforeFailure);
+    assert.equal(await client.ccProviderConnection.count({ where: { providerId: "atomic-fail-provider" } }), 0);
+
+    const beforeThrow = await inspect();
+    await assert.rejects(
+      async () => {
+        await store.runAtomic(async (ports) => {
+          const registered = await ports.connections.register(actor("tenant-a"), connectionInput("atomic-throw-provider"));
+          if (!registered.ok) return registered;
+          const saved = await ports.intents.save(actor("tenant-a"), intentInput("intent-atomic-throw"));
+          if (!saved.ok) return saved;
+          throw new Error("atomic-rollback-probe");
+        });
+      },
+      /atomic-rollback-probe/,
+    );
+    assert.deepEqual(await inspect(), beforeThrow);
+    assert.equal(await client.ccProviderConnection.count({ where: { providerId: "atomic-throw-provider" } }), 0);
+
+    const committed = await store.runAtomic(async (ports) => {
+      const registered = await ports.connections.register(actor("tenant-a"), connectionInput("atomic-ok-provider"));
+      if (!registered.ok) return registered;
+      return ports.intents.save(actor("tenant-a"), intentInput("intent-atomic-ok"));
+    });
+    assert.equal(committed.ok, true, committed.ok ? "" : committed.message);
+    const after = await inspect();
+    assert.equal(after.connections, beforeThrow.connections + 1);
+    assert.equal(after.intents, beforeThrow.intents + 1);
+    assert.equal(after.transactions, beforeThrow.transactions);
+    const probe = new PrismaClient({ datasources: { db: { url: qa.databaseUrl } } });
+    try {
+      await qa.assertIdentity(probe);
+      const connection = await probe.ccProviderConnection.findFirst({ where: { tenantId: "tenant-a", providerId: "atomic-ok-provider" } });
+      const intent = await probe.ccIntent.findFirst({ where: { tenantId: "tenant-a", intentRef: "intent-atomic-ok" } });
+      assert.equal(connection?.kind, "BOOKING");
+      assert.equal(intent?.intentType, "BOOKING_REQUEST");
+    } finally {
+      await probe.$disconnect();
+    }
+  });
+
   it("keeps the reviewed partial indexes and rejects unrelated schema drift", async () => {
     const indexes = await client.$queryRaw<Array<{ indexname: string; indexdef: string }>>`
       SELECT indexname, indexdef FROM pg_indexes

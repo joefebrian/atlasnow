@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **M0 through M1C.2 in memory. M2 and M2.1A PostgreSQL persistence are QA-only.** M1C.2 behavior is unchanged. Booking and idempotency writes are row-level. Payment, webhook, and attribution writes are still the QA snapshot and are not production ready. The two migration folders are not applied to production. Do not start webhooks, Flows, payments, UI, or deploy from this document. See `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md`.
+Status: **M0 through M1C.2 in memory. M2, M2.1A, and M2.1B PostgreSQL persistence are QA-only.** M1C.2 behavior is unchanged. Booking, payment, webhook, attribution, policy, and credential writes are row-level. The snapshot rewrite and the global QA advisory lock are gone. A returned failure rolls back direct SQL inside that transaction. The two migration folders are not applied to production. Do not start webhook routes, Flows, a gateway, UI, or deploy from this document. See `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md`.
 
 ## Stack
 
