@@ -4,7 +4,7 @@ Updated 2026-10-26. Source of truth for what is in the tree. A feature is listed
 
 ## Conversational commerce M0 through M1C.2
 
-In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. M1B.1 copies repository results, binds a reservation to the registered provider mode, scopes policy evidence and webhook identity, and specifies composite location foreign keys. M1C runs the orchestrator through those ports. The orchestrator no longer keeps a second copy of bookings, payments, or idempotency. M1C.1 stops a losing claim from calling the provider, requires trusted payment evidence before settlement, and stores the operation envelope with the claim so a crash can be reconciled. M1C.2 keeps that envelope unless the provider outcome is explicitly `NO_COMMIT`, and resolves booking, payment, and cancellation references by the authenticated tenant. The Prisma schema is unchanged. M2 schema and QA review is `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md`. It proposes two migration folders and a disposable `atlasnow_cc_qa` database. Those folders are not created. Not deployed. No migration. No route. No gateway. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
+In-memory orchestrator and persistence ports on `feature/conversational-commerce-m1a`. M1A.2 binds timeout reconciliation to the original provider and gives each payment attempt its own ledger. M1B adds repository ports, a deterministic in-memory store, and `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. M1B.1 copies repository results, binds a reservation to the registered provider mode, scopes policy evidence and webhook identity, and specifies composite location foreign keys. M1C runs the orchestrator through those ports. The orchestrator no longer keeps a second copy of bookings, payments, or idempotency. M1C.1 stops a losing claim from calling the provider, requires trusted payment evidence before settlement, and stores the operation envelope with the claim so a crash can be reconciled. M1C.2 keeps that envelope unless the provider outcome is explicitly `NO_COMMIT`, and resolves booking, payment, and cancellation references by the authenticated tenant. M2 QA adds `Cc*` models and two migration folders. They are not applied to production. The review is `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md`. Not deployed. No route. No gateway. Catalog discovery, import, sync, poll, order capture, and payments are unchanged and stay off except for the QA discovery switch that was already set outside this branch. YOLA FUN stays NO-GO. No workspace was created for it.
 
 Working in unit tests only:
 
@@ -68,11 +68,19 @@ M1C.2, in unit tests only:
 - `readBooking`, `openPaymentAttempt`, `recordPayment`, and `cancelReservation` match the actor's tenant and the reference before location authorization. Two tenants can share one internal reference string. A foreign-only reference returns `CROSS_TENANT` and does not include the other tenant's record. A wrong outlet is still `LOCATION_FORBIDDEN`
 - The read-only snapshot maps still key bookings and transactions by reference alone. Those maps are not the lookup used by the four operations above. A SQL adapter must not copy that keying
 
-Not built: SQL tables, a Prisma adapter, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender, offer-specific Meta exception rows. The in-process payment HMAC is not a gateway signature. The in-memory claim is not a Postgres lock. Outcome certainty is only as honest as the adapter that sets it.
+M2 QA PostgreSQL, exercised by `persistence.pg.test.ts` on a disposable database:
+
+- `Cc*` models and two migration folders. Partial unique indexes are provider-scoped for live slots. A nullable idempotency foreign key allows a no-commit row. Location triggers reject a booking or payment attempt in a different outlet from its transaction
+- `postgres-store.ts` implements `CommercePersistence` with `Read Committed` transactions, an advisory lock around snapshot writes, and `INSERT ... ON CONFLICT` for the claim. Provider calls stay outside the transaction
+- Uncertain provider results stay `PENDING_RESOLUTION` across a new Prisma client. Explicit `NO_COMMIT` stores a null `transactionRef`. Recovery adopts one booking on the original transaction
+- Duplicate payment events insert once. A second live capture is rejected. Refund and chargeback do not change the booking. Amounts above the safe integer range are not returned as numbers
+- Slice 2.5 still applies 39 migrations and leaves `CcBooking` absent
+
+Not built: production migration, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender, offer-specific Meta exception rows. The in-process payment HMAC is not a gateway signature. The advisory lock does not make external delivery exactly once. Outcome certainty is only as honest as the adapter that sets it.
 
 Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md`, `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`, and the companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
 
-Do not merge this into PR #1. Do not merge PR #2. Do not add a SQL adapter, a route, or a gateway until a separate review.
+Do not merge this into PR #1. Do not merge PR #2 or PR #3. Do not migrate production. Do not add a route or a gateway from this adapter.
 
 ## Active slice
 

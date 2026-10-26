@@ -1,14 +1,24 @@
 # Conversational commerce M2 — schema and QA plan (review)
 
-Status: **review only.** Accepted in-memory foundation: `18a965c71c5a26f7a595b8245720aa0f1fd2cf3c` on draft PR #2. This document does not edit `prisma/schema.prisma` and does not add a migration folder. Do not apply it to any database until a separate approval. Do not deploy. Do not merge PR #1, PR #2, or the review PR that carries this file.
+Status: **QA adapter implemented. Not applied to production.** The review was conditionally accepted. The SQL that runs is `prisma/migrations/20261026120000_cc_location_tenant_key` and `prisma/migrations/20261026140000_cc_persistence`. Do not run those folders against production. Do not deploy. Do not merge PR #1, PR #2, or PR #3.
+
+The sketch later in this file is the review draft. Money columns in that sketch say `INTEGER`. The migration uses `BIGINT`. Do not apply the sketch.
 
 The table sketch remains `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`. The port contract remains `src/lib/conversational-commerce/ports.ts`. M2 implements that contract on PostgreSQL. It does not reopen M0–M1C.2 product rules.
 
 YOLA FUN stays NO-GO. No merchant, tenant, connection, or product is created for it. Catalog discovery, import, sync, poll, order capture, and payments stay as they are. `CommerceOrder` is not a booking table and gains no foreign key.
 
+## QA implementation corrections
+
+1. A disposable database is `atlasnow_cc_qa_` plus random hex, created by this process, with one owner-marker row. Loopback is required and is not enough. Drop runs only when the name, marker, `application_name`, and pinned server port match. There is no `DROP DATABASE IF EXISTS` for a database this process did not create. A Docker port forward may publish 5433 while `inet_server_port()` is 5432. The guard pins the port from the admin connection.
+2. `CcIdempotency.transactionRef` is a nullable composite foreign key to `CcTransaction` (`ON DELETE RESTRICT`, MATCH SIMPLE). A null `transactionRef` stays valid for explicit `NO_COMMIT`. The claim inserts the transaction before the idempotency row.
+3. `cc_assert_same_location` rejects a booking, payment attempt, or inflight row whose `locationId` differs from the transaction. The port maps `cc_location_mismatch` to `SCOPE_MISMATCH`.
+4. `expectedAmountIdr`, ledger `amountIdr` and `refundedIdr`, and event `amountIdr` are `BIGINT`. Writes reject non-integers, negatives, and values above the catalog ceiling of 1000000000. Reads reject values above `Number.MAX_SAFE_INTEGER` and do not coerce. Checks: `CcPaymentAttempt_amount_safe`, `CcPaymentLedger_amount_safe`, `CcPaymentEvent_amount_safe`, `CcPaymentAttempt_currency_idr`.
+5. `CcBooking_live_slot` is unique on `("tenantId", "locationId", "providerId", "slotKey")` for `HELD` and `CONFIRMED`. Two providers may hold the same slot key. This does not protect capacity across booking systems.
+
 ## What this review accepts
 
-A later implementation may add the two migration folders and the Prisma models below only after this review is approved. Until then the files in [Proposed files](#proposed-files) are a list, not a change.
+The QA implementation added the two migration folders and the Prisma models. Production migration is still a separate approval.
 
 PostgreSQL 16. Prisma 5.22. The adapter implements `CommercePersistence`. `runAtomic` becomes one `prisma.$transaction`. Provider calls stay outside that callback. `settleConcurrent` is not the concurrency proof.
 
@@ -411,18 +421,19 @@ State values stay `TEXT`. The port validates them. A wrong `CHECK` list would re
 
 `settleConcurrent` stays an in-memory unit merge. The PostgreSQL tests do not call it.
 
-Isolation is `Read Committed`. The mutex is the primary key plus `INSERT ... ON CONFLICT DO NOTHING`, and `SELECT ... FOR UPDATE` when the row already exists. A database lock is not held across a provider call.
+Isolation is `Read Committed`. The single-winner rule is the primary key plus `INSERT ... ON CONFLICT DO NOTHING`, and `SELECT ... FOR UPDATE` when the row already exists. QA snapshot rewrites also take `pg_advisory_xact_lock` so two full-table writes cannot pass each other. A database lock is not held across a provider call.
 
 ### Claim — one transaction, no provider call
 
-1. `INSERT` into `CcIdempotency` for `("tenantId", 'RESERVE', idempotencyKey)` `ON CONFLICT DO NOTHING`.
-2. If the insert wins, `INSERT` the `PENDING_RESOLUTION` `CcTransaction` and the `CcInflight` envelope in the same transaction. Commit. Return `replay: false`. This worker may call the provider after commit.
-3. If the insert loses, `SELECT ... FOR UPDATE` the idempotency row and the inflight row.
-4. A different `requestHash` rolls back with `IDEMPOTENCY_CONFLICT`.
-5. `absenceVerified` with the same hash, provider, and location updates `absenceVerified` to false and sets status `IN_PROGRESS`. Commit. Return `replay: false`. The `UPDATE ... WHERE "absenceVerified" = true` returns one row, so only one worker consumes the retry.
-6. Every other existing row commits the read and returns `replay: true`. That worker does not call the provider.
+1. `INSERT` the `PENDING_RESOLUTION` `CcTransaction` for `("tenantId", transactionRef)` `ON CONFLICT DO NOTHING`. The idempotency foreign key requires this row before a non-null `transactionRef`.
+2. `INSERT` into `CcIdempotency` for `("tenantId", 'RESERVE', idempotencyKey)` `ON CONFLICT DO NOTHING`.
+3. If the idempotency insert wins, `INSERT` the `CcInflight` envelope in the same transaction. Commit. Return `replay: false`. This worker may call the provider after commit.
+4. If the insert loses, `SELECT ... FOR UPDATE` the idempotency row and the inflight row.
+5. A different `requestHash` rolls back with `IDEMPOTENCY_CONFLICT`.
+6. `absenceVerified` with the same hash, provider, and location updates `absenceVerified` to false and sets status `IN_PROGRESS`. Commit. Return `replay: false`. The `UPDATE ... WHERE "absenceVerified" = true` returns one row, so only one worker consumes the retry.
+7. Every other existing row commits the read and returns `replay: true`. That worker does not call the provider. A loser that observes the claim before the booking commit returns unresolved `TIMEOUT` with `replay: true`. It does not call the provider.
 
-Two workers can both pass the in-process precheck. Only the worker that commits step 2 or step 5 calls the provider.
+Two workers can both pass the in-process precheck. Only the worker that commits step 3 or step 6 calls the provider.
 
 ### Persist booking — one transaction
 
@@ -470,10 +481,10 @@ The implementation test creates and drops its own database. It never uses a prod
 
 | Rule | Value |
 |---|---|
-| Database name | `atlasnow_cc_qa` |
-| Host guard | `localhost` or `127.0.0.1` only. Any other host skips or fails closed before a query |
-| Admin URL | Same local Postgres the existing commerce DB tests already use. The test replaces the database name |
-| Lifecycle | `DROP DATABASE IF EXISTS`, `CREATE DATABASE`, `migrate deploy` of the branch folders, tests, then drop |
+| Database name | `atlasnow_cc_qa_` plus 24 hex characters. The fixed name `atlasnow_cc_qa` is not used |
+| Host guard | `localhost` or `127.0.0.1` only, plus the pinned `inet_server_port()`, `application_name=atlasnow-cc-qa`, and the owner marker. Loopback alone does not authorize a drop |
+| Admin URL | Loopback coordinates from `DATABASE_URL`, connected to the `postgres` maintenance database. The named database in that URL is not migrated and is not dropped |
+| Lifecycle | `CREATE DATABASE` of a new name only, `migrate deploy` of the branch folders, install `cc_qa_owner`, tests, then drop only if the marker matches |
 | Process | Its own `tsx --test` process. It does not share a Prisma client with `service.db`, catalog DB tests, `slice25-release.db.test.ts`, or `order-capture.db.test.ts` |
 | Secrets | Fixture HMAC key only. No `ciphertext`. No gateway secret. No Meta token |
 | Provider | Existing in-memory mock. No outbound HTTP |
@@ -485,7 +496,7 @@ CI, when the implementation is approved, adds one step to the existing `db` job 
 npx tsx --test src/lib/conversational-commerce/persistence.pg.test.ts
 ```
 
-That job already starts `postgres:16-alpine` with user `atlasnow`, password `atlasnow`, database `atlasnow`, on localhost. The new test still creates `atlasnow_cc_qa` from that admin URL. The local `gh` token cannot push workflow files. The implementation PR needs the GitHub connection that can edit Actions, the same constraint as earlier catalog CI edits. This review does not change the workflow.
+That job already starts `postgres:16-alpine` with user `atlasnow`, password `atlasnow`, database `atlasnow`, on localhost. The pg test still creates its own `atlasnow_cc_qa_*` database from those admin coordinates. It does not migrate the `atlasnow` database. The workflow step is in this branch. The local `gh` token may still reject `.github/workflows` on push.
 
 `slice25-release.db.test.ts` copies every migration folder except `20261024180000_commerce_orders`. When the conversational folders exist, that test must also skip `20261026120000_cc_location_tenant_key` and `20261026140000_cc_persistence`, and it must assert that `CcBooking` is absent. Otherwise the release database stops matching the production-shaped migration set. That omit is part of the implementation, not this review.
 
@@ -495,7 +506,7 @@ Mock provider only. Two real sessions where the case says concurrent.
 
 | Case | Proves |
 |---|---|
-| Two concurrent `claim` calls, same tenant, key, and hash | One `replay: false`, one `replay: true`, one provider create, one local booking |
+| Two concurrent `claim` calls, same tenant, key, and hash | One successful `replay: false`, one `replay: true` that does not call the provider, one local booking. The loser may still be unresolved `TIMEOUT` if it reads before the booking commit |
 | Same key, different hash | `IDEMPOTENCY_CONFLICT`, no second booking |
 | Two keys, one live slot | One `HELD` or `CONFIRMED` booking. The partial unique index rolls the other insert back |
 | Provider returns `RETRYABLE` after a remote commit | Idempotency stays `PENDING_RESOLUTION`, inflight remains, transaction is not `FAILED` |
@@ -538,7 +549,7 @@ Mock provider only. Two real sessions where the case says concurrent.
 - `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md` (this file)
 - One status line each in `docs/AI_DEV_STATUS.md`, `docs/DECISION_LOG.md`, `docs/COMMERCE_ARCHITECTURE.md`, `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`, and `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`
 
-### Later implementation, after approval — do not add them now
+### QA implementation on this branch
 
 - `prisma/schema.prisma` — `Location` `@@unique([tenantId, id])` and the `Cc*` models. No edits to catalog models
 - `prisma/migrations/20261026120000_cc_location_tenant_key/migration.sql`
@@ -552,9 +563,9 @@ No route, webhook, gateway client, Meta call, Flow runtime, feature flag, or pil
 
 ## Blockers before implementation
 
-1. Separate approval of this review. Until that approval, do not edit `prisma/schema.prisma` and do not create a migration folder.
-2. `prisma validate` must accept the optional composite location relation, or the foreign key stays in SQL only. That check happens in the implementation, not by editing the schema in this PR.
-3. Hand-written partial indexes will show up as drift. The implementation needs a `pg_indexes` assertion and a rule not to apply a diff that drops them.
+1. The conditional review approval is used for this QA implementation. Production migration still needs a separate approval.
+2. `prisma validate` accepts the optional composite location relation.
+3. Hand-written partial indexes, location triggers, amount checks, and `cc_qa_owner` are the allowed drift. The QA test reads `pg_indexes` and fails on any other drift. Do not apply a diff that drops the partial indexes.
 4. The workflow edit needs a token that can push `.github/workflows`. Local `gh` cannot. QA can run locally against localhost before that CI line exists.
 5. Production tenant delete still has no archive path. `RESTRICT` is correct for QA. It is a production-use blocker, not a reason to cascade these rows.
 6. Real credentials stay blocked until KMS or `encryptSecret` is chosen. QA must not store ciphertext.

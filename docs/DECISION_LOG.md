@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — Conversational M2 persistence is QA-only
+
+PostgreSQL stores conversational bookings and payments only in a disposable `atlasnow_cc_qa_*` database. Production `migrate deploy` is a separate approval. Amounts are `BIGINT`. Writes stop at the catalog ceiling of 1000000000 whole rupiah. Reads reject values above `Number.MAX_SAFE_INTEGER`. A live slot is unique per provider, not across booking systems. `CcIdempotency.transactionRef` may be null when the provider definitely did not commit. Payment trust stays in the in-process HMAC, not in the database adapter. AtlasNow is not the merchant of record.
+
 ## 2026-10-23 — Commerce is multi-tenant, not a single pilot
 
 The first build is a merchant product master. Pilot names stay out of the code. AtlasNow SKUs are the source of truth.

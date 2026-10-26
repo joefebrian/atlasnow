@@ -1,6 +1,6 @@
 # Conversational commerce implementation plan
 
-Status: **M0 through M1C.2 in memory.** M1C wires the orchestrator through the ports. M1C.1 hardens claim replay, payment trust, and crash recovery. M1C.2 separates definitive no-commit failures from outcomes that may already be committed, and resolves references by tenant. Do not start SQL, webhooks, Flows, payments, UI, or deploy from this document. The M2 schema and QA proposal is `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md` and waits for a separate approval.
+Status: **M0 through M1C.2 in memory. M2 PostgreSQL persistence is QA-only.** M1C.2 behavior is unchanged. The QA adapter and two migration folders are on this branch and are not applied to production. Do not start webhooks, Flows, payments, UI, or deploy from this document. See `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md`.
 
 ## Stack
 

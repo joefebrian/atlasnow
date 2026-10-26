@@ -121,20 +121,20 @@ function proofFor(notice: RawPaymentNotice, secret = PAY_SECRET) {
   return { ...fields, signature: signPaymentProof(secret, fields) };
 }
 
-function payVerified(
+async function payVerified(
   state: ReturnType<typeof createOrchestratorState>,
   transactionRef: string,
   overrides: Partial<VerifiedPaymentEvent> = {},
 ) {
   const event = verifiedEvent({ transactionRef, ...overrides });
-  openPaymentAttempt(state, actor("tenant-a"), {
+  (await openPaymentAttempt(state, actor("tenant-a"), {
     transactionRef,
     attemptRef: event.attemptRef,
     providerId: PAY_PROVIDER,
     expectedAmountIdr: 10000,
-  });
+  }));
   const notice = rawNotice(event);
-  return recordPayment(
+  return (await recordPayment(
     state,
     actor("tenant-a"),
     {
@@ -144,7 +144,7 @@ function payVerified(
       connection: { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET },
     },
     NOW,
-  );
+  ));
 }
 
 describe("booking and transaction transitions", () => {
@@ -217,7 +217,7 @@ describe("tenant and location isolation", () => {
     assert.equal(provider.calls.length, 1);
 
     const bookingRef = created.booking?.bookingRef ?? "";
-    const peeked = readBooking(state, actor("tenant-b"), bookingRef);
+    const peeked = (await readBooking(state, actor("tenant-b"), bookingRef));
     assert.equal(peeked.ok, false);
     if (peeked.ok) return;
     assert.equal(peeked.code, "CROSS_TENANT");
@@ -229,14 +229,14 @@ describe("tenant and location isolation", () => {
     const deniedWrite = await reserve(command({ actor: reader, idempotencyKey: "reader-1" }), { registry, state, now: NOW });
     assert.equal(deniedWrite.code, "FORBIDDEN");
     assert.equal(provider.calls.length, callsBefore);
-    const deniedRead = readBooking(state, writer, bookingRef);
+    const deniedRead = (await readBooking(state, writer, bookingRef));
     assert.equal(deniedRead.ok, false);
     if (deniedRead.ok) return;
     assert.equal(deniedRead.code, "FORBIDDEN");
-    const allowedRead = readBooking(state, reader, bookingRef);
+    const allowedRead = (await readBooking(state, reader, bookingRef));
     assert.equal(allowedRead.ok, true);
 
-    const released = releaseTimedOut(state, actor("tenant-b"), "reserve-1");
+    const released = (await releaseTimedOut(state, actor("tenant-b"), "reserve-1"));
     assert.equal(released.ok, false);
   });
 
@@ -331,7 +331,7 @@ describe("mock booking provider", () => {
     assert.equal(provider.calls.length, 1);
     assert.equal(provider.bookingCount(), 0);
 
-    const released = releaseTimedOut(deps.state, actor("tenant-a"), "reserve-1");
+    const released = (await releaseTimedOut(deps.state, actor("tenant-a"), "reserve-1"));
     assert.equal(released.ok, false);
     if (released.ok) return;
     assert.equal(released.code, "RECONCILIATION_REQUIRED");
@@ -366,7 +366,7 @@ describe("mock booking provider", () => {
     assert.equal(first.transaction?.state, "PENDING_RESOLUTION");
     assert.equal(provider.bookingCount(), 1);
 
-    const released = releaseTimedOut(deps.state, actor("tenant-a"), "reserve-1");
+    const released = (await releaseTimedOut(deps.state, actor("tenant-a"), "reserve-1"));
     assert.equal(released.ok, false);
     const second = await reserve(command(), { ...deps, now: NOW });
     assert.equal(second.replay, true);
@@ -402,7 +402,7 @@ describe("mock booking provider", () => {
     const first = await reserve(command({ idempotencyKey: "guaranteed-1" }), { ...deps, now: NOW });
     assert.equal(first.code, "TIMEOUT");
     assert.equal(provider.bookingCount(), 1);
-    const released = releaseTimedOut(deps.state, actor("tenant-a"), "guaranteed-1");
+    const released = (await releaseTimedOut(deps.state, actor("tenant-a"), "guaranteed-1"));
     assert.equal(released.code, "RECONCILIATION_REQUIRED");
     const recovered = await reconcileTimedOut(
       {
@@ -727,22 +727,22 @@ describe("payment evidence", () => {
     const lead = await reserve(command(), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
     assert.equal(
-      openPaymentAttempt(deps.state, actor("tenant-a"), {
+      (await openPaymentAttempt(deps.state, actor("tenant-a"), {
         transactionRef,
         attemptRef: "attempt-1",
         providerId: PAY_PROVIDER,
         expectedAmountIdr: 10000,
-      }).ok,
+      })).ok,
       true,
     );
     const event = verifiedEvent({ transactionRef });
     const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
-    const labeled = recordPayment(
+    const labeled = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: rawNotice(event), proof: null, connection },
       NOW,
-    );
+    ));
     assert.equal(labeled.ok, false);
     if (labeled.ok) return;
     assert.equal(labeled.code, "UNVERIFIED");
@@ -766,54 +766,54 @@ describe("payment evidence", () => {
     assert.equal(screenshot.code, "REJECTED_EVIDENCE");
 
     const wrongAmount = rawNotice(verifiedEvent({ transactionRef, amountIdr: 5000 }));
-    const mismatched = recordPayment(
+    const mismatched = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: wrongAmount, proof: proofFor(wrongAmount), connection },
       NOW,
-    );
+    ));
     assert.equal(mismatched.ok, false);
     if (mismatched.ok) return;
     assert.equal(mismatched.code, "MISMATCH");
 
     const otherTenant = rawNotice(verifiedEvent({ transactionRef, tenantId: "tenant-b" }));
-    const tenantMismatch = recordPayment(
+    const tenantMismatch = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: otherTenant, proof: proofFor(otherTenant), connection },
       NOW,
-    );
+    ));
     assert.equal(tenantMismatch.ok, false);
 
     const otherProvider = rawNotice(verifiedEvent({ transactionRef, providerId: "other-gateway" }));
-    const providerMismatch = recordPayment(
+    const providerMismatch = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: otherProvider, proof: proofFor(otherProvider), connection },
       NOW,
-    );
+    ));
     assert.equal(providerMismatch.ok, false);
     if (providerMismatch.ok) return;
     assert.equal(providerMismatch.code, "MISMATCH");
 
     const otherAttempt = rawNotice(verifiedEvent({ transactionRef, attemptRef: "attempt-2" }));
-    const attemptMismatch = recordPayment(
+    const attemptMismatch = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: otherAttempt, proof: proofFor(otherAttempt), connection },
       NOW,
-    );
+    ));
     assert.equal(attemptMismatch.ok, false);
     if (attemptMismatch.ok) return;
     assert.equal(attemptMismatch.code, "NO_ATTEMPT");
 
     const otherTransaction = rawNotice(verifiedEvent({ transactionRef: "CTX-OTHER" }));
-    const identityMismatch = recordPayment(
+    const identityMismatch = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: otherTransaction, proof: proofFor(otherTransaction), connection },
       NOW,
-    );
+    ));
     assert.equal(identityMismatch.ok, false);
     if (identityMismatch.ok) return;
     assert.equal(identityMismatch.code, "MISMATCH");
@@ -849,7 +849,7 @@ describe("payment evidence", () => {
     if (currencyMismatch.ok) return;
     assert.equal(currencyMismatch.code, "MISMATCH");
 
-    const badConnection = recordPayment(
+    const badConnection = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       {
@@ -859,22 +859,22 @@ describe("payment evidence", () => {
         connection: { tenantId: "tenant-a", providerId: "other-gateway", secret: PAY_SECRET },
       },
       NOW,
-    );
+    ));
     assert.equal(badConnection.ok, false);
     if (badConnection.ok) return;
     assert.equal(badConnection.code, "MISMATCH");
     assert.equal(deps.state.transactions.get(transactionRef)?.paymentStatus, "NOT_STARTED");
     assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, false);
 
-    const paid = payVerified(deps.state, transactionRef);
+    const paid = (await payVerified(deps.state, transactionRef));
     assert.equal(paid.ok, true);
     const otherReference = rawNotice(verifiedEvent({ transactionRef, eventId: "pay-2", providerReference: "pay-ref-2" }));
-    const referenceMismatch = recordPayment(
+    const referenceMismatch = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: otherReference, proof: proofFor(otherReference), connection },
       NOW,
-    );
+    ));
     assert.equal(referenceMismatch.ok, false);
     if (referenceMismatch.ok) return;
     assert.equal(referenceMismatch.code, "MISMATCH");
@@ -889,12 +889,12 @@ describe("payment evidence", () => {
     const transactionRef = lead.transaction?.transactionRef ?? "";
     const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
     assert.equal(
-      openPaymentAttempt(deps.state, actor("tenant-a"), {
+      (await openPaymentAttempt(deps.state, actor("tenant-a"), {
         transactionRef,
         attemptRef: "attempt-a",
         providerId: PAY_PROVIDER,
         expectedAmountIdr: 10000,
-      }).ok,
+      })).ok,
       true,
     );
     const expiredNotice = rawNotice(
@@ -906,24 +906,24 @@ describe("payment evidence", () => {
         providerReference: "ref-a",
       }),
     );
-    const expired = recordPayment(
+    const expired = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: expiredNotice, proof: proofFor(expiredNotice), connection },
       NOW,
-    );
+    ));
     assert.equal(expired.ok, true);
     if (!expired.ok) return;
     assert.equal(expired.ledger.status, "EXPIRED");
     assert.equal(expired.ledger.verifiedPaid, false);
 
     assert.equal(
-      openPaymentAttempt(deps.state, actor("tenant-a"), {
+      (await openPaymentAttempt(deps.state, actor("tenant-a"), {
         transactionRef,
         attemptRef: "attempt-b",
         providerId: PAY_PROVIDER,
         expectedAmountIdr: 10000,
-      }).ok,
+      })).ok,
       true,
     );
     const paidNotice = rawNotice(
@@ -934,12 +934,12 @@ describe("payment evidence", () => {
         providerReference: "ref-b",
       }),
     );
-    const paid = recordPayment(
+    const paid = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
       NOW,
-    );
+    ));
     assert.equal(paid.ok, true);
     if (!paid.ok) return;
     assert.equal(paid.ledger.status, "PAID");
@@ -960,27 +960,27 @@ describe("payment evidence", () => {
     const lead = await reserve(command({ idempotencyKey: "pay-pending-b" }), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
     const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    }));
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-b",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const paidNotice = rawNotice(
       verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a", providerReference: "ref-a" }),
     );
-    const paid = recordPayment(
+    const paid = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
       NOW,
-    );
+    ));
     assert.equal(paid.ok, true);
     const pendingNotice = rawNotice(
       verifiedEvent({
@@ -991,12 +991,12 @@ describe("payment evidence", () => {
         providerReference: "ref-b",
       }),
     );
-    const pending = recordPayment(
+    const pending = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: pendingNotice, proof: proofFor(pendingNotice), connection },
       NOW,
-    );
+    ));
     assert.equal(pending.ok, true);
     if (!pending.ok) return;
     assert.equal(pending.ledger.status, "PENDING");
@@ -1015,49 +1015,49 @@ describe("payment evidence", () => {
     const deps = wire(provider, "MANUAL");
     const lead = await reserve(command({ idempotencyKey: "pay-reuse" }), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
-    const first = openPaymentAttempt(deps.state, actor("tenant-a"), {
+    const first = (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     assert.equal(first.ok, true);
-    const changedAmount = openPaymentAttempt(deps.state, actor("tenant-a"), {
+    const changedAmount = (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 5000,
-    });
+    }));
     assert.equal(changedAmount.ok, false);
     if (changedAmount.ok) return;
     assert.equal(changedAmount.code, "ATTEMPT_CONFLICT");
-    const changedProvider = openPaymentAttempt(deps.state, actor("tenant-a"), {
+    const changedProvider = (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: "other-gateway",
       expectedAmountIdr: 10000,
-    });
+    }));
     assert.equal(changedProvider.ok, false);
     if (changedProvider.ok) return;
     assert.equal(changedProvider.code, "ATTEMPT_CONFLICT");
-    const replay = openPaymentAttempt(deps.state, actor("tenant-a"), {
+    const replay = (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     assert.equal(replay.ok, true);
     if (!replay.ok) return;
     assert.equal(replay.replay, true);
     assert.equal(deps.state.paymentAttempts.get("tenant-a:attempt-a")?.expectedAmountIdr, 10000);
     const other = await reserve(command({ idempotencyKey: "pay-reuse-other" }), { ...deps, now: NOW });
     const otherTransaction = other.transaction?.transactionRef ?? "";
-    const moved = openPaymentAttempt(deps.state, actor("tenant-a"), {
+    const moved = (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef: otherTransaction,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     assert.equal(moved.ok, false);
     if (moved.ok) return;
     assert.equal(moved.code, "ATTEMPT_CONFLICT");
@@ -1070,28 +1070,28 @@ describe("payment evidence", () => {
     const lead = await reserve(command({ idempotencyKey: "pay-refund-map" }), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
     const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    }));
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-b",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const paidNotice = rawNotice(
       verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a", providerReference: "ref-a" }),
     );
     assert.equal(
-      recordPayment(
+      (await recordPayment(
         deps.state,
         actor("tenant-a"),
         { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
         NOW,
-      ).ok,
+      )).ok,
       true,
     );
     const mischarge = rawNotice(
@@ -1103,12 +1103,12 @@ describe("payment evidence", () => {
         providerReference: "ref-a",
       }),
     );
-    const chargeRejected = recordPayment(
+    const chargeRejected = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: mischarge, proof: proofFor(mischarge), connection },
       NOW,
-    );
+    ));
     assert.equal(chargeRejected.ok, false);
     if (chargeRejected.ok) return;
     assert.equal(chargeRejected.code, "MISMATCH");
@@ -1123,12 +1123,12 @@ describe("payment evidence", () => {
         providerReference: "ref-a",
       }),
     );
-    const rejected = recordPayment(
+    const rejected = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: misrefund, proof: proofFor(misrefund), connection },
       NOW,
-    );
+    ));
     assert.equal(rejected.ok, false);
     if (rejected.ok) return;
     assert.equal(rejected.code, "MISMATCH");
@@ -1144,12 +1144,12 @@ describe("payment evidence", () => {
         providerReference: "ref-a",
       }),
     );
-    const refunded = recordPayment(
+    const refunded = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: refundA, proof: proofFor(refundA), connection },
       NOW,
-    );
+    ));
     assert.equal(refunded.ok, true);
     if (!refunded.ok) return;
     assert.equal(refunded.ledger.status, "REFUNDED");
@@ -1170,28 +1170,28 @@ describe("payment evidence", () => {
     const lead = await reserve(command({ idempotencyKey: "pay-once" }), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
     const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const paidNotice = rawNotice(
       verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a", providerReference: "ref-a" }),
     );
-    const paid = recordPayment(
+    const paid = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
       NOW,
-    );
+    ));
     assert.equal(paid.ok, true);
-    const duplicate = recordPayment(
+    const duplicate = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection },
       NOW,
-    );
+    ));
     assert.equal(duplicate.ok, true);
     if (!duplicate.ok || !paid.ok) return;
     assert.equal(duplicate.effect, "duplicate");
@@ -1199,30 +1199,30 @@ describe("payment evidence", () => {
     const secondEvent = rawNotice(
       verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "pay-a-2", providerReference: "ref-a" }),
     );
-    const repeated = recordPayment(
+    const repeated = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: secondEvent, proof: proofFor(secondEvent), connection },
       NOW,
-    );
+    ));
     assert.equal(repeated.ok, true);
     if (!repeated.ok) return;
     assert.equal(repeated.effect, "duplicate");
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-b",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const otherCapture = rawNotice(
       verifiedEvent({ transactionRef, attemptRef: "attempt-b", eventId: "pay-b", providerReference: "ref-b" }),
     );
-    const blocked = recordPayment(
+    const blocked = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: otherCapture, proof: proofFor(otherCapture), connection },
       NOW,
-    );
+    ));
     assert.equal(blocked.ok, false);
     if (blocked.ok) return;
     assert.equal(blocked.code, "ATTEMPT_CONFLICT");
@@ -1254,12 +1254,12 @@ describe("payment evidence", () => {
     const lead = await reserve(command({ idempotencyKey: "pay-bind" }), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
     const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const event = verifiedEvent({ transactionRef, attemptRef: "attempt-a", providerReference: "ref-a" });
     const notice = rawNotice(event);
     const proof = proofFor(notice);
@@ -1281,35 +1281,35 @@ describe("payment evidence", () => {
     if (unsignedEmpty.ok) return;
     assert.equal(unsignedEmpty.code, "MISMATCH");
 
-    const shifted = recordPayment(
+    const shifted = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: { ...notice, occurredAt: "2026-10-25T08:00:00.000Z" }, proof, connection },
       NOW,
-    );
+    ));
     assert.equal(shifted.ok, false);
     if (shifted.ok) return;
     assert.equal(shifted.code, "MISMATCH");
-    const reordered = recordPayment(
+    const reordered = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: { ...notice, sequence: 9 }, proof, connection },
       NOW,
-    );
+    ));
     assert.equal(reordered.ok, false);
     if (reordered.ok) return;
     assert.equal(reordered.code, "MISMATCH");
 
     const otherTenant = rawNotice(verifiedEvent({ ...event, tenantId: "tenant-b" }));
-    const tenantRejected = recordPayment(
+    const tenantRejected = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice: otherTenant, proof: proofFor(otherTenant), connection },
       NOW,
-    );
+    ));
     assert.equal(tenantRejected.ok, false);
     const otherProvider = rawNotice(verifiedEvent({ ...event, providerId: "other-gateway" }));
-    const providerRejected = recordPayment(
+    const providerRejected = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       {
@@ -1319,7 +1319,7 @@ describe("payment evidence", () => {
         connection: { tenantId: "tenant-a", providerId: "other-gateway", secret: PAY_SECRET },
       },
       NOW,
-    );
+    ));
     assert.equal(providerRejected.ok, false);
     assert.equal(deps.state.transactions.get(transactionRef)?.paymentStatus, "NOT_STARTED");
     assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, false);
@@ -1360,7 +1360,7 @@ describe("booking and payment stay independent", () => {
     const lead = await reserve(command(), { ...deps, now: NOW });
     assert.equal(lead.booking?.state, "REQUESTED");
     const transactionRef = lead.transaction?.transactionRef ?? "";
-    const paid = payVerified(deps.state, transactionRef);
+    const paid = (await payVerified(deps.state, transactionRef));
     assert.equal(paid.ok, true);
     if (!paid.ok) return;
     assert.equal(paid.ledger.status, "PAID");
@@ -1384,7 +1384,7 @@ describe("booking and payment stay independent", () => {
     const opened = await reserve(command(), { ...deps, now: NOW });
     const transactionRef = opened.transaction?.transactionRef ?? "";
     const bookingRef = opened.booking?.bookingRef ?? "";
-    const paid = payVerified(deps.state, transactionRef);
+    const paid = (await payVerified(deps.state, transactionRef));
     assert.equal(paid.ok, true);
     const cancelled = await cancelReservation(
       { actor: actor("tenant-a"), bookingRef, idempotencyKey: "cancel-1" },
@@ -1392,7 +1392,7 @@ describe("booking and payment stay independent", () => {
     );
     assert.equal(cancelled.booking?.state, "CANCELLED");
     assert.equal(deps.state.ledgers.get("tenant-a:attempt-1")?.status, "PAID");
-    const refunded = payVerified(deps.state, transactionRef, { eventId: "refund-1", type: "payment.refunded" });
+    const refunded = (await payVerified(deps.state, transactionRef, { eventId: "refund-1", type: "payment.refunded" }));
     assert.equal(refunded.ok, true);
     if (!refunded.ok) return;
     assert.equal(refunded.ledger.status, "REFUNDED");
@@ -1846,12 +1846,15 @@ describe("existing commerce compatibility", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const files = readdirSync(here).filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
     assert.ok(files.includes("orchestrator.ts"));
+    const prismaFiles = new Set(["postgres-store.ts", "qa-database.ts"]);
     for (const file of files) {
       const text = readFileSync(join(here, file), "utf8");
-      assert.equal(text.includes("@prisma/client"), false, file);
-      assert.equal(text.includes("prisma."), false, file);
+      if (!prismaFiles.has(file)) {
+        assert.equal(text.includes("@prisma/client"), false, file);
+        assert.equal(text.includes("prisma."), false, file);
+      }
+      if (file !== "qa-database.ts") assert.equal(text.includes("process.env"), false, file);
       assert.equal(text.includes("items_batch"), false, file);
-      assert.equal(text.includes("process.env"), false, file);
       assert.equal(text.includes("fetch("), false, file);
       assert.equal(text.includes("graph.facebook.com"), false, file);
     }
@@ -1936,7 +1939,7 @@ describe("port-backed orchestrator", () => {
     const created = await reserve(command(), { ...deps, now: NOW });
     assert.equal(created.ok, true);
     assert.equal(created.booking?.state, "HELD");
-    const snap = deps.state.persistence.exportSnapshot();
+    const snap = (await deps.state.persistence.exportSnapshot());
     assert.equal(snap.bookings.length, 1);
     assert.equal(snap.transactions.length, 1);
     assert.equal(snap.transactions[0]?.state, "IN_PROGRESS");
@@ -1957,13 +1960,13 @@ describe("port-backed orchestrator", () => {
     assert.equal(second.booking?.bookingRef, first.booking?.bookingRef);
     assert.equal(second.transaction?.transactionRef, first.transaction?.transactionRef);
     assert.equal(provider.calls.filter((call) => call === "holdReservation").length, 1);
-    assert.equal(deps.state.persistence.exportSnapshot().bookings.length, 1);
+    assert.equal((await deps.state.persistence.exportSnapshot()).bookings.length, 1);
   });
 
   it("keeps one booking when two stores reserve the same slot", async () => {
     const seeded = createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY });
     seedOrchestratorPolicyFixture(seeded);
-    const parent = seeded.exportSnapshot();
+    const parent = (await seeded.exportSnapshot());
     const left = createOrchestratorState({
       persistence: createMemoryCommerceStore({ snapshot: parent, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
     });
@@ -1980,7 +1983,7 @@ describe("port-backed orchestrator", () => {
     const second = await reserve(command({ idempotencyKey: "slot-right" }), { registry: rightRegistry, state: right, now: NOW });
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
-    const settled = settleConcurrent(parent, left.persistence.exportSnapshot(), right.persistence.exportSnapshot());
+    const settled = settleConcurrent(parent, (await left.persistence.exportSnapshot()), (await right.persistence.exportSnapshot()));
     assert.equal(settled.conflicts.some((item) => item.code === "SLOT_CONFLICT"), true);
     assert.equal(settled.snapshot.bookings.length, 1);
     assert.equal(settled.snapshot.transactions.length, 1);
@@ -1999,8 +2002,8 @@ describe("port-backed orchestrator", () => {
     assert.equal(first.code, "TIMEOUT");
     assert.equal(first.resolutionRequired, true);
     assert.equal(provider.bookingCount(), 1);
-    assert.equal(deps.state.persistence.exportSnapshot().bookings.length, 0);
-    assert.equal(deps.state.persistence.exportSnapshot().transactions[0]?.state, "PENDING_RESOLUTION");
+    assert.equal((await deps.state.persistence.exportSnapshot()).bookings.length, 0);
+    assert.equal((await deps.state.persistence.exportSnapshot()).transactions[0]?.state, "PENDING_RESOLUTION");
     const again = await reserve(command({ idempotencyKey: "commit-timeout" }), { ...deps, now: NOW });
     assert.equal(again.replay, true);
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
@@ -2016,7 +2019,7 @@ describe("port-backed orchestrator", () => {
     const deps = wire(provider, "EXTERNAL_API");
     const first = await reserve(command({ idempotencyKey: "restart-1" }), { ...deps, now: NOW });
     assert.equal(first.transaction?.state, "PENDING_RESOLUTION");
-    const raw = JSON.parse(JSON.stringify(deps.state.persistence.exportSnapshot()));
+    const raw = JSON.parse(JSON.stringify((await deps.state.persistence.exportSnapshot())));
     const restored = createOrchestratorState({
       persistence: createMemoryCommerceStore({ snapshot: raw, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
     });
@@ -2065,30 +2068,30 @@ describe("port-backed orchestrator", () => {
     const transactionRef = lead.transaction?.transactionRef ?? "";
     const bookingState = lead.booking?.state;
     const connection = { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET };
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-a",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const expiredNotice = rawNotice(verifiedEvent({ transactionRef, attemptRef: "attempt-a", eventId: "exp-a", type: "payment.expired", providerReference: "ref-a" }));
-    const expired = recordPayment(deps.state, actor("tenant-a"), { transactionRef, notice: expiredNotice, proof: proofFor(expiredNotice), connection }, NOW);
+    const expired = (await recordPayment(deps.state, actor("tenant-a"), { transactionRef, notice: expiredNotice, proof: proofFor(expiredNotice), connection }, NOW));
     assert.equal(expired.ok, true);
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-b",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const paidNotice = rawNotice(verifiedEvent({ transactionRef, attemptRef: "attempt-b", eventId: "pay-b", providerReference: "ref-b" }));
-    const paid = recordPayment(deps.state, actor("tenant-a"), { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection }, NOW);
+    const paid = (await recordPayment(deps.state, actor("tenant-a"), { transactionRef, notice: paidNotice, proof: proofFor(paidNotice), connection }, NOW));
     assert.equal(paid.ok, true);
     if (!paid.ok) return;
     assert.equal(paid.ledger.status, "PAID");
     assert.equal(paid.booking?.state, bookingState);
     assert.equal(deps.state.ledgers.get("tenant-a:attempt-a")?.status, "EXPIRED");
     assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, true);
-    const snap = deps.state.persistence.exportSnapshot();
+    const snap = (await deps.state.persistence.exportSnapshot());
     assert.equal(snap.attempts.length, 2);
     assert.equal(snap.ledgerEvents.filter((row) => row.type === "payment.paid").length, 1);
   });
@@ -2098,51 +2101,51 @@ describe("port-backed orchestrator", () => {
     const deps = wire(provider, "EXTERNAL_API");
     const opened = await reserve(command({ idempotencyKey: "refund-port" }), { ...deps, now: NOW });
     const transactionRef = opened.transaction?.transactionRef ?? "";
-    const paid = payVerified(deps.state, transactionRef, { providerReference: "ref-refund" });
+    const paid = (await payVerified(deps.state, transactionRef, { providerReference: "ref-refund" }));
     assert.equal(paid.ok, true);
-    const refunded = payVerified(deps.state, transactionRef, {
+    const refunded = (await payVerified(deps.state, transactionRef, {
       eventId: "refund-port",
       type: "payment.partially_refunded",
       amountIdr: 4000,
       providerReference: "ref-refund",
-    });
+    }));
     assert.equal(refunded.ok, true);
     if (!refunded.ok) return;
     assert.equal(refunded.ledger.status, "PARTIALLY_REFUNDED");
     assert.equal(refunded.booking?.state, "CONFIRMED");
-    const charge = payVerified(deps.state, transactionRef, { eventId: "cb-port", type: "payment.chargeback", providerReference: "ref-refund" });
+    const charge = (await payVerified(deps.state, transactionRef, { eventId: "cb-port", type: "payment.chargeback", providerReference: "ref-refund" }));
     assert.equal(charge.ok, true);
     if (!charge.ok) return;
     assert.equal(charge.booking?.state, "CONFIRMED");
-    assert.equal(deps.state.persistence.exportSnapshot().bookings[0]?.state, "CONFIRMED");
+    assert.equal((await deps.state.persistence.exportSnapshot()).bookings[0]?.state, "CONFIRMED");
     assert.notEqual(deps.state.transactions.get(transactionRef)?.paymentStatus, "NOT_STARTED");
   });
 
-  it("dedupes webhooks per connection and rejects an actor outside that location", () => {
+  it("dedupes webhooks per connection and rejects an actor outside that location", async () => {
     const state = createOrchestratorState();
     const writer = actor("tenant-a");
-    const first = state.persistence.connections.register(writer, {
+    const first = (await state.persistence.connections.register(writer, {
       tenantId: "tenant-a",
       locationId: "loc-1",
       providerId: "pay-a",
       kind: "PAYMENT",
       mode: "MERCHANT_PAYMENT_GATEWAY",
       capabilities: paymentCapabilities("pay-a"),
-    });
-    const second = state.persistence.connections.register(writer, {
+    }));
+    const second = (await state.persistence.connections.register(writer, {
       tenantId: "tenant-a",
       locationId: "loc-2",
       providerId: "pay-a",
       kind: "PAYMENT",
       mode: "MERCHANT_PAYMENT_GATEWAY",
       capabilities: paymentCapabilities("pay-a"),
-    });
+    }));
     assert.equal(first.ok, true);
     assert.equal(second.ok, true);
     if (!first.ok || !second.ok) return;
-    const left = acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: first.value.connectionId, eventId: "evt-1", eventType: "payment.paid" });
-    const leftAgain = acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: first.value.connectionId, eventId: "evt-1", eventType: "payment.paid" });
-    const right = acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: second.value.connectionId, eventId: "evt-1", eventType: "payment.paid" });
+    const left = (await acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: first.value.connectionId, eventId: "evt-1", eventType: "payment.paid" }));
+    const leftAgain = (await acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: first.value.connectionId, eventId: "evt-1", eventType: "payment.paid" }));
+    const right = (await acceptWebhook(state, writer, { tenantId: "tenant-a", connectionId: second.value.connectionId, eventId: "evt-1", eventType: "payment.paid" }));
     assert.equal(left.ok, true);
     assert.equal(leftAgain.ok, true);
     assert.equal(right.ok, true);
@@ -2150,16 +2153,16 @@ describe("port-backed orchestrator", () => {
     assert.equal(leftAgain.replay, true);
     assert.equal(right.replay, false);
     assert.notEqual(left.value.dedupeKey, right.value.dedupeKey);
-    const outsider = markWebhookApplied(state, actor("tenant-a", ["loc-2"]), "tenant-a", left.value.dedupeKey);
+    const outsider = (await markWebhookApplied(state, actor("tenant-a", ["loc-2"]), "tenant-a", left.value.dedupeKey));
     assert.equal(outsider.ok, false);
     if (outsider.ok) return;
     assert.equal(outsider.code, "LOCATION_FORBIDDEN");
-    assert.equal(state.persistence.exportSnapshot().webhooks.find((row) => row.dedupeKey === left.value.dedupeKey)?.status, "RECEIVED");
-    const reader = markWebhookApplied(state, { tenantId: "tenant-a", locationIds: null, permissions: ["read"] }, "tenant-a", left.value.dedupeKey);
+    assert.equal((await state.persistence.exportSnapshot()).webhooks.find((row) => row.dedupeKey === left.value.dedupeKey)?.status, "RECEIVED");
+    const reader = (await markWebhookApplied(state, { tenantId: "tenant-a", locationIds: null, permissions: ["read"] }, "tenant-a", left.value.dedupeKey));
     assert.equal(reader.ok, false);
     if (reader.ok) return;
     assert.equal(reader.code, "FORBIDDEN");
-    const applied = markWebhookApplied(state, writer, "tenant-a", left.value.dedupeKey);
+    const applied = (await markWebhookApplied(state, writer, "tenant-a", left.value.dedupeKey));
     assert.equal(applied.ok, true);
     if (!applied.ok) return;
     assert.equal(applied.value.status, "APPLIED");
@@ -2170,22 +2173,22 @@ describe("port-backed orchestrator", () => {
     const deps = wire(provider, "MANUAL");
     const lead = await reserve(command({ idempotencyKey: "forged-pay" }), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-1",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const notice = rawNotice(verifiedEvent({ transactionRef }));
-    const forged = recordPayment(
+    const forged = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       { transactionRef, notice, proof: null, connection: { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET } },
       NOW,
-    );
+    ));
     assert.equal(forged.ok, false);
     const proof = proofFor(notice);
-    const tampered = recordPayment(
+    const tampered = (await recordPayment(
       deps.state,
       actor("tenant-a"),
       {
@@ -2195,16 +2198,16 @@ describe("port-backed orchestrator", () => {
         connection: { tenantId: "tenant-a", providerId: PAY_PROVIDER, secret: PAY_SECRET },
       },
       NOW,
-    );
+    ));
     assert.equal(tampered.ok, false);
-    const snap = deps.state.persistence.exportSnapshot();
+    const snap = (await deps.state.persistence.exportSnapshot());
     assert.equal(snap.ledgerEvents.length, 0);
     assert.equal(snap.ledgers[0]?.ledger.status, "NOT_STARTED");
     assert.equal(deps.state.transactions.get(transactionRef)?.verifiedPaid, false);
   });
 
   it("does not let an untrusted snapshot grant commerce approval", async () => {
-    const snapshot = createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY }).exportSnapshot();
+    const snapshot = (await createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY }).exportSnapshot());
     snapshot.policyEvidence.push({
       tenantId: "tenant-a",
       offeringCategory: "GENERAL_GOODS",
@@ -2227,7 +2230,7 @@ describe("port-backed orchestrator", () => {
     assert.equal(denied.code, "POLICY_DENIED");
     assert.equal(denied.booking, null);
     assert.equal(provider.calls.length, 0);
-    const after = hostile.persistence.exportSnapshot();
+    const after = (await hostile.persistence.exportSnapshot());
     assert.equal(after.bookings.length, 0);
     assert.equal(after.policyEvidence.some((row) => row.status === "VERIFIED"), false);
     const yola = await reserve(
@@ -2236,7 +2239,7 @@ describe("port-backed orchestrator", () => {
     );
     assert.equal(yola.code, "NOT_FOUND");
     assert.equal(yola.booking, null);
-    assert.equal(hostile.persistence.exportSnapshot().bookings.some((row) => row.tenantId.toLowerCase().includes("yola")), false);
+    assert.equal((await hostile.persistence.exportSnapshot()).bookings.some((row) => row.tenantId.toLowerCase().includes("yola")), false);
   });
 
   it("does not let external checkout invent a reservation", async () => {
@@ -2245,7 +2248,7 @@ describe("port-backed orchestrator", () => {
     const result = await reserve(command({ idempotencyKey: "checkout-port" }), { ...deps, now: NOW });
     assert.equal(result.code, "UNSUPPORTED");
     assert.equal(result.booking, null);
-    const snap = deps.state.persistence.exportSnapshot();
+    const snap = (await deps.state.persistence.exportSnapshot());
     assert.equal(snap.bookings.length, 0);
     assert.equal(snap.externalRefs.length, 0);
     assert.equal(provider.bookingCount(), 0);
@@ -2260,7 +2263,7 @@ describe("port-backed orchestrator", () => {
     assert.equal(lead.booking?.referenceAuthoritative, false);
     assert.equal(lead.booking?.providerReference, null);
     const transactionRef = lead.transaction?.transactionRef ?? "";
-    const classified = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    const classified = (await deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef));
     assert.equal(classified.ok, true);
     if (!classified.ok) return;
     assert.equal(classified.value.countsAsRevenue, false);
@@ -2273,7 +2276,7 @@ describe("port-backed orchestrator", () => {
     const deps = wire(provider, "EXTERNAL_API");
     const opened = await reserve(command({ idempotencyKey: "attr-port" }), { ...deps, now: NOW });
     const transactionRef = opened.transaction?.transactionRef ?? "";
-    const saved = recordTouchpoint(deps.state, actor("tenant-a"), {
+    const saved = (await recordTouchpoint(deps.state, actor("tenant-a"), {
       tenantId: "tenant-a",
       locationId: "loc-1",
       transactionRef,
@@ -2281,32 +2284,32 @@ describe("port-backed orchestrator", () => {
       bookingRef: opened.booking?.bookingRef ?? null,
       attemptRef: null,
       ctwaClid: "ctwa-port-1",
-    });
+    }));
     assert.equal(saved.ok, true);
-    const before = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    const before = (await deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef));
     assert.equal(before.ok, true);
     if (!before.ok) return;
     assert.equal(before.value.level, "B");
     assert.equal(before.value.countsAsRevenue, false);
     assert.equal(before.value.channel, "META_CTWA");
-    const paid = payVerified(deps.state, transactionRef, { providerReference: "attr-pay" });
+    const paid = (await payVerified(deps.state, transactionRef, { providerReference: "attr-pay" }));
     assert.equal(paid.ok, true);
-    const afterPay = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    const afterPay = (await deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef));
     assert.equal(afterPay.ok, true);
     if (!afterPay.ok) return;
     assert.equal(afterPay.value.level, "A");
     assert.equal(afterPay.value.countsAsRevenue, true);
     assert.equal(afterPay.value.channel, "META_CTWA");
-    const refunded = payVerified(deps.state, transactionRef, { eventId: "attr-refund", type: "payment.refunded", providerReference: "attr-pay" });
+    const refunded = (await payVerified(deps.state, transactionRef, { eventId: "attr-refund", type: "payment.refunded", providerReference: "attr-pay" }));
     assert.equal(refunded.ok, true);
     if (!refunded.ok) return;
     assert.equal(refunded.booking?.state, "CONFIRMED");
-    const afterRefund = deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef);
+    const afterRefund = (await deps.state.persistence.attribution.readClass(actor("tenant-a"), "tenant-a", transactionRef));
     assert.equal(afterRefund.ok, true);
     if (!afterRefund.ok) return;
     assert.equal(afterRefund.value.countsAsRevenue, false);
     assert.equal(afterRefund.value.channel, "META_CTWA");
-    const touch = deps.state.persistence.exportSnapshot().touchpoints.find((row) => row.transactionRef === transactionRef);
+    const touch = (await deps.state.persistence.exportSnapshot()).touchpoints.find((row) => row.transactionRef === transactionRef);
     assert.equal(touch?.ctwaClid, "ctwa-port-1");
     assert.equal(touch?.channel, "META_CTWA");
   });
@@ -2316,13 +2319,13 @@ describe("port-backed orchestrator", () => {
     const registry = createRegistry();
     registry.register({ tenantId: "tenant-a", locationId: null, providerId: "provider-a", mode: "NATIVE", provider });
     const state = createOrchestratorState();
-    assert.equal(state.persistence.exportSnapshot().policyEvidence.length, 0);
+    assert.equal((await state.persistence.exportSnapshot()).policyEvidence.length, 0);
     const denied = await reserve(command({ idempotencyKey: "no-fixture" }), { registry, state, now: NOW });
     assert.equal(denied.code, "POLICY_DENIED");
     assert.equal(denied.booking, null);
     assert.equal(provider.calls.length, 0);
-    assert.equal(state.persistence.exportSnapshot().bookings.length, 0);
-    assert.equal(state.persistence.exportSnapshot().policyEvidence.some((row) => row.status === "VERIFIED"), false);
+    assert.equal((await state.persistence.exportSnapshot()).bookings.length, 0);
+    assert.equal((await state.persistence.exportSnapshot()).policyEvidence.some((row) => row.status === "VERIFIED"), false);
   });
 
   it("lets only the claim winner call the booking provider", async () => {
@@ -2341,17 +2344,17 @@ describe("port-backed orchestrator", () => {
       markSecond = resolve;
     });
     let claims = 0;
-    idempotency.claim = ((actor, input) => {
+    idempotency.claim = (async (actor, input) => {
       claims += 1;
-      const occupied = state.persistence.exportSnapshot().idempotency.some((row) => row.tenantId === input.tenantId && row.idempotencyKey === input.idempotencyKey);
+      const occupied = (await state.persistence.exportSnapshot()).idempotency.some((row) => row.tenantId === input.tenantId && row.idempotencyKey === input.idempotencyKey);
       observedEmpty.push(!occupied);
       if (claims === 1) {
         markFirst?.();
         return new Promise((resolve) => {
-          releaseFirst = () => resolve(realClaim(actor, input));
+          releaseFirst = async () => resolve((await realClaim(actor, input)));
         });
       }
-      const result = realClaim(actor, input);
+      const result = (await realClaim(actor, input));
       markSecond?.();
       return result;
     }) as typeof idempotency.claim;
@@ -2370,7 +2373,7 @@ describe("port-backed orchestrator", () => {
       creates += 1;
       markCreate?.();
       await createGate;
-      return originalCreate(input);
+      return (await originalCreate(input));
     };
 
     const first = reserve(command({ idempotencyKey: "race-1" }), { registry, state, now: NOW });
@@ -2406,18 +2409,18 @@ describe("port-backed orchestrator", () => {
     const deps = wire(provider, "MANUAL");
     const lead = await reserve(command({ idempotencyKey: "forged-port" }), { ...deps, now: NOW });
     const transactionRef = lead.transaction?.transactionRef ?? "";
-    openPaymentAttempt(deps.state, actor("tenant-a"), {
+    (await openPaymentAttempt(deps.state, actor("tenant-a"), {
       transactionRef,
       attemptRef: "attempt-1",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     const writer = { tenantId: "tenant-a", locationIds: null, permissions: ["write"] as const };
-    const forged = deps.state.persistence.payments.applyEvent(writer, { event: verifiedEvent({ transactionRef }) });
+    const forged = (await deps.state.persistence.payments.applyEvent(writer, { event: verifiedEvent({ transactionRef }) }));
     assert.equal(forged.ok, false);
     if (forged.ok) return;
     assert.equal(forged.code, "INVALID");
-    const snap = deps.state.persistence.exportSnapshot();
+    const snap = (await deps.state.persistence.exportSnapshot());
     assert.equal(snap.ledgers[0]?.ledger.status, "NOT_STARTED");
     assert.equal(snap.ledgers[0]?.ledger.verifiedPaid, false);
     assert.equal(snap.ledgerEvents.length, 0);
@@ -2426,8 +2429,8 @@ describe("port-backed orchestrator", () => {
   });
 });
 
-function reloaded(state: ReturnType<typeof createOrchestratorState>) {
-  const raw = JSON.parse(JSON.stringify(state.persistence.exportSnapshot()));
+async function reloaded(state: ReturnType<typeof createOrchestratorState>) {
+  const raw = JSON.parse(JSON.stringify((await state.persistence.exportSnapshot())));
   return createOrchestratorState({
     persistence: createMemoryCommerceStore({ snapshot: raw, policyValidatorKey: ORCHESTRATOR_POLICY_KEY }),
   });
@@ -2438,12 +2441,12 @@ describe("orchestration crash recovery", () => {
     const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_API" });
     const deps = wire(provider, "EXTERNAL_API");
     await assert.rejects(
-      () => reserve(command({ idempotencyKey: "crash-claim" }), { ...deps, now: NOW, crash: { afterClaim() { throw new Error("crash-after-claim"); } } }),
+      async () => (await reserve(command({ idempotencyKey: "crash-claim" }), { ...deps, now: NOW, crash: { afterClaim() { throw new Error("crash-after-claim"); } } })),
       /crash-after-claim/,
     );
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 0);
     assert.equal(provider.bookingCount(), 0);
-    const snap = deps.state.persistence.exportSnapshot();
+    const snap = (await deps.state.persistence.exportSnapshot());
     const inflight = snap.inflight.find((row) => row.idempotencyKey === "crash-claim");
     assert.ok(inflight);
     assert.equal(inflight?.tenantId, "tenant-a");
@@ -2458,7 +2461,7 @@ describe("orchestration crash recovery", () => {
     assert.equal(clash.code, "IDEMPOTENCY_CONFLICT");
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 0);
 
-    const restored = reloaded(deps.state);
+    const restored = await reloaded(deps.state);
     const reconciled = await reconcileTimedOut(
       { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-claim" },
       { registry: deps.registry, state: restored, now: NOW },
@@ -2467,7 +2470,7 @@ describe("orchestration crash recovery", () => {
     assert.equal(reconciled.resolutionRequired, true);
     assert.equal(provider.bookingCount(), 0);
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 0);
-    assert.equal(restored.persistence.exportSnapshot().bookings.length, 0);
+    assert.equal((await restored.persistence.exportSnapshot()).bookings.length, 0);
     const retried = await reserve(command({ idempotencyKey: "crash-claim" }), { registry: deps.registry, state: restored, now: NOW });
     assert.equal(retried.ok, true);
     assert.equal(retried.transaction?.transactionRef, snap.transactions[0]?.transactionRef);
@@ -2483,15 +2486,15 @@ describe("orchestration crash recovery", () => {
     const provider = createMockProvider({ boundTenantId: "tenant-a", providerId: "provider-a", mode: "EXTERNAL_API" });
     const deps = wire(provider, "EXTERNAL_API");
     await assert.rejects(
-      () => reserve(command({ idempotencyKey: "crash-persist" }), { ...deps, now: NOW, crash: { beforePersist() { throw new Error("crash-before-persist"); } } }),
+      async () => (await reserve(command({ idempotencyKey: "crash-persist" }), { ...deps, now: NOW, crash: { beforePersist() { throw new Error("crash-before-persist"); } } })),
       /crash-before-persist/,
     );
     assert.equal(provider.bookingCount(), 1);
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
-    assert.equal(deps.state.persistence.exportSnapshot().bookings.length, 0);
-    const transactionRef = deps.state.persistence.exportSnapshot().transactions[0]?.transactionRef ?? "";
+    assert.equal((await deps.state.persistence.exportSnapshot()).bookings.length, 0);
+    const transactionRef = (await deps.state.persistence.exportSnapshot()).transactions[0]?.transactionRef ?? "";
     assert.equal(deps.state.transactions.get(transactionRef)?.state, "PENDING_RESOLUTION");
-    const restored = reloaded(deps.state);
+    const restored = await reloaded(deps.state);
     const recovered = await reconcileTimedOut(
       { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-persist" },
       { registry: deps.registry, state: restored, now: NOW },
@@ -2509,7 +2512,7 @@ describe("orchestration crash recovery", () => {
     assert.equal(second.replay, true);
     assert.equal(second.booking?.bookingRef, recovered.booking?.bookingRef);
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
-    assert.equal(restored.persistence.exportSnapshot().bookings.length, 1);
+    assert.equal((await restored.persistence.exportSnapshot()).bookings.length, 1);
   });
 
   it("restarts after timeout persistence without a second booking", async () => {
@@ -2521,13 +2524,13 @@ describe("orchestration crash recovery", () => {
     });
     const deps = wire(provider, "EXTERNAL_API");
     await assert.rejects(
-      () => reserve(command({ idempotencyKey: "crash-timeout" }), { ...deps, now: NOW, crash: { afterTimeout() { throw new Error("crash-after-timeout"); } } }),
+      async () => (await reserve(command({ idempotencyKey: "crash-timeout" }), { ...deps, now: NOW, crash: { afterTimeout() { throw new Error("crash-after-timeout"); } } })),
       /crash-after-timeout/,
     );
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
     assert.equal(provider.bookingCount(), 0);
-    const restored = reloaded(deps.state);
-    assert.equal(restored.persistence.exportSnapshot().transactions[0]?.state, "PENDING_RESOLUTION");
+    const restored = await reloaded(deps.state);
+    assert.equal((await restored.persistence.exportSnapshot()).transactions[0]?.state, "PENDING_RESOLUTION");
     const reconciled = await reconcileTimedOut(
       { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-timeout" },
       { registry: deps.registry, state: restored, now: NOW },
@@ -2536,7 +2539,7 @@ describe("orchestration crash recovery", () => {
     assert.equal(reconciled.booking, null);
     assert.equal(provider.bookingCount(), 0);
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
-    assert.equal(restored.persistence.exportSnapshot().bookings.length, 0);
+    assert.equal((await restored.persistence.exportSnapshot()).bookings.length, 0);
   });
 
   it("adopts once when reconciliation crashes before the local write", async () => {
@@ -2550,10 +2553,10 @@ describe("orchestration crash recovery", () => {
     const first = await reserve(command({ idempotencyKey: "crash-reconcile" }), { ...deps, now: NOW });
     assert.equal(first.code, "TIMEOUT");
     assert.equal(provider.bookingCount(), 1);
-    const restored = reloaded(deps.state);
+    const restored = await reloaded(deps.state);
     let crashed = false;
     await assert.rejects(
-      () => reconcileTimedOut(
+      async () => (await reconcileTimedOut(
         { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-reconcile" },
         {
           registry: deps.registry,
@@ -2568,10 +2571,10 @@ describe("orchestration crash recovery", () => {
             },
           },
         },
-      ),
+      )),
       /crash-before-adopt/,
     );
-    assert.equal(restored.persistence.exportSnapshot().bookings.length, 0);
+    assert.equal((await restored.persistence.exportSnapshot()).bookings.length, 0);
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
     const recovered = await reconcileTimedOut(
       { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-reconcile" },
@@ -2591,7 +2594,7 @@ describe("orchestration crash recovery", () => {
     assert.equal(recovered.booking?.state, "CONFIRMED");
     assert.equal(provider.bookingCount(), 1);
     assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
-    assert.equal(restored.persistence.exportSnapshot().bookings.length, 1);
+    assert.equal((await restored.persistence.exportSnapshot()).bookings.length, 1);
     const third = await reconcileTimedOut(
       { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey: "crash-reconcile" },
       { registry: deps.registry, state: restored, now: NOW },
@@ -2632,7 +2635,7 @@ describe("provider outcome certainty", () => {
     assert.equal(blocked.code, "CONFLICT");
     assert.equal(blocked.resolutionRequired, false);
     assert.equal(blocked.booking, null);
-    const snap = deps.state.persistence.exportSnapshot();
+    const snap = (await deps.state.persistence.exportSnapshot());
     assert.equal(snap.bookings.length, 1);
     assert.equal(snap.inflight.some((row) => row.idempotencyKey === "conflict-slot"), false);
     const closed = snap.idempotency.find((row) => row.idempotencyKey === "conflict-slot");
@@ -2663,7 +2666,7 @@ async function assertUncertainCommit(commitThen: "RETRYABLE" | "UNAVAILABLE" | "
   assert.equal(first.booking, null);
   assert.equal(first.transaction?.state, "PENDING_RESOLUTION");
   assert.equal(provider.bookingCount(), 1);
-  const snap = deps.state.persistence.exportSnapshot();
+  const snap = (await deps.state.persistence.exportSnapshot());
   assert.equal(snap.bookings.length, 0);
   assert.equal(snap.inflight.some((row) => row.idempotencyKey === idempotencyKey), true);
   assert.equal(snap.idempotency.find((row) => row.idempotencyKey === idempotencyKey)?.status, "PENDING_RESOLUTION");
@@ -2674,8 +2677,8 @@ async function assertUncertainCommit(commitThen: "RETRYABLE" | "UNAVAILABLE" | "
   assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
   assert.equal(provider.bookingCount(), 1);
 
-  const restored = reloaded(deps.state);
-  assert.equal(restored.persistence.exportSnapshot().inflight.some((row) => row.idempotencyKey === idempotencyKey), true);
+  const restored = await reloaded(deps.state);
+  assert.equal((await restored.persistence.exportSnapshot()).inflight.some((row) => row.idempotencyKey === idempotencyKey), true);
   const recovered = await reconcileTimedOut(
     { actor: actor("tenant-a"), tenantId: "tenant-a", locationId: "loc-1", providerId: "provider-a", idempotencyKey },
     { registry: deps.registry, state: restored, now: NOW },
@@ -2686,7 +2689,7 @@ async function assertUncertainCommit(commitThen: "RETRYABLE" | "UNAVAILABLE" | "
   assert.equal(recovered.booking?.state, "CONFIRMED");
   assert.equal(provider.calls.filter((call) => call === "createBooking").length, 1);
   assert.equal(provider.bookingCount(), 1);
-  assert.equal(restored.persistence.exportSnapshot().bookings.length, 1);
+  assert.equal((await restored.persistence.exportSnapshot()).bookings.length, 1);
   const replay = await reserve(command({ idempotencyKey }), { registry: deps.registry, state: restored, now: NOW });
   assert.equal(replay.replay, true);
   assert.equal(replay.booking?.bookingRef, recovered.booking?.bookingRef);
@@ -2697,8 +2700,8 @@ async function assertUncertainCommit(commitThen: "RETRYABLE" | "UNAVAILABLE" | "
 describe("tenant-scoped references", () => {
   it("routes a shared booking, transaction, payment, and cancellation to the authenticated tenant", async () => {
     const store = createMemoryCommerceStore({ policyValidatorKey: ORCHESTRATOR_POLICY_KEY });
-    seedSharedReservation(store, "tenant-b", "prv-b");
-    seedSharedReservation(store, "tenant-a", "prv-a");
+    await seedSharedReservation(store, "tenant-b", "prv-b");
+    await seedSharedReservation(store, "tenant-a", "prv-a");
     const state = createOrchestratorState({ persistence: store });
     const seen: string[] = [];
     const registry = createRegistry();
@@ -2722,8 +2725,8 @@ describe("tenant-scoped references", () => {
       registry.register({ tenantId, locationId: null, providerId: "provider-a", mode: "NATIVE", provider });
     }
 
-    const readA = readBooking(state, actor("tenant-a"), "BK-SAME");
-    const readB = readBooking(state, actor("tenant-b"), "BK-SAME");
+    const readA = (await readBooking(state, actor("tenant-a"), "BK-SAME"));
+    const readB = (await readBooking(state, actor("tenant-b"), "BK-SAME"));
     assert.equal(readA.ok, true);
     assert.equal(readB.ok, true);
     if (!readA.ok || !readB.ok) return;
@@ -2731,52 +2734,52 @@ describe("tenant-scoped references", () => {
     assert.equal(readB.booking.providerReference, "prv-b");
     assert.equal(readA.booking.tenantId, "tenant-a");
     assert.equal(readB.booking.tenantId, "tenant-b");
-    const hidden = readBooking(state, actor("tenant-c"), "BK-SAME");
+    const hidden = (await readBooking(state, actor("tenant-c"), "BK-SAME"));
     assert.equal(hidden.ok, false);
     if (hidden.ok) return;
     assert.equal(hidden.code, "CROSS_TENANT");
     assert.equal(JSON.stringify(hidden).includes("prv-"), false);
-    const wrongOutlet = readBooking(state, actor("tenant-a", ["loc-2"]), "BK-SAME");
+    const wrongOutlet = (await readBooking(state, actor("tenant-a", ["loc-2"]), "BK-SAME"));
     assert.equal(wrongOutlet.ok, false);
     if (wrongOutlet.ok) return;
     assert.equal(wrongOutlet.code, "LOCATION_FORBIDDEN");
 
-    const openedB = openPaymentAttempt(state, actor("tenant-b"), {
+    const openedB = (await openPaymentAttempt(state, actor("tenant-b"), {
       transactionRef: "TX-SAME",
       attemptRef: "attempt-same",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
-    const openedA = openPaymentAttempt(state, actor("tenant-a"), {
+    }));
+    const openedA = (await openPaymentAttempt(state, actor("tenant-a"), {
       transactionRef: "TX-SAME",
       attemptRef: "attempt-same",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     assert.equal(openedB.ok, true);
     assert.equal(openedA.ok, true);
-    const foreignAttempt = openPaymentAttempt(state, actor("tenant-c"), {
+    const foreignAttempt = (await openPaymentAttempt(state, actor("tenant-c"), {
       transactionRef: "TX-SAME",
       attemptRef: "attempt-c",
       providerId: PAY_PROVIDER,
       expectedAmountIdr: 10000,
-    });
+    }));
     assert.equal(foreignAttempt.ok, false);
     if (foreignAttempt.ok) return;
     assert.equal(foreignAttempt.code, "CROSS_TENANT");
-    const paidA = payTenant(state, "tenant-a", "gw-a");
+    const paidA = (await payTenant(state, "tenant-a", "gw-a"));
     assert.equal(paidA.ok, true);
     if (!paidA.ok) return;
     assert.equal(paidA.ledger.providerReference, "gw-a");
-    const ledgers = state.persistence.exportSnapshot().ledgers;
+    const ledgers = (await state.persistence.exportSnapshot()).ledgers;
     assert.equal(ledgers.find((row) => row.tenantId === "tenant-b")?.ledger.status, "NOT_STARTED");
     assert.equal(JSON.stringify(ledgers.find((row) => row.tenantId === "tenant-b")).includes("gw-a"), false);
-    const paidB = payTenant(state, "tenant-b", "gw-b");
+    const paidB = (await payTenant(state, "tenant-b", "gw-b"));
     assert.equal(paidB.ok, true);
     if (!paidB.ok) return;
     assert.equal(paidB.ledger.providerReference, "gw-b");
     assert.equal(paidA.ledger.providerReference, "gw-a");
-    const afterPay = state.persistence.exportSnapshot();
+    const afterPay = (await state.persistence.exportSnapshot());
     assert.equal(afterPay.transactions.find((row) => row.tenantId === "tenant-a")?.verifiedPaid, true);
     assert.equal(afterPay.transactions.find((row) => row.tenantId === "tenant-b")?.verifiedPaid, true);
     assert.equal(afterPay.ledgers.find((row) => row.tenantId === "tenant-a")?.ledger.providerReference, "gw-a");
@@ -2803,7 +2806,7 @@ describe("tenant-scoped references", () => {
     assert.equal(cancelA.booking?.tenantId, "tenant-a");
     assert.equal(cancelA.booking?.state, "CANCELLED");
     assert.deepEqual(seen, ["tenant-a:BK-SAME"]);
-    const stillB = readBooking(state, actor("tenant-b"), "BK-SAME");
+    const stillB = (await readBooking(state, actor("tenant-b"), "BK-SAME"));
     assert.equal(stillB.ok, true);
     if (!stillB.ok) return;
     assert.equal(stillB.booking.state, "HELD");
@@ -2818,7 +2821,7 @@ describe("tenant-scoped references", () => {
   });
 });
 
-function seedSharedReservation(store: ReturnType<typeof createMemoryCommerceStore>, tenantId: string, providerReference: string) {
+async function seedSharedReservation(store: ReturnType<typeof createMemoryCommerceStore>, tenantId: string, providerReference: string) {
   const by = actor(tenantId);
   const fields = {
     tenantId,
@@ -2828,15 +2831,15 @@ function seedSharedReservation(store: ReturnType<typeof createMemoryCommerceStor
     reference: `policy-${tenantId}`,
     outcome: "VERIFIED" as const,
   };
-  const policy = store.policy.submit(by, tenantId, { offeringCategory: "GENERAL_GOODS", experience: "WHATSAPP_CATALOG" }, {
+  const policy = (await store.policy.submit(by, tenantId, { offeringCategory: "GENERAL_GOODS", experience: "WHATSAPP_CATALOG" }, {
     kind: "AUTHORIZED_PROCESS",
     processId: "policy-job",
     reference: fields.reference,
     outcome: "VERIFIED",
     attestation: signPolicyAttestation(ORCHESTRATOR_POLICY_KEY, fields),
-  });
+  }));
   assert.equal(policy.ok, true);
-  const connection = store.connections.register(by, {
+  const connection = (await store.connections.register(by, {
     tenantId,
     locationId: "loc-1",
     providerId: "provider-a",
@@ -2851,9 +2854,9 @@ function seedSharedReservation(store: ReturnType<typeof createMemoryCommerceStor
       holdExpiryOwner: "PROVIDER",
       issuesAuthoritativeReference: true,
     },
-  });
+  }));
   assert.equal(connection.ok, true);
-  const opened = store.bookings.openReservation({
+  const opened = (await store.bookings.openReservation({
     actor: by,
     tenantId,
     locationId: "loc-1",
@@ -2875,11 +2878,11 @@ function seedSharedReservation(store: ReturnType<typeof createMemoryCommerceStor
     nativeExpiryPolicyId: null,
     availabilityFreshUntil: null,
     nowIso: NOW,
-  });
+  }));
   assert.equal(opened.ok, true);
 }
 
-function payTenant(state: ReturnType<typeof createOrchestratorState>, tenantId: string, providerReference: string) {
+async function payTenant(state: ReturnType<typeof createOrchestratorState>, tenantId: string, providerReference: string) {
   const event = verifiedEvent({
     tenantId,
     transactionRef: "TX-SAME",
@@ -2888,7 +2891,7 @@ function payTenant(state: ReturnType<typeof createOrchestratorState>, tenantId: 
     eventId: `pay-${tenantId}`,
   });
   const notice = rawNotice(event);
-  return recordPayment(
+  return (await recordPayment(
     state,
     actor(tenantId),
     {
@@ -2898,5 +2901,5 @@ function payTenant(state: ReturnType<typeof createOrchestratorState>, tenantId: 
       connection: { tenantId, providerId: PAY_PROVIDER, secret: PAY_SECRET },
     },
     NOW,
-  );
+  ));
 }

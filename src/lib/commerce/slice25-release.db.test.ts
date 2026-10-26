@@ -12,7 +12,11 @@ const DB_NAME = "atlasnow_slice25";
 const AUTH_SECRET = "slice25-release-test-secret";
 const QA_ID = "commerceqa20261023tenant";
 const OTHER_ID = "slice25-other-brand";
-const OMITTED = "20261024180000_commerce_orders";
+const OMITTED = new Set([
+  "20261024180000_commerce_orders",
+  "20261026120000_cc_location_tenant_key",
+  "20261026140000_cc_persistence",
+]);
 const PORT = 3465;
 
 const INBOX_SQL: Record<string, string> = {
@@ -61,7 +65,7 @@ function stageMigrations(root: string) {
   cpSync(path.join(source, "migrations", "migration_lock.toml"), path.join(migrations, "migration_lock.toml"));
   cpSync(path.join(source, "schema.prisma"), path.join(root, "schema.prisma"));
   for (const entry of readdirSync(path.join(source, "migrations"))) {
-    if (entry === OMITTED || entry === "migration_lock.toml") continue;
+    if (OMITTED.has(entry) || entry === "migration_lock.toml") continue;
     const from = path.join(source, "migrations", entry);
     if (!statSync(from).isDirectory()) continue;
     cpSync(from, path.join(migrations, entry), { recursive: true });
@@ -156,7 +160,8 @@ describe("slice 2.5 release database", { skip: localDb() ? false : "local databa
       const recorded = await slice.$queryRaw<Array<{ migration_name: string }>>`SELECT migration_name FROM "_prisma_migrations" ORDER BY migration_name`;
       const applied = recorded.map((row) => row.migration_name).sort();
       assert.deepEqual(applied, staged);
-      assert.equal(applied.includes(OMITTED), false);
+      assert.equal(applied.length, 39);
+      for (const name of OMITTED) assert.equal(applied.includes(name), false, name);
       assert.equal(applied.includes("20261024100000_commerce_batch_poll"), true);
       assert.equal(applied.includes("20261024200000_commerce_catalog_import"), true);
       assert.equal(applied.includes("20261024220000_commerce_catalog_feed"), true);
@@ -189,6 +194,8 @@ describe("slice 2.5 release database", { skip: localDb() ? false : "local databa
       }
       const reg = await slice.$queryRaw<Array<{ name: string | null }>>`SELECT to_regclass('public."CommerceOrder"')::text AS name`;
       assert.equal(reg[0]?.name, null);
+      const ccBooking = await slice.$queryRaw<Array<{ name: string | null }>>`SELECT to_regclass('public."CcBooking"')::text AS name`;
+      assert.equal(ccBooking[0]?.name, null);
 
       await slice.user.create({
         data: { id: "slice25-user", email: "slice25-qa@p2plabs.local", passwordHash: "not-a-login", name: "Slice 25" },
@@ -307,7 +314,7 @@ describe("slice 2.5 release database", { skip: localDb() ? false : "local databa
       const inbox = await get(`/conversations?client=${QA_ID}`);
       assert.equal(inbox.status, 200, `${inbox.status} ${inbox.location || ""} ${inbox.text.slice(0, 240)}`);
       assert.equal(logs.text.includes("items_batch"), false);
-      console.log(`slice25 applied=${applied.length} omitted=${OMITTED} commerceOrder=absent import=off`);
+      console.log(`slice25 applied=${applied.length} omitted=${[...OMITTED].join(",")} commerceOrder=absent ccBooking=absent import=off`);
     } finally {
       stop(server);
       await slice.$disconnect().catch(() => undefined);
