@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import {
+  TRUST,
+  evaluatePreflight,
+  openProvenance,
+  readPackagedArtifact,
+  sealProvenance,
+  stageReleaseArtifact,
+  verifyGitHubAttestation,
+} from "../../../scripts/migration-preflight.mjs";
 
 const repo = process.cwd();
 const script = path.join(repo, "scripts/migration-preflight.mjs");
@@ -62,11 +71,41 @@ function run(args: string[]) {
   return { status: result.status, report, stderr: result.stderr };
 }
 
-function copyApplied(dir: string, names: string[]) {
-  const root = path.join(dir, "migrations");
-  mkdirSync(root);
-  for (const name of names) cpSync(path.join(migrationRoot, name), path.join(root, name), { recursive: true });
-  return root;
+const SOURCE = "0123456789abcdef0123456789abcdef01234567";
+const OTHER = "fedcba9876543210fedcba9876543210fedcba98";
+
+function copySql(source: string, name: string) {
+  const dest = path.join(source, name);
+  mkdirSync(dest, { recursive: true });
+  copyFileSync(path.join(migrationRoot, name, "migration.sql"), path.join(dest, "migration.sql"));
+}
+
+function stageApplied(dir: string, manifestBody: ReturnType<typeof manifest>) {
+  return stageReleaseArtifact({
+    manifest: manifestBody,
+    sourceRoot: migrationRoot,
+    entrypointPath: entrypoint,
+    outDir: path.join(dir, "artifact"),
+  });
+}
+
+function identityFor(digest: string, source = SOURCE) {
+  return {
+    sourceRepositoryDigest: source,
+    sourceRepositoryURI: TRUST.repository,
+    sourceRepositoryIdentifier: TRUST.repositoryId,
+    issuer: TRUST.issuer,
+    buildSignerURI: `https://github.com/${TRUST.repositoryNwo}/${TRUST.workflowPath}@refs/heads/feature/conversational-commerce-m2-4`,
+    buildSignerDigest: source,
+    runnerEnvironment: TRUST.runnerEnvironment,
+    artifactDigest: digest,
+  };
+}
+
+function signedIdentity(digest: string, source = SOURCE) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const envelope = sealProvenance(privateKey, identityFor(digest, source));
+  return { publicKey, privateKey, envelope, identity: openProvenance(publicKey, envelope) };
 }
 
 describe("release safety", () => {
@@ -122,78 +161,156 @@ describe("release safety", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("accepts 39 applied folders and rejects a checksum, a gap, a rollback, and an unapproved folder", () => {
+  it("accepts a signed provenance for the 39 applied folders and rejects the release hazards", () => {
     const body = manifest();
-    const dir = mkdtempSync(path.join(tmpdir(), "atlasnow-preflight-"));
-    const root = copyApplied(dir, body.applied.map((entry) => entry.name));
-    const pinned = { ...body, approvedGitSha: "fixture-sha" };
-    const manifestFile = writeJson(dir, "manifest.json", pinned);
-    const historyFile = writeJson(dir, "history.json", historyFor(body.applied));
-    const pass = run(["--manifest", manifestFile, "--migrations", root, "--history", historyFile, "--git-sha", "fixture-sha"]);
-    assert.equal(pass.status, 0, JSON.stringify(pass.report));
-    assert.equal(pass.report?.ok, true);
-    assert.equal(pass.report?.appliedMatch, 39);
-    assert.deepEqual(pass.report?.unapprovedPending, []);
+    const dir = mkdtempSync(path.join(tmpdir(), "atlasnow-provenance-"));
+    const packaged = stageApplied(dir, body);
+    assert.equal(packaged.folders.length, 39);
+    assert.deepEqual(packaged.folders.map((folder) => folder.name).filter((name) => PENDING.includes(name)), []);
+    const pinned = { ...body, approvedGitSha: SOURCE };
+    const history = historyFor(body.applied);
+    const { identity } = signedIdentity(packaged.digest);
+    const pass = evaluatePreflight({ manifest: pinned, packaged, history, identity, attestationProvided: true, callerSha: "" });
+    assert.equal(pass.ok, true, JSON.stringify(pass.failures));
+    assert.equal(pass.appliedMatch, 39);
 
-    const mismatch = historyFor(body.applied);
-    mismatch[0] = { ...mismatch[0], checksum: "0".repeat(64) };
-    const mismatchFile = writeJson(dir, "mismatch.json", mismatch);
-    const badHash = run(["--manifest", manifestFile, "--migrations", root, "--history", mismatchFile, "--git-sha", "fixture-sha"]);
-    assert.equal(badHash.status, 1);
-    assert.equal(badHash.report?.failures.some((failure) => failure.code === "CHECKSUM_MISMATCH"), true);
+    const wrong = signedIdentity(packaged.digest, OTHER).identity;
+    const wrongCommit = evaluatePreflight({ manifest: pinned, packaged, history, identity: wrong, attestationProvided: true, callerSha: "" });
+    assert.equal(wrongCommit.ok, false);
+    assert.equal(wrongCommit.failures.some((failure) => failure.code === "SHA_MISMATCH"), true);
 
-    const gapFile = writeJson(dir, "gap.json", historyFor(body.applied).slice(1));
-    const missing = run(["--manifest", manifestFile, "--migrations", root, "--history", gapFile, "--git-sha", "fixture-sha"]);
-    assert.equal(missing.status, 1);
-    assert.equal(missing.report?.failures.some((failure) => failure.code === "MISSING_HISTORY"), true);
+    const changed = readPackagedArtifact(path.join(dir, "artifact"));
+    writeFileSync(path.join(dir, "artifact", "prisma", "migrations", body.applied[0].name, "migration.sql"), "-- changed\n");
+    const modified = readPackagedArtifact(path.join(dir, "artifact"));
+    const stale = signedIdentity(changed.digest).identity;
+    const modifiedArtifact = evaluatePreflight({ manifest: pinned, packaged: modified, history, identity: stale, attestationProvided: true, callerSha: SOURCE });
+    assert.equal(modifiedArtifact.ok, false);
+    assert.equal(modifiedArtifact.failures.some((failure) => failure.code === "ARTIFACT_MISMATCH"), true);
+
+    const missingProvenance = evaluatePreflight({ manifest: pinned, packaged, history, identity: null, attestationProvided: false, callerSha: SOURCE });
+    assert.equal(missingProvenance.ok, false);
+    assert.equal(missingProvenance.failures.some((failure) => failure.code === "MISSING_PROVENANCE"), true);
+
+    const { publicKey, envelope } = signedIdentity(packaged.digest);
+    const forged = { ...envelope, signature: Buffer.from(envelope.signature, "base64").fill(9).toString("base64") };
+    assert.equal(openProvenance(publicKey, forged), null);
+    const forgedReport = evaluatePreflight({ manifest: pinned, packaged, history, identity: null, attestationProvided: true, callerSha: SOURCE });
+    assert.equal(forgedReport.ok, false);
+    assert.equal(forgedReport.failures.some((failure) => failure.code === "UNTRUSTED_PROVENANCE"), true);
+
+    const callerOnly = evaluatePreflight({
+      manifest: pinned,
+      packaged,
+      history,
+      identity: { proof: "github-attestation", actionsConclusion: "success", sourceRepositoryDigest: SOURCE },
+      attestationProvided: true,
+      callerSha: SOURCE,
+    });
+    assert.equal(callerOnly.ok, false);
+    assert.equal(callerOnly.failures.some((failure) => failure.code === "UNTRUSTED_PROVENANCE"), true);
+
+    const extraDir = path.join(dir, "artifact", "prisma", "migrations", "20990101000000_extra");
+    mkdirSync(extraDir);
+    writeFileSync(path.join(extraDir, "migration.sql"), "SELECT 1;\n");
+    const extraPackaged = readPackagedArtifact(path.join(dir, "artifact"));
+    const extraIdentity = signedIdentity(extraPackaged.digest).identity;
+    const extra = evaluatePreflight({ manifest: pinned, packaged: extraPackaged, history, identity: extraIdentity, attestationProvided: true, callerSha: "" });
+    assert.equal(extra.ok, false);
+    assert.equal(extra.failures.some((failure) => failure.code === "UNAPPROVED_FOLDER" && failure.name === "20990101000000_extra"), true);
+    rmSync(extraDir, { recursive: true, force: true });
+
+    writeFileSync(path.join(dir, "artifact", "prisma", "migrations", body.applied[0].name, "migration.sql"), readFileSync(path.join(migrationRoot, body.applied[0].name, "migration.sql")));
+    const restored = readPackagedArtifact(path.join(dir, "artifact"));
+    const restoredIdentity = signedIdentity(restored.digest).identity;
+    const badHistory = historyFor(body.applied);
+    badHistory[0] = { ...badHistory[0], checksum: "0".repeat(64) };
+    const checksum = evaluatePreflight({ manifest: pinned, packaged: restored, history: badHistory, identity: restoredIdentity, attestationProvided: true, callerSha: "" });
+    assert.equal(checksum.failures.some((failure) => failure.code === "CHECKSUM_MISMATCH"), true);
+
+    const gap = evaluatePreflight({ manifest: pinned, packaged: restored, history: historyFor(body.applied).slice(1), identity: restoredIdentity, attestationProvided: true, callerSha: "" });
+    assert.equal(gap.failures.some((failure) => failure.code === "MISSING_HISTORY"), true);
 
     const rolled = historyFor(body.applied, (row) => {
       if (row.migration_name === body.applied[1]?.name) row.rolled_back_at = "2026-01-02T00:00:00.000Z";
     });
-    const rolledFile = writeJson(dir, "rolled.json", rolled);
-    const incomplete = run(["--manifest", manifestFile, "--migrations", root, "--history", rolledFile, "--git-sha", "fixture-sha"]);
-    assert.equal(incomplete.status, 1);
-    assert.equal(incomplete.report?.failures.some((failure) => failure.code === "INCOMPLETE"), true);
+    const incomplete = evaluatePreflight({ manifest: pinned, packaged: restored, history: rolled, identity: restoredIdentity, attestationProvided: true, callerSha: "" });
+    assert.equal(incomplete.failures.some((failure) => failure.code === "INCOMPLETE"), true);
 
-    mkdirSync(path.join(root, "20990101000000_extra"));
-    writeFileSync(path.join(root, "20990101000000_extra/migration.sql"), "SELECT 1;\n");
-    const extra = run(["--manifest", manifestFile, "--migrations", root, "--history", historyFile, "--git-sha", "fixture-sha"]);
-    assert.equal(extra.status, 1);
-    assert.equal(extra.report?.failures.some((failure) => failure.code === "UNAPPROVED_FOLDER" && failure.name === "20990101000000_extra"), true);
+    const checkout = path.join(dir, "checkout");
+    mkdirSync(path.join(checkout, "prisma", "migrations"), { recursive: true });
+    copyFileSync(entrypoint, path.join(checkout, "docker-entrypoint.sh"));
+    for (const name of [...body.applied, ...body.trackedPending].map((entry) => entry.name)) copySql(path.join(checkout, "prisma", "migrations"), name);
+    const checkoutPackaged = readPackagedArtifact(checkout);
+    const checkoutIdentity = signedIdentity(checkoutPackaged.digest).identity;
+    const current = evaluatePreflight({ manifest: body, packaged: checkoutPackaged, history, identity: checkoutIdentity, attestationProvided: true, callerSha: SOURCE });
+    assert.equal(current.ok, false);
+    assert.equal(current.appliedMatch, 39);
+    assert.deepEqual(current.unapprovedPending, PENDING);
+    assert.equal(current.failures.some((failure) => failure.code === "UNPINNED_SHA"), true);
+    assert.equal(current.failures.filter((failure) => failure.code === "UNAPPROVED_FOLDER").length, 3);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("recognizes the repo as 39 applied and 3 unapproved pending folders", () => {
+  it("rejects a caller SHA and a forged bundle at the operator command", () => {
     const body = manifest();
-    const dir = mkdtempSync(path.join(tmpdir(), "atlasnow-preflight-repo-"));
-    const pinned = { ...body, approvedGitSha: "fixture-sha" };
+    const dir = mkdtempSync(path.join(tmpdir(), "atlasnow-cli-provenance-"));
+    const packaged = stageApplied(dir, body);
+    const pinned = { ...body, approvedGitSha: SOURCE };
     const manifestFile = writeJson(dir, "manifest.json", pinned);
     const historyFile = writeJson(dir, "history.json", historyFor(body.applied));
-    const result = run(["--manifest", manifestFile, "--migrations", migrationRoot, "--history", historyFile, "--git-sha", "fixture-sha"]);
-    assert.equal(result.status, 1);
-    assert.equal(result.report?.appliedMatch, 39);
-    assert.deepEqual(result.report?.unapprovedPending, PENDING);
-    assert.equal(result.report?.failures.filter((failure) => failure.code === "UNAPPROVED_FOLDER").length, 3);
-    const unpinned = run(["--manifest", manifestPath, "--migrations", migrationRoot, "--history", historyFile, "--git-sha", "fixture-sha"]);
-    assert.equal(unpinned.status, 1);
-    assert.equal(unpinned.report?.failures.some((failure) => failure.code === "UNPINNED_SHA"), true);
+    const artifact = path.join(dir, "artifact");
+    const caller = run(["--manifest", manifestFile, "--artifact", artifact, "--history", historyFile, "--git-sha", SOURCE]);
+    assert.equal(caller.status, 1);
+    assert.equal(caller.report?.ok, false);
+    assert.equal(caller.report?.failures.some((failure) => failure.code === "MISSING_PROVENANCE"), true);
+
+    const { envelope } = signedIdentity(packaged.digest);
+    const bundle = writeJson(dir, "bundle.json", envelope);
+    const forged = run(["--manifest", manifestFile, "--artifact", artifact, "--history", historyFile, "--attestation", bundle, "--git-sha", SOURCE]);
+    assert.equal(forged.status, 1);
+    assert.equal(forged.report?.failures.some((failure) => failure.code === "UNTRUSTED_PROVENANCE"), true);
+    const garbage = writeJson(dir, "garbage.json", { mediaType: "forged" });
+    assert.equal(verifyGitHubAttestation({ artifactFile: path.join(artifact, "atlasnow-migration-artifact.json"), bundlePath: garbage }), null);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("allows a pending folder only when the manifest names it", () => {
+  it("allows a pending folder only when the manifest names it and the provenance matches", () => {
     const body = manifest();
-    const dir = mkdtempSync(path.join(tmpdir(), "atlasnow-preflight-pending-"));
-    const names = [...body.applied.map((entry) => entry.name), PENDING[0]];
-    const root = copyApplied(dir, names);
     const pending = body.trackedPending.find((entry) => entry.name === PENDING[0]);
     assert.ok(pending);
-    const pinned = { ...body, approvedGitSha: "fixture-sha", approvedPending: [pending], trackedPending: body.trackedPending.slice(1) };
-    const manifestFile = writeJson(dir, "manifest.json", pinned);
-    const historyFile = writeJson(dir, "history.json", historyFor(body.applied));
-    const result = run(["--manifest", manifestFile, "--migrations", root, "--history", historyFile, "--git-sha", "fixture-sha"]);
-    assert.equal(result.status, 0, JSON.stringify(result.report));
-    assert.deepEqual(result.report?.approvedPending, [PENDING[0]]);
+    const dir = mkdtempSync(path.join(tmpdir(), "atlasnow-preflight-pending-"));
+    const source = path.join(dir, "source");
+    for (const name of [...body.applied.map((entry) => entry.name), pending.name]) copySql(source, name);
+    const named = { ...body, approvedGitSha: SOURCE, approvedPending: [pending] };
+    const out = path.join(dir, "named");
+    const packaged = stageReleaseArtifact({ manifest: named, sourceRoot: source, entrypointPath: entrypoint, outDir: out });
+    const identity = signedIdentity(packaged.digest).identity;
+    const result = evaluatePreflight({
+      manifest: named,
+      packaged,
+      history: historyFor(body.applied),
+      identity,
+      attestationProvided: true,
+      callerSha: "",
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.failures));
+    assert.deepEqual(result.approvedPending, [pending.name]);
+    const omitted = stageReleaseArtifact({ manifest: body, sourceRoot: migrationRoot, entrypointPath: entrypoint, outDir: path.join(dir, "omitted") });
+    assert.equal(omitted.folders.some((folder) => folder.name === pending.name), false);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("packages the non-migrating entrypoint and keeps attestation generation out of deployment", () => {
+    const docker = readFileSync(path.join(repo, "Dockerfile"), "utf8");
+    assert.match(docker, /COPY deploy\/docker-entrypoint\.sh \/docker-entrypoint\.sh/);
+    assert.match(docker, /ENTRYPOINT \["\/docker-entrypoint\.sh"\]/);
+    const ignore = readFileSync(path.join(repo, ".dockerignore"), "utf8");
+    for (const name of PENDING) assert.match(ignore, new RegExp(name));
+    const workflow = readFileSync(path.join(repo, "scripts/release-provenance.workflow.yml"), "utf8");
+    assert.equal(workflow.includes("migrate deploy"), false);
+    assert.equal(workflow.includes("db push"), false);
+    assert.match(workflow, /actions\/attest-build-provenance@v2/);
+    assert.match(workflow, /This job is not a deployment/);
   });
 
   it("does not call prisma from the preflight program", () => {

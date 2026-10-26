@@ -53,27 +53,50 @@ The manifest lists them as `trackedPending`. `approvedPending` is empty. `approv
 
 A migration remains a separate operator command. It is allowed only after a written approval and a preflight exit 0.
 
+## Provenance trust model
+
+The operator command does not accept `--git-sha` as proof. A manifest value and a caller argument that repeat the same SHA fail closed.
+
+The source commit is the `sourceRepositoryDigest` field on the Sigstore certificate returned by `gh attestation verify`. That field is copied from GitHub's OIDC token. The SLSA predicate is not the source of the commit. The artifact digest is the SHA-256 of the canonical file list inside the packaged directory, and `gh` checks that digest against the attestation subject.
+
+Pinned build identity:
+
+- Repository `https://github.com/joefebrian/atlasnow`, numeric id `1373362968`
+- OIDC issuer `https://token.actions.githubusercontent.com`
+- Signer workflow `.github/workflows/release-provenance.yml`
+- Runner environment `github-hosted`
+
+Missing, unverifiable, or mismatched provenance fails closed. A successful GitHub Actions conclusion is not an input and is not a deployment approval.
+
+`scripts/release-provenance.workflow.yml` is the workflow text. It is not installed under `.github/workflows/`, because this credential cannot update workflow files. Until that file is installed and GitHub signs an attestation, the operator command has no bundle it can accept. Local Ed25519 fixtures exercise the same binding rules and are rejected by the operator command.
+
 ## Preflight
 
-`node scripts/migration-preflight.mjs --manifest <file> --migrations <dir> --history <json-or-csv> --git-sha <sha>`
+`node scripts/migration-preflight.mjs --manifest <file> --artifact <packaged-dir> --history <json-or-csv> --attestation <bundle>`
 
-The history file has `migration_name`, `checksum`, `started_at`, `finished_at`, `rolled_back_at`, and `applied_steps_count`. The program reads that file and the SQL bytes. It does not call `migrate deploy`, `migrate status`, `migrate resolve`, or `db push`, and a successful Prisma exit code is not an input.
+`--artifact` is the packaged root. It contains `docker-entrypoint.sh` and `prisma/migrations/<name>/migration.sql`. The program hashes those bytes. It does not read the developer checkout unless that checkout is passed as the artifact. `--git-sha`, when present, is rejected unless it equals the certificate commit, and that equality still does not pass by itself.
 
-It fails closed when the manifest SHA is empty or different, a folder or checksum disagrees, a history row is missing, duplicated, unfinished, or rolled back, or a folder is not in `applied` or `approvedPending`.
+The history file has `migration_name`, `checksum`, `started_at`, `finished_at`, `rolled_back_at`, and `applied_steps_count`. The program does not call Prisma. A Prisma exit code is not an input.
+
+It fails closed when provenance is missing or untrusted, the certificate repository, id, issuer, workflow, or runner disagrees, the artifact digest disagrees, `approvedGitSha` is empty or differs from the certificate commit, the packaged entrypoint would migrate, a folder or checksum disagrees, a history row is missing, duplicated, unfinished, or rolled back, or a folder is not in `applied` or `approvedPending`.
 
 ## Future migration artifact
 
-1. Pin `approvedGitSha` to the exact commit being released.
-2. Copy only the `applied` folders into the image.
-3. Copy an `approvedPending` folder only after a separate approval adds that one name and its checksum to `approvedPending`.
-4. Leave `trackedPending` out of the image until that approval.
-5. Run the preflight against the image directory and a fresh six-column history file.
+1. Install `scripts/release-provenance.workflow.yml` at `.github/workflows/release-provenance.yml` with a credential that has the workflow scope.
+2. Build the artifact with `node scripts/release-artifact.mjs --manifest <file> --source prisma/migrations --entrypoint deploy/docker-entrypoint.sh --out <dir>`. The command copies `applied` and `approvedPending` only.
+3. Let that workflow attest `atlasnow-migration-artifact.json`. The attested digest is the immutable artifact digest.
+4. Record `approvedGitSha` in a later approval manifest as the certificate commit of that artifact. The attested commit does not need to contain its own SHA.
+5. Run the preflight against the packaged directory, the approval manifest, a fresh six-column history file, and the attestation bundle.
 6. Start the app only when the preflight exits 0. Do not migrate during boot.
+
+`.dockerignore` excludes the three tracked pending folders from the image build context. An image that still contains one of them fails preflight. The committed Dockerfile copies `deploy/docker-entrypoint.sh` to `/docker-entrypoint.sh` and sets that path as `ENTRYPOINT`. This entrypoint is not deployed.
 
 ## Remaining blockers
 
-- No release SHA is pinned.
+- No release SHA is pinned. `approvedGitSha` remains null.
+- The signer workflow is not installed, so no GitHub attestation exists for an AtlasNow migration artifact.
 - Import and feed were applied without a recorded approval in the older release notes.
-- The three pending folders are still in this branch. A boot that migrates would apply them. This PR removes that boot behavior and does not deploy it.
-- The running production process was not restarted and still has the previous entrypoint until a later deployment, which is not authorized.
+- The three pending folders remain in git and are not approved to apply.
+- The running production process was not restarted and still has the previous entrypoint.
 - Staging does not exist.
+- A local test and a green Actions run are not production release approvals.

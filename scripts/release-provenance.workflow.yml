@@ -1,0 +1,56 @@
+# Install this file at .github/workflows/release-provenance.yml with a token
+# that has the workflow scope. A copy outside that directory does not run and
+# does not create an attestation. A green run of this workflow is not a
+# production deployment approval.
+name: release-provenance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  migration-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Stage the migration artifact
+        run: node scripts/release-artifact.mjs --manifest scripts/migration-manifest.json --source prisma/migrations --entrypoint deploy/docker-entrypoint.sh --out "$RUNNER_TEMP/migration-artifact"
+      - uses: actions/attest-build-provenance@v2
+        id: attest
+        with:
+          subject-path: ${{ runner.temp }}/migration-artifact/atlasnow-migration-artifact.json
+      - name: Verify the attestation and keep the unpinned manifest fail closed
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -eu
+          gh attestation verify "$RUNNER_TEMP/migration-artifact/atlasnow-migration-artifact.json" \
+            --bundle "$BUNDLE" \
+            --repo joefebrian/atlasnow \
+            --signer-workflow joefebrian/atlasnow/.github/workflows/release-provenance.yml \
+            --cert-oidc-issuer https://token.actions.githubusercontent.com \
+            --deny-self-hosted-runners \
+            --format json > "$RUNNER_TEMP/attestation.json"
+          printf '%s\n' '[]' > "$RUNNER_TEMP/history.json"
+          set +e
+          node scripts/migration-preflight.mjs \
+            --manifest scripts/migration-manifest.json \
+            --artifact "$RUNNER_TEMP/migration-artifact" \
+            --history "$RUNNER_TEMP/history.json" \
+            --attestation "$BUNDLE" > "$RUNNER_TEMP/preflight.json"
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "preflight passed without a pinned release SHA"
+            exit 1
+          fi
+          PREFLIGHT="$RUNNER_TEMP/preflight.json" node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(process.env.PREFLIGHT,"utf8")); if(!report.failures.some((failure)=>failure.code==="UNPINNED_SHA")) process.exit(1);'
+          echo "Attestation verified. Release approval remains closed. This job is not a deployment."

@@ -72,7 +72,7 @@ M2.2 release readiness is a review in `docs/M2_2_RELEASE_READINESS.md`. It does 
 
 M2.3 prepared the production inventory check in `docs/M2_3_MIGRATION_INVENTORY.md`. The founder then ran that read-only check. The verified result is `docs/M2_4_RELEASE_SAFETY.md`: 39 finished rows, the two inbox checksums match the restored SQL, catalog import and feed are applied with unknown historical approval, and orders plus both conversational folders are absent. Staging and production stay NO-GO.
 
-M2.4 restores the two inbox SQL files without editing them, removes `prisma migrate deploy` from `deploy/docker-entrypoint.sh`, and adds `scripts/migration-preflight.mjs`. The preflight does not apply migrations. `approvedGitSha` is empty, so this branch fails closed. The change is not deployed.
+M2.4 restores the two inbox SQL files without editing them, removes `prisma migrate deploy` from `deploy/docker-entrypoint.sh`, and adds `scripts/migration-preflight.mjs`. The operator command accepts a GitHub artifact attestation only. A caller-supplied SHA is not proof. `approvedGitSha` is empty, and the signer workflow is not installed, so this branch fails closed. The change is not deployed.
 
 M2.1B QA row-level persistence, exercised by `persistence.pg.cross.test.ts` with two Prisma clients:
 
