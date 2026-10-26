@@ -1,40 +1,59 @@
-import { createHash, sign, verify } from "node:crypto";
+import { createHash, createPublicKey, sign, verify } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const TRUST = Object.freeze({
-  repository: "https://github.com/joefebrian/atlasnow",
   repositoryNwo: "joefebrian/atlasnow",
   repositoryId: "1373362968",
-  issuer: "https://token.actions.githubusercontent.com",
-  workflowPath: ".github/workflows/release-provenance.yml",
-  runnerEnvironment: "github-hosted",
 });
 
-const STATEMENT_TYPE = "application/vnd.in-toto+json";
-const FAILURE = {
-  unpinned: "UNPINNED_SHA",
-  sha: "SHA_MISMATCH",
-  manifest: "MANIFEST_INVALID",
-  missingFolder: "MISSING_FOLDER",
-  checksum: "CHECKSUM_MISMATCH",
-  unapproved: "UNAPPROVED_FOLDER",
-  missingPending: "MISSING_PENDING_FOLDER",
-  pendingApplied: "PENDING_ALREADY_APPLIED",
-  missingHistory: "MISSING_HISTORY",
-  unexpected: "UNEXPECTED_HISTORY",
-  duplicate: "DUPLICATE",
-  incomplete: "INCOMPLETE",
-  missingProvenance: "MISSING_PROVENANCE",
-  untrusted: "UNTRUSTED_PROVENANCE",
-  artifact: "ARTIFACT_MISMATCH",
-  caller: "CALLER_SHA_REJECTED",
-  entrypoint: "ENTRYPOINT_MIGRATES",
-  missingEntrypoint: "MISSING_ENTRYPOINT",
-};
+export const APPROVAL_PURPOSE = "atlasnow-migration-package-approval";
+export const TRUST_FINGERPRINT_FILE = "scripts/release-trust-fingerprint.txt";
+export const STATEMENT_KEYS = Object.freeze([
+  "schemaVersion",
+  "purpose",
+  "repository",
+  "sourceSha",
+  "artifactDigest",
+  "inventoryDigest",
+  "applied",
+  "approvedPending",
+  "imageDigest",
+]);
+
+const SHA40 = /^[0-9a-f]{40}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const NAME = /^[A-Za-z0-9_]+$/;
+const PACKAGE_BLOCKERS = new Set([
+  "UNPINNED_SHA",
+  "SHA_MISMATCH",
+  "MANIFEST_INVALID",
+  "MISSING_FOLDER",
+  "CHECKSUM_MISMATCH",
+  "UNAPPROVED_FOLDER",
+  "MISSING_PENDING_FOLDER",
+  "PENDING_ALREADY_APPLIED",
+  "MISSING_HISTORY",
+  "UNEXPECTED_HISTORY",
+  "DUPLICATE",
+  "INCOMPLETE",
+  "MISSING_APPROVAL",
+  "UNKNOWN_KEY",
+  "FORGED_SIGNATURE",
+  "WRONG_SIGNER",
+  "REPOSITORY_MISMATCH",
+  "INVENTORY_MISMATCH",
+  "STATEMENT_INVALID",
+  "ARTIFACT_MISMATCH",
+  "CALLER_SHA_REJECTED",
+  "ENTRYPOINT_MIGRATES",
+  "MISSING_ENTRYPOINT",
+  "GITHUB_ATTESTATION_UNAVAILABLE",
+  "KEY_FROM_ARTIFACT",
+]);
 
 function fail(failures, code, name, detail) {
   failures.push({ code, name: name ?? "", detail: detail ?? "" });
@@ -52,60 +71,131 @@ function blank(value) {
   return value === null || value === undefined || String(value).trim() === "";
 }
 
-function pae(payloadType, payload) {
-  const type = Buffer.from(payloadType);
-  const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
-  return Buffer.concat([
-    Buffer.from("DSSEv1 "),
-    Buffer.from(String(type.length)),
-    Buffer.from(" "),
-    type,
-    Buffer.from(" "),
-    Buffer.from(String(body.length)),
-    Buffer.from(" "),
-    body,
-  ]);
+function insideRoot(candidate, root) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-export function sealProvenance(privateKey, identity) {
-  const payload = Buffer.from(JSON.stringify(identity));
-  const signature = sign(null, pae(STATEMENT_TYPE, payload), privateKey);
+function nameList(value) {
+  if (!Array.isArray(value)) return null;
+  if (!value.every((name) => typeof name === "string" && NAME.test(name))) return null;
+  if (new Set(value).size !== value.length) return null;
+  const sorted = [...value].sort((left, right) => left.localeCompare(right));
+  if (value.some((name, index) => name !== sorted[index])) return null;
+  return [...value];
+}
+
+function sameNames(left, right) {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+export function fingerprintPublicKey(publicKey) {
+  const key = publicKey && typeof publicKey.export === "function" ? publicKey : createPublicKey(publicKey);
+  const der = key.export({ type: "spki", format: "der" });
+  return sha256Bytes(der);
+}
+
+export function readTrustPin(file) {
+  try {
+    const text = readFileSync(file, "utf8").trim().toLowerCase();
+    if (SHA256_HEX.test(text)) return { pinned: true, fingerprint: text };
+  } catch {
+    return { pinned: false, fingerprint: "" };
+  }
+  return { pinned: false, fingerprint: "" };
+}
+
+export function canonicalApproval(statement) {
+  if (!statement || typeof statement !== "object" || Array.isArray(statement)) {
+    return { ok: false, code: "STATEMENT_INVALID", detail: "object" };
+  }
+  const present = Object.keys(statement);
+  for (const key of present) {
+    if (!STATEMENT_KEYS.includes(key)) return { ok: false, code: "STATEMENT_INVALID", detail: key };
+  }
+  for (const key of STATEMENT_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(statement, key)) {
+      return { ok: false, code: "STATEMENT_INVALID", detail: key };
+    }
+  }
+  if (statement.schemaVersion !== 1) return { ok: false, code: "STATEMENT_INVALID", detail: "schemaVersion" };
+  if (statement.purpose !== APPROVAL_PURPOSE) return { ok: false, code: "STATEMENT_INVALID", detail: "purpose" };
+  if (statement.repository !== TRUST.repositoryNwo) return { ok: false, code: "REPOSITORY_MISMATCH", detail: "repository" };
+  if (!SHA40.test(statement.sourceSha)) return { ok: false, code: "STATEMENT_INVALID", detail: "sourceSha" };
+  if (!SHA256_HEX.test(statement.artifactDigest)) return { ok: false, code: "STATEMENT_INVALID", detail: "artifactDigest" };
+  if (!SHA256_HEX.test(statement.inventoryDigest)) return { ok: false, code: "STATEMENT_INVALID", detail: "inventoryDigest" };
+  const applied = nameList(statement.applied);
+  if (!applied) return { ok: false, code: "STATEMENT_INVALID", detail: "applied" };
+  const approvedPending = nameList(statement.approvedPending);
+  if (!approvedPending) return { ok: false, code: "STATEMENT_INVALID", detail: "approvedPending" };
+  if (applied.some((name) => approvedPending.includes(name))) {
+    return { ok: false, code: "STATEMENT_INVALID", detail: "overlap" };
+  }
+  if (statement.imageDigest !== null && !IMAGE_DIGEST.test(String(statement.imageDigest))) {
+    return { ok: false, code: "STATEMENT_INVALID", detail: "imageDigest" };
+  }
+  const body = {
+    schemaVersion: 1,
+    purpose: APPROVAL_PURPOSE,
+    repository: TRUST.repositoryNwo,
+    sourceSha: statement.sourceSha,
+    artifactDigest: statement.artifactDigest,
+    inventoryDigest: statement.inventoryDigest,
+    applied,
+    approvedPending,
+    imageDigest: statement.imageDigest,
+  };
+  return { ok: true, bytes: Buffer.from(JSON.stringify(body)), statement: body };
+}
+
+export function signApproval(privateKey, statement) {
+  const canonical = canonicalApproval(statement);
+  if (!canonical.ok) {
+    const error = new Error(canonical.code);
+    error.code = canonical.code;
+    throw error;
+  }
   return {
-    payloadType: STATEMENT_TYPE,
-    payload: payload.toString("base64"),
-    signature: signature.toString("base64"),
+    statement: canonical.statement,
+    signature: sign(null, canonical.bytes, privateKey).toString("base64"),
   };
 }
 
-export function openProvenance(publicKey, envelope) {
+function detachedSignature(bytes, signature, publicKey) {
+  if (!publicKey) return { verified: false, code: "UNKNOWN_KEY", detail: "public-key" };
+  const raw = Buffer.from(String(signature ?? ""), "base64");
+  if (!signature || raw.length !== 64) return { verified: false, code: "FORGED_SIGNATURE", detail: "encoding" };
   try {
-    const payload = Buffer.from(String(envelope?.payload ?? ""), "base64");
-    const signature = Buffer.from(String(envelope?.signature ?? ""), "base64");
-    const type = String(envelope?.payloadType ?? "");
-    if (type !== STATEMENT_TYPE) return null;
-    if (!verify(null, pae(type, payload), publicKey, signature)) return null;
-    const identity = JSON.parse(payload.toString("utf8"));
-    return { ...identity, proof: "signed" };
+    if (!verify(null, bytes, publicKey, raw)) return { verified: false, code: "FORGED_SIGNATURE", detail: "verify" };
   } catch {
-    return null;
+    return { verified: false, code: "FORGED_SIGNATURE", detail: "verify" };
   }
+  return { verified: true, code: "", detail: "" };
 }
 
-function signerPrefix() {
-  return `https://github.com/${TRUST.repositoryNwo}/${TRUST.workflowPath}@`;
+export function privateKeyLocation(keyPath, repoRoot) {
+  if (!keyPath) return { ok: false, code: "PRIVATE_KEY_INSIDE_REPO" };
+  const resolved = path.resolve(repoRoot, keyPath);
+  if (insideRoot(resolved, repoRoot)) return { ok: false, code: "PRIVATE_KEY_INSIDE_REPO" };
+  try {
+    if (insideRoot(realpathSync(resolved), repoRoot)) return { ok: false, code: "PRIVATE_KEY_INSIDE_REPO" };
+  } catch {
+    return { ok: true, resolved };
+  }
+  return { ok: true, resolved };
 }
 
-export function identityFieldsTrusted(identity) {
-  if (!identity) return false;
-  const source = String(identity.sourceRepositoryDigest ?? "").toLowerCase();
-  const signerDigest = String(identity.buildSignerDigest ?? "").toLowerCase();
-  return identity.sourceRepositoryURI === TRUST.repository
-    && String(identity.sourceRepositoryIdentifier) === TRUST.repositoryId
-    && identity.issuer === TRUST.issuer
-    && identity.runnerEnvironment === TRUST.runnerEnvironment
-    && String(identity.buildSignerURI ?? "").startsWith(signerPrefix())
-    && signerDigest === source
-    && /^[0-9a-f]{40}$/.test(source);
+export function publicKeyLocation(keyPath, artifactRoot) {
+  if (!keyPath) return { ok: false, code: "UNKNOWN_KEY" };
+  const resolved = path.resolve(keyPath);
+  if (artifactRoot && insideRoot(resolved, artifactRoot)) return { ok: false, code: "KEY_FROM_ARTIFACT" };
+  try {
+    const real = realpathSync(resolved);
+    if (artifactRoot && insideRoot(real, artifactRoot)) return { ok: false, code: "KEY_FROM_ARTIFACT" };
+    return { ok: true, resolved: real };
+  } catch {
+    return { ok: false, code: "UNKNOWN_KEY" };
+  }
 }
 
 function canonicalBody(files) {
@@ -114,6 +204,20 @@ function canonicalBody(files) {
     version: 1,
     files: sorted.map((file) => ({ path: file.path, sha256: file.sha256 })),
   });
+}
+
+export function inventoryCanonical(manifest) {
+  const entries = (value) => [...(value ?? [])]
+    .map((entry) => ({ name: String(entry.name), sha256: String(entry.sha256).toLowerCase() }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return JSON.stringify({
+    applied: entries(manifest.applied),
+    approvedPending: entries(manifest.approvedPending),
+  });
+}
+
+export function inventoryDigest(manifest) {
+  return sha256Bytes(Buffer.from(inventoryCanonical(manifest)));
 }
 
 export function readPackagedArtifact(root) {
@@ -214,36 +318,125 @@ function entrypointMigrates(source) {
   return commands.some((line) => /migrate|prisma/i.test(line)) || !commands.some((line) => line.includes("server.js"));
 }
 
-export function evaluatePreflight({ manifest, packaged, history, identity, attestationProvided, callerSha }) {
+function sortedNames(entries) {
+  return [...entries].map((entry) => entry.name).sort((left, right) => left.localeCompare(right));
+}
+
+function blankReport(artifactDigest) {
+  return {
+    ok: false,
+    releaseDecision: "NO-GO",
+    productionApproval: false,
+    packageGate: false,
+    signatureVerified: false,
+    trustedKey: false,
+    pinMatches: false,
+    imageBinding: "NOT_VERIFIED",
+    appliedMatch: 0,
+    approvedPending: [],
+    unapprovedPending: [],
+    failures: [],
+    sourceDigest: "",
+    artifactDigest,
+    inventoryDigest: "",
+    keyFingerprint: "",
+  };
+}
+
+export function evaluatePreflight({
+  manifest,
+  packaged,
+  history,
+  approval,
+  publicKey,
+  keyRejected,
+  trustedFingerprint,
+  repoPin,
+  checkoutSha,
+  callerSha,
+  attestationProvided,
+  claimedImageDigest,
+}) {
   const failures = [];
-  const applied = Array.isArray(manifest.applied) ? manifest.applied : [];
-  const approvedPending = Array.isArray(manifest.approvedPending) ? manifest.approvedPending : [];
+  const applied = Array.isArray(manifest?.applied) ? manifest.applied : [];
+  const approvedPending = Array.isArray(manifest?.approvedPending) ? manifest.approvedPending : [];
   const names = new Set();
   for (const entry of applied) {
-    if (!entry?.name || !entry?.sha256 || names.has(entry.name)) fail(failures, FAILURE.manifest, entry?.name ?? "", "applied");
+    if (!entry?.name || !entry?.sha256 || names.has(entry.name)) fail(failures, "MANIFEST_INVALID", entry?.name ?? "", "applied");
     names.add(entry.name);
   }
   for (const entry of approvedPending) {
-    if (!entry?.name || !entry?.sha256 || names.has(entry.name)) fail(failures, FAILURE.manifest, entry?.name ?? "", "approvedPending");
+    if (!entry?.name || !entry?.sha256 || names.has(entry.name)) fail(failures, "MANIFEST_INVALID", entry?.name ?? "", "approvedPending");
     names.add(entry.name);
   }
 
-  const proof = identity?.proof;
-  const signed = proof === "signed" || proof === "github-attestation";
-  if (!attestationProvided) fail(failures, FAILURE.missingProvenance, "", "");
-  else if (!identity || !signed) fail(failures, FAILURE.untrusted, "", "proof");
-  else if (!identityFieldsTrusted(identity)) fail(failures, FAILURE.untrusted, "", "identity");
-  else if (String(identity.artifactDigest ?? "").toLowerCase() !== packaged.digest) fail(failures, FAILURE.artifact, "", "digest");
+  if (attestationProvided) fail(failures, "GITHUB_ATTESTATION_UNAVAILABLE", "", "user-owned private repository");
+  if (keyRejected) fail(failures, keyRejected, "", "public-key");
 
-  const source = String(identity?.sourceRepositoryDigest ?? "").toLowerCase();
-  if (blank(manifest.approvedGitSha)) fail(failures, FAILURE.unpinned, "", "approvedGitSha");
-  else if (!signed || source !== String(manifest.approvedGitSha).toLowerCase()) fail(failures, FAILURE.sha, "", "certificate");
-  if (!blank(callerSha) && (!signed || String(callerSha).toLowerCase() !== source)) {
-    fail(failures, FAILURE.caller, "", "caller");
+  let statement = null;
+  let signatureVerified = false;
+  let keyFingerprint = "";
+  if (!approval) {
+    fail(failures, "MISSING_APPROVAL", "", "");
+  } else if (approval.publicKey || approval.statement?.publicKey) {
+    fail(failures, "STATEMENT_INVALID", "", "publicKey");
+  } else {
+    const canonical = canonicalApproval(approval.statement);
+    if (!canonical.ok) fail(failures, canonical.code, "", canonical.detail);
+    else {
+      statement = canonical.statement;
+      const verdict = detachedSignature(canonical.bytes, approval.signature, keyRejected ? null : publicKey);
+      signatureVerified = verdict.verified;
+      if (!verdict.verified) fail(failures, verdict.code, "", verdict.detail);
+      if (publicKey && !keyRejected) {
+        try {
+          keyFingerprint = fingerprintPublicKey(publicKey);
+        } catch {
+          keyFingerprint = "";
+          fail(failures, "UNKNOWN_KEY", "", "public-key");
+        }
+      }
+    }
   }
 
-  if (!packaged.entrypointPresent) fail(failures, FAILURE.missingEntrypoint, "docker-entrypoint.sh", "");
-  else if (entrypointMigrates(packaged.entrypointSource)) fail(failures, FAILURE.entrypoint, "docker-entrypoint.sh", "");
+  const trusted = String(trustedFingerprint ?? "").toLowerCase();
+  const trustedKey = signatureVerified && SHA256_HEX.test(trusted) && trusted === keyFingerprint;
+  if (signatureVerified && !trustedKey) {
+    fail(failures, SHA256_HEX.test(trusted) ? "WRONG_SIGNER" : "UNKNOWN_KEY", "", "fingerprint");
+  }
+  const pin = String(repoPin ?? "").toLowerCase();
+  const pinMatches = trustedKey && SHA256_HEX.test(pin) && pin === keyFingerprint;
+  if (!pinMatches) fail(failures, "PRODUCTION_UNAPPROVED", "", "trust-pin");
+
+  const checkout = String(checkoutSha ?? "").toLowerCase();
+  if (blank(manifest?.approvedGitSha)) fail(failures, "UNPINNED_SHA", "", "approvedGitSha");
+  else if (String(manifest.approvedGitSha).toLowerCase() !== checkout) fail(failures, "SHA_MISMATCH", "", "manifest");
+  if (!SHA40.test(checkout)) fail(failures, "SHA_MISMATCH", "", "checkout");
+  else if (statement && statement.sourceSha !== checkout) fail(failures, "SHA_MISMATCH", "", "statement");
+  if (!blank(callerSha) && String(callerSha).toLowerCase() !== checkout) fail(failures, "CALLER_SHA_REJECTED", "", "caller");
+
+  const computedInventory = manifest ? inventoryDigest(manifest) : "";
+  if (statement) {
+    const appliedNames = sortedNames(applied);
+    const pendingNames = sortedNames(approvedPending);
+    if (statement.inventoryDigest !== computedInventory || !sameNames(statement.applied, appliedNames) || !sameNames(statement.approvedPending, pendingNames)) {
+      fail(failures, "INVENTORY_MISMATCH", "", "inventory");
+    }
+    if (statement.artifactDigest !== packaged.digest) fail(failures, "ARTIFACT_MISMATCH", "", "digest");
+  }
+
+  const claimed = String(claimedImageDigest ?? "");
+  let imageBinding = "NOT_VERIFIED";
+  if (statement && statement.imageDigest && claimed && statement.imageDigest !== claimed) {
+    imageBinding = "IMAGE_MISMATCH";
+    fail(failures, "IMAGE_MISMATCH", "", "image");
+  } else {
+    const detail = statement?.imageDigest && claimed && statement.imageDigest === claimed ? "match-is-not-extract" : "";
+    fail(failures, "IMAGE_UNVERIFIED", "", detail);
+  }
+
+  if (!packaged.entrypointPresent) fail(failures, "MISSING_ENTRYPOINT", "docker-entrypoint.sh", "");
+  else if (entrypointMigrates(packaged.entrypointSource)) fail(failures, "ENTRYPOINT_MIGRATES", "docker-entrypoint.sh", "");
 
   const folders = packaged.folders ?? [];
   const onDisk = new Map(folders.map((folder) => [folder.name, folder]));
@@ -254,105 +447,71 @@ export function evaluatePreflight({ manifest, packaged, history, identity, attes
   for (const entry of applied) {
     const folder = onDisk.get(entry.name);
     if (!folder || !folder.sha256) {
-      fail(failures, FAILURE.missingFolder, entry.name, "");
+      fail(failures, "MISSING_FOLDER", entry.name, "");
       continue;
     }
-    if (folder.sha256 !== entry.sha256.toLowerCase()) fail(failures, FAILURE.checksum, entry.name, "folder");
+    if (folder.sha256 !== entry.sha256.toLowerCase()) fail(failures, "CHECKSUM_MISMATCH", entry.name, "folder");
     else appliedMatch += 1;
   }
   for (const entry of approvedPending) {
     const folder = onDisk.get(entry.name);
     if (!folder || !folder.sha256) {
-      fail(failures, FAILURE.missingPending, entry.name, "");
+      fail(failures, "MISSING_PENDING_FOLDER", entry.name, "");
       continue;
     }
-    if (folder.sha256 !== entry.sha256.toLowerCase()) fail(failures, FAILURE.checksum, entry.name, "pending-folder");
+    if (folder.sha256 !== entry.sha256.toLowerCase()) fail(failures, "CHECKSUM_MISMATCH", entry.name, "pending-folder");
     else approvedPendingFound.push(entry.name);
   }
   const unapprovedPending = [];
   for (const folder of folders) {
     if (appliedNames.has(folder.name) || pendingNames.has(folder.name)) continue;
     unapprovedPending.push(folder.name);
-    fail(failures, FAILURE.unapproved, folder.name, folder.sha256 ? "pending" : "no migration.sql");
+    fail(failures, "UNAPPROVED_FOLDER", folder.name, folder.sha256 ? "pending" : "no migration.sql");
   }
 
-  const rows = asRows(history);
+  const rows = asRows(history ?? []);
   const seen = new Set();
   const historyNames = new Set();
   for (const row of rows) {
-    if (seen.has(row.migration_name)) fail(failures, FAILURE.duplicate, row.migration_name, "");
+    if (seen.has(row.migration_name)) fail(failures, "DUPLICATE", row.migration_name, "");
     seen.add(row.migration_name);
     historyNames.add(row.migration_name);
     const steps = Number(row.applied_steps_count);
     if (blank(row.started_at) || blank(row.finished_at) || !blank(row.rolled_back_at) || steps !== 1) {
-      fail(failures, FAILURE.incomplete, row.migration_name, "");
+      fail(failures, "INCOMPLETE", row.migration_name, "");
     }
-    if (pendingNames.has(row.migration_name)) fail(failures, FAILURE.pendingApplied, row.migration_name, "");
-    else if (!appliedNames.has(row.migration_name)) fail(failures, FAILURE.unexpected, row.migration_name, "");
+    if (pendingNames.has(row.migration_name)) fail(failures, "PENDING_ALREADY_APPLIED", row.migration_name, "");
+    else if (!appliedNames.has(row.migration_name)) fail(failures, "UNEXPECTED_HISTORY", row.migration_name, "");
     else {
       const expected = applied.find((entry) => entry.name === row.migration_name);
-      if (expected && row.checksum !== expected.sha256.toLowerCase()) fail(failures, FAILURE.checksum, row.migration_name, "history");
+      if (expected && row.checksum !== expected.sha256.toLowerCase()) fail(failures, "CHECKSUM_MISMATCH", row.migration_name, "history");
     }
   }
   for (const entry of applied) {
-    if (!historyNames.has(entry.name)) fail(failures, FAILURE.missingHistory, entry.name, "");
+    if (!historyNames.has(entry.name)) fail(failures, "MISSING_HISTORY", entry.name, "");
   }
 
+  const packageGate = !failures.some((failure) => PACKAGE_BLOCKERS.has(failure.code));
+  const productionApproval = pinMatches && packageGate && imageBinding === "VERIFIED";
+  const releaseDecision = productionApproval ? "GO" : "NO-GO";
   return {
-    ok: failures.length === 0,
+    ok: releaseDecision === "GO",
+    releaseDecision,
+    productionApproval,
+    packageGate,
+    signatureVerified,
+    trustedKey,
+    pinMatches,
+    imageBinding,
     appliedMatch,
     approvedPending: approvedPendingFound,
     unapprovedPending,
     failures,
-    sourceDigest: signed ? source : "",
+    sourceDigest: trustedKey && statement ? statement.sourceSha : "",
     artifactDigest: packaged.digest,
+    inventoryDigest: computedInventory,
+    keyFingerprint,
   };
-}
-
-function pickCertificate(certificate, key) {
-  return certificate?.[key] ?? certificate?.extensions?.[key] ?? "";
-}
-
-export function identityFromGitHubVerification(parsed, artifactDigest) {
-  const row = Array.isArray(parsed) ? parsed[0] : null;
-  const verification = row?.verificationResult ?? null;
-  const certificate = verification?.signature?.certificate;
-  const subject = verification?.statement?.subject?.find((item) => item?.digest?.sha256);
-  const stated = String(subject?.digest?.sha256 ?? "").toLowerCase();
-  if (!certificate || !stated || stated !== artifactDigest) return null;
-  return {
-    proof: "github-attestation",
-    sourceRepositoryDigest: String(pickCertificate(certificate, "sourceRepositoryDigest")).toLowerCase(),
-    sourceRepositoryURI: pickCertificate(certificate, "sourceRepositoryURI"),
-    sourceRepositoryIdentifier: String(pickCertificate(certificate, "sourceRepositoryIdentifier")),
-    issuer: pickCertificate(certificate, "issuer"),
-    buildSignerURI: pickCertificate(certificate, "buildSignerURI"),
-    buildSignerDigest: String(pickCertificate(certificate, "buildSignerDigest")).toLowerCase(),
-    runnerEnvironment: pickCertificate(certificate, "runnerEnvironment"),
-    artifactDigest: stated,
-  };
-}
-
-export function verifyGitHubAttestation({ artifactFile, bundlePath }) {
-  const artifactDigest = sha256File(artifactFile);
-  const result = spawnSync("gh", [
-    "attestation", "verify", artifactFile,
-    "--bundle", bundlePath,
-    "--repo", TRUST.repositoryNwo,
-    "--signer-workflow", `${TRUST.repositoryNwo}/${TRUST.workflowPath}`,
-    "--cert-oidc-issuer", TRUST.issuer,
-    "--deny-self-hosted-runners",
-    "--format", "json",
-  ], { encoding: "utf8", timeout: 20000 });
-  if (result.status !== 0) return null;
-  try {
-    const text = result.stdout.trim();
-    const start = text.indexOf("[");
-    if (start < 0) return null;
-    return identityFromGitHubVerification(JSON.parse(text.slice(start)), artifactDigest);
-  } catch {
-    return null;
-  }
 }
 
 function arg(argv, name) {
@@ -361,25 +520,56 @@ function arg(argv, name) {
   return argv[index + 1];
 }
 
-export function runPreflight(argv) {
+function gitHead(repoRoot) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
+  if (result.status !== 0) return "";
+  return result.stdout.trim().toLowerCase();
+}
+
+export function runPreflight(argv, repoRoot = process.cwd()) {
+  if (arg(argv, "--attestation")) {
+    const report = blankReport("");
+    report.failures = [{ code: "GITHUB_ATTESTATION_UNAVAILABLE", name: "", detail: "user-owned private repository" }];
+    return report;
+  }
   const manifest = JSON.parse(readFileSync(arg(argv, "--manifest"), "utf8"));
   const history = parseHistory(readFileSync(arg(argv, "--history"), "utf8"));
-  const packaged = readPackagedArtifact(arg(argv, "--artifact"));
-  const bundle = arg(argv, "--attestation");
-  const attestationProvided = bundle.length > 0;
-  let identity = null;
-  if (attestationProvided) {
-    const file = path.join(tmpdir(), `atlasnow-artifact-${packaged.digest}.json`);
-    writeFileSync(file, packaged.body);
-    identity = verifyGitHubAttestation({ artifactFile: file, bundlePath: bundle });
+  const artifactDir = arg(argv, "--artifact");
+  const packaged = readPackagedArtifact(artifactDir);
+  const approvalPath = arg(argv, "--approval");
+  let approval = null;
+  if (approvalPath) approval = JSON.parse(readFileSync(approvalPath, "utf8"));
+  const keyPath = arg(argv, "--public-key");
+  let publicKey = null;
+  let keyRejected = "";
+  if (keyPath) {
+    const location = publicKeyLocation(keyPath, artifactDir);
+    if (!location.ok) keyRejected = location.code;
+    else {
+      try {
+        publicKey = createPublicKey(readFileSync(location.resolved));
+      } catch {
+        keyRejected = "UNKNOWN_KEY";
+      }
+    }
   }
+  const trustArg = arg(argv, "--trust-fingerprint");
+  const trustFile = trustArg || path.join(repoRoot, TRUST_FINGERPRINT_FILE);
+  const trusted = readTrustPin(trustFile);
+  const pinned = readTrustPin(path.join(repoRoot, TRUST_FINGERPRINT_FILE));
   return evaluatePreflight({
     manifest,
     packaged,
     history,
-    identity,
-    attestationProvided,
+    approval,
+    publicKey,
+    keyRejected,
+    trustedFingerprint: trusted.fingerprint,
+    repoPin: pinned.fingerprint,
+    checkoutSha: gitHead(repoRoot),
     callerSha: arg(argv, "--git-sha"),
+    attestationProvided: false,
+    claimedImageDigest: arg(argv, "--image-digest"),
   });
 }
 

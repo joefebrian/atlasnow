@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — M2.4 uses an operator signature
+
+GitHub Actions run `40359014239` staged the migration package for `ece77bf5079cc210fbfa8fba98de0eff264c9d84` and then refused to persist an attestation on this user-owned private repository. The preflight no longer calls `gh attestation`. The founder can sign a detached Ed25519 statement that binds the repository, source SHA, package digest, inventory digest, applied set, and approved pending set. The public fingerprint is pinned outside the artifact. `scripts/release-trust-fingerprint.txt` is `UNPINNED`. Fixture keys are not a production approval. Image binding stays NOT VERIFIED. `approvedGitSha` stays null. Staging and production stay NO-GO.
+
 ## 2026-10-26 — M2.4 attestation stays manual and unissued
 
 The signer workflow runs only by `workflow_dispatch` after the operator types the selected commit SHA. It does not run on pull requests. The session token cannot write `.github/workflows`. No GitHub attestation was issued. A migration-package digest is not a Docker image digest. `approvedGitSha` stays null. Staging and production stay NO-GO.
