@@ -74,6 +74,7 @@ M2.1B QA row-level persistence, exercised by `persistence.pg.cross.test.ts` with
 - A payment event commits the ledger, its dedupe row, and the transaction payment cache in one transaction. A failure flushes nothing. A second live capture stores no ledger event. Refund and chargeback do not change the booking
 - Two workers on one attempt store one capture amount. Two workers on one webhook store one row. A rejected webhook is not marked applied. Tenant A and Tenant B can write at the same time
 - A payment write finishes while another session holds the former `pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))`
+- A new provider connection inserted inside `runAtomic` rolls back when that callback returns `{ ok: false }` or throws. The caller still receives the same `PortResult`. A callback that returns `{ ok: true }` commits the connection. Diff inserts in `flushFinanceDiff` run only after that success check. Claim SQL runs in its own transaction, not inside the nested row scope
 
 M2.1A QA booking persistence, exercised by `persistence.pg.workers.test.ts` with two Prisma clients on one disposable database:
 

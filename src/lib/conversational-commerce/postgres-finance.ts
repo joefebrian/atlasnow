@@ -3,7 +3,7 @@
  * The memory store decides each transition. This file locks that operation's rows
  * and flushes the diff. Lock order is connection, credential, transaction,
  * attempt, ledger, payment event, external ref, webhook, touchpoint, aggregate, policy.
- * A failure does not flush. A thrown write rolls the transaction back.
+ * A returned failure or a thrown write rolls the transaction back, including a direct SQL insert.
  * Provider calls and payment trust stay outside this file.
  */
 import { Prisma, PrismaClient } from "@prisma/client";

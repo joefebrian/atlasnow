@@ -3,6 +3,7 @@
  * The in-memory store still decides the transition. This file locks the rows
  * for that operation, runs the existing memory method, and writes the diff.
  * Provider calls stay outside the transaction. There is no global advisory lock.
+ * A returned failure throws inside the transaction so Prisma rolls back direct SQL writes.
  * Payment, webhook, attribution, policy, and credential diffs register through addDiffFlusher.
  */
 
@@ -56,6 +57,16 @@ export class RowVersionConflict extends Error {
   constructor() {
     super("VERSION_CONFLICT");
     this.name = "RowVersionConflict";
+  }
+}
+
+/** A returned failure must abort the open transaction. Prisma commits a callback that returns. */
+class RolledBackResult extends Error {
+  readonly failure: PortFailure;
+  constructor(failure: PortFailure) {
+    super("ROLLED_BACK_RESULT");
+    this.name = "RolledBackResult";
+    this.failure = failure;
   }
 }
 
@@ -850,10 +861,12 @@ export async function runScoped<T>(
         await load(scope, true);
         return settle(work(scope.mem));
       });
-      if (result.ok) await flushBookingDiff(tx, scope.baseline, snapshotOf(scope.mem));
+      if (!result.ok) throw new RolledBackResult(result);
+      await flushBookingDiff(tx, scope.baseline, snapshotOf(scope.mem));
       return result;
     });
   } catch (error) {
+    if (error instanceof RolledBackResult) return error.failure;
     const mapped = mapDbError(error);
     if (mapped) return mapped;
     throw error;
@@ -989,10 +1002,12 @@ export function bindRowPersistence(
         return await deps.begin(async (tx) => {
           const scope = newScope(tx, deps.policyValidatorKey);
           const result = await commerceLive.run(scope, async () => settle(work(ports)));
-          if (result.ok) await flushBookingDiff(tx, scope.baseline, snapshotOf(scope.mem));
+          if (!result.ok) throw new RolledBackResult(result);
+          await flushBookingDiff(tx, scope.baseline, snapshotOf(scope.mem));
           return result;
         });
       } catch (error) {
+        if (error instanceof RolledBackResult) return error.failure;
         const mapped = mapDbError(error);
         if (mapped) return mapped;
         throw error;
