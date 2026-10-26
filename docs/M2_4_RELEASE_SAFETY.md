@@ -68,7 +68,13 @@ Pinned build identity:
 
 Missing, unverifiable, or mismatched provenance fails closed. A successful GitHub Actions conclusion is not an input and is not a deployment approval.
 
-`scripts/release-provenance.workflow.yml` is the workflow text. It is not installed under `.github/workflows/`, because this credential cannot update workflow files. Until that file is installed and GitHub signs an attestation, the operator command has no bundle it can accept. Local Ed25519 fixtures exercise the same binding rules and are rejected by the operator command.
+`scripts/release-provenance.workflow.yml` is the workflow text. It runs only by `workflow_dispatch`, and only when the typed SHA equals the selected run commit. It does not run on pull requests. It is not installed under `.github/workflows/`. The session token has scopes `gist`, `read:org`, and `repo`, and no `workflow` scope. Until that file is installed and GitHub signs an attestation, the operator command has no bundle it can accept. Local Ed25519 fixtures exercise the same binding rules and are rejected by the operator command.
+
+## Package and image
+
+The attestation subject is `atlasnow-migration-artifact.json`. That file lists the packaged entrypoint and the migration SQL bytes. A signature over that file is migration-package provenance. It is not proof of a Docker image digest, image config, or the rest of the filesystem.
+
+The minimum later check, after an image exists and before any registry push, is to copy `/docker-entrypoint.sh` and `/app/prisma/migrations` out of that image, recompute the canonical digest, and require it to equal the attested package digest. A second attestation would have to name the image manifest digest as its own subject. Neither check has a signed GitHub bundle yet. `.dockerignore` excludes the three tracked pending folders from the build context. An image that still contains one of them fails preflight.
 
 ## Preflight
 
@@ -82,7 +88,7 @@ It fails closed when provenance is missing or untrusted, the certificate reposit
 
 ## Future migration artifact
 
-1. Install `scripts/release-provenance.workflow.yml` at `.github/workflows/release-provenance.yml` with a credential that has the workflow scope.
+1. Install `scripts/release-provenance.workflow.yml` at `.github/workflows/release-provenance.yml` from the GitHub website. Do not merge this pull request to do it. The Actions button lists the workflow only after the file also exists on the default branch.
 2. Build the artifact with `node scripts/release-artifact.mjs --manifest <file> --source prisma/migrations --entrypoint deploy/docker-entrypoint.sh --out <dir>`. The command copies `applied` and `approvedPending` only.
 3. Let that workflow attest `atlasnow-migration-artifact.json`. The attested digest is the immutable artifact digest.
 4. Record `approvedGitSha` in a later approval manifest as the certificate commit of that artifact. The attested commit does not need to contain its own SHA.

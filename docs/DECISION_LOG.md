@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — M2.4 attestation stays manual and unissued
+
+The signer workflow runs only by `workflow_dispatch` after the operator types the selected commit SHA. It does not run on pull requests. The session token cannot write `.github/workflows`. No GitHub attestation was issued. A migration-package digest is not a Docker image digest. `approvedGitSha` stays null. Staging and production stay NO-GO.
+
 ## 2026-10-26 — M2.4 provenance does not trust a caller SHA
 
 The operator preflight reads the source commit from a GitHub artifact attestation certificate (`sourceRepositoryDigest`) and binds it to the SHA-256 of the packaged migration files and `docker-entrypoint.sh`. `--git-sha` is not proof. The signer workflow text is `scripts/release-provenance.workflow.yml`. It is not installed, and this credential cannot update `.github/workflows`. No attestation has been issued. `approvedGitSha` stays null. The three pending folders stay out of the release artifact and out of the Docker build context. Staging and production stay NO-GO.

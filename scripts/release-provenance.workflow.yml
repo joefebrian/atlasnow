@@ -1,12 +1,17 @@
-# Install this file at .github/workflows/release-provenance.yml with a token
-# that has the workflow scope. A copy outside that directory does not run and
-# does not create an attestation. A green run of this workflow is not a
-# production deployment approval.
+# Install this file at .github/workflows/release-provenance.yml from the
+# GitHub website while signed in as an account that can edit workflow files.
+# This OAuth token cannot. A copy outside that directory does not run.
+# A green run is not a deployment approval and does not set approvedGitSha.
+# The subject is the migration package only. It is not a Docker image digest.
 name: release-provenance
 
 on:
-  pull_request:
   workflow_dispatch:
+    inputs:
+      confirm_sha:
+        description: Full source SHA to attest. It must equal the commit selected for this run.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -17,7 +22,19 @@ jobs:
   migration-artifact:
     runs-on: ubuntu-latest
     steps:
+      - name: Require the typed SHA to be this run
+        env:
+          CONFIRM_SHA: ${{ inputs.confirm_sha }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$CONFIRM_SHA" != "$RUN_SHA" ]; then
+            echo "confirm_sha does not match the selected run commit"
+            exit 1
+          fi
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

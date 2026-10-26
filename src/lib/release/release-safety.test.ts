@@ -309,8 +309,12 @@ describe("release safety", () => {
     const workflow = readFileSync(path.join(repo, "scripts/release-provenance.workflow.yml"), "utf8");
     assert.equal(workflow.includes("migrate deploy"), false);
     assert.equal(workflow.includes("db push"), false);
+    assert.equal(workflow.includes("pull_request"), false);
+    assert.match(workflow, /workflow_dispatch:/);
+    assert.match(workflow, /confirm_sha/);
     assert.match(workflow, /actions\/attest-build-provenance@v2/);
     assert.match(workflow, /This job is not a deployment/);
+    assert.match(workflow, /not a Docker image digest/);
   });
 
   it("does not call prisma from the preflight program", () => {
