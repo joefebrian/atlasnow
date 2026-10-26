@@ -1,9 +1,9 @@
 /**
- * Row-level booking and idempotency writes for the disposable QA database.
- * The in-memory store still decides the transition. This file only locks the
- * rows for that operation, runs the existing memory method, and writes the diff.
+ * Row-level conversational writes for the disposable QA database.
+ * The in-memory store still decides the transition. This file locks the rows
+ * for that operation, runs the existing memory method, and writes the diff.
  * Provider calls stay outside the transaction. There is no global advisory lock.
- * Payment, webhook, and attribution snapshots stay in postgres-store.ts and are not production ready.
+ * Payment, webhook, attribution, policy, and credential diffs register through addDiffFlusher.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -40,7 +40,7 @@ import type {
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-type RowScope = {
+export type RowScope = {
   mode: "rows";
   tx: Db;
   mem: CommercePersistence;
@@ -95,9 +95,7 @@ export function mapDbError(error: unknown): PortFailure | null {
   }
   if (message.includes("CcPaymentLedger_one_live_capture")) return fail("ATTEMPT_CONFLICT", "This transaction already has a live capture.");
   if (message.includes("CcProviderCredential_one_active")) return fail("DUPLICATE", "Rotate the active credential instead of registering a second one.");
-  if (message.includes("CcProviderConnection_scope") || message.includes("CcProviderConnection")) {
-    return fail("DUPLICATE", "This connection is already registered.");
-  }
+  if (message.includes("CcProviderConnection_scope")) return fail("DUPLICATE", "This connection is already registered.");
   if (message.includes("violates foreign key") || message.includes("Foreign key constraint")) {
     return fail("INVALID", "A referenced tenant, location, or transaction was rejected.");
   }
@@ -129,8 +127,18 @@ function absorb(scope: RowScope, partial: Partial<PersistenceSnapshot>): void {
   if (partial.connections) filled.connections = partial.connections;
   if (partial.credentials) filled.credentials = partial.credentials;
   if (partial.policyEvidence) filled.policyEvidence = partial.policyEvidence;
+  if (partial.attempts) filled.attempts = partial.attempts;
+  if (partial.ledgers) filled.ledgers = partial.ledgers;
+  if (partial.ledgerEvents) filled.ledgerEvents = partial.ledgerEvents;
+  if (partial.webhooks) filled.webhooks = partial.webhooks;
+  if (partial.touchpoints) filled.touchpoints = partial.touchpoints;
+  if (partial.aggregates) filled.aggregates = partial.aggregates;
   absorbMissingRows(scope.mem, filled);
   mergeMissingRows(scope.baseline, filled);
+}
+
+export function absorbRows(scope: RowScope, partial: Partial<PersistenceSnapshot>): void {
+  absorb(scope, partial);
 }
 
 function toTransaction(row: {
@@ -787,9 +795,22 @@ async function flushBookingDiff(tx: Db, before: PersistenceSnapshot, after: Pers
     });
     await updateCounted(updated.count);
   }
+  for (const flush of diffFlushers) await flush(tx, before, after);
 }
 
-type Begin = <T>(advisory: boolean, work: (tx: Db) => Promise<T>) => Promise<T>;
+const diffFlushers: Array<(tx: Db, before: PersistenceSnapshot, after: PersistenceSnapshot) => Promise<void>> = [];
+
+export function addDiffFlusher(flush: (tx: Db, before: PersistenceSnapshot, after: PersistenceSnapshot) => Promise<void>): void {
+  diffFlushers.push(flush);
+}
+
+export type Begin = <T>(work: (tx: Db) => Promise<T>) => Promise<T>;
+
+export type RowDeps = {
+  client: PrismaClient;
+  policyValidatorKey: string;
+  begin: Begin;
+};
 
 function newScope(tx: Db, policyValidatorKey: string): RowScope {
   return {
@@ -805,6 +826,40 @@ async function settle<T>(value: MaybeAsync<PortResult<T>>): Promise<PortResult<T
   return await Promise.resolve(value);
 }
 
+export async function runScoped<T>(
+  deps: RowDeps,
+  kind: "read" | "write",
+  load: (scope: RowScope, lock: boolean) => Promise<void>,
+  work: (mem: CommercePersistence) => MaybeAsync<PortResult<T>>,
+): Promise<PortResult<T>> {
+  const live = commerceLive.getStore();
+  if (live?.mode === "snapshot") return settle(work(live.mem));
+  if (live?.mode === "rows") {
+    await load(live, true);
+    return settle(work(live.mem));
+  }
+  if (kind === "read") {
+    const scope = newScope(deps.client, deps.policyValidatorKey);
+    await load(scope, false);
+    return settle(work(scope.mem));
+  }
+  try {
+    return await deps.begin(async (tx) => {
+      const scope = newScope(tx, deps.policyValidatorKey);
+      const result = await commerceLive.run(scope, async () => {
+        await load(scope, true);
+        return settle(work(scope.mem));
+      });
+      if (result.ok) await flushBookingDiff(tx, scope.baseline, snapshotOf(scope.mem));
+      return result;
+    });
+  } catch (error) {
+    const mapped = mapDbError(error);
+    if (mapped) return mapped;
+    throw error;
+  }
+}
+
 export function bindRowPersistence(
   ports: CommercePersistence,
   deps: {
@@ -815,38 +870,11 @@ export function bindRowPersistence(
     assertOutside: () => Promise<void>;
   },
 ): void {
-  async function withRows<T>(
+  const withRows = <T>(
     kind: "read" | "write",
     load: (scope: RowScope, lock: boolean) => Promise<void>,
     work: (mem: CommercePersistence) => MaybeAsync<PortResult<T>>,
-  ): Promise<PortResult<T>> {
-    const live = commerceLive.getStore();
-    if (live?.mode === "snapshot") return settle(work(live.mem));
-    if (live?.mode === "rows") {
-      await load(live, true);
-      return settle(work(live.mem));
-    }
-    if (kind === "read") {
-      const scope = newScope(deps.client, deps.policyValidatorKey);
-      await load(scope, false);
-      return settle(work(scope.mem));
-    }
-    try {
-      return await deps.begin(false, async (tx) => {
-        const scope = newScope(tx, deps.policyValidatorKey);
-        const result = await commerceLive.run(scope, async () => {
-          await load(scope, true);
-          return settle(work(scope.mem));
-        });
-        if (result.ok) await flushBookingDiff(tx, scope.baseline, snapshotOf(scope.mem));
-        return result;
-      });
-    } catch (error) {
-      const mapped = mapDbError(error);
-      if (mapped) return mapped;
-      throw error;
-    }
-  }
+  ) => runScoped(deps, kind, load, work);
 
   ports.bookings = {
     read: (actor, tenantId, bookingRef) => withRows("read", (scope, lock) => loadBooking(scope, tenantId, bookingRef, lock), (mem) => mem.bookings.read(actor, tenantId, bookingRef)),
@@ -958,7 +986,7 @@ export function bindRowPersistence(
     if (live?.mode === "rows") return work(ports);
     return (async () => {
       try {
-        return await deps.begin(false, async (tx) => {
+        return await deps.begin(async (tx) => {
           const scope = newScope(tx, deps.policyValidatorKey);
           const result = await commerceLive.run(scope, async () => settle(work(ports)));
           if (result.ok) await flushBookingDiff(tx, scope.baseline, snapshotOf(scope.mem));
@@ -1003,7 +1031,7 @@ async function claimIdempotency(
     return fail("INVALID", "A claim needs a key, a hash, a transaction id, an offering, and a start time.");
   }
   try {
-    return await deps.begin(false, async (tx) => {
+    return await deps.begin(async (tx) => {
       await tx.$executeRaw`
         INSERT INTO "CcTransaction" (
           "tenantId", "transactionRef", "locationId", "intentRef", "providerId", "state",
@@ -1156,7 +1184,7 @@ async function registerConnection(
   };
   if (live?.mode === "rows") return run(live.tx);
   try {
-    return await deps.begin(false, run);
+    return await deps.begin(run);
   } catch (error) {
     if (isUnique(error)) {
       const replayed = await replayRegister(deps.client, actor, input);

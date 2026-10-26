@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — Conversational M2.1B removes the QA snapshot rewrite
+
+Payment, webhook, attribution, policy, and credential writes use the same row diff as bookings. `writeSnapshot()` and `pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))` are gone from the adapter. A failed financial result does not flush. The in-memory transitions stay the source of the business rules. The adapter is still QA-only: disposable `atlasnow_cc_qa_*` databases, no HTTP webhook, no gateway, no production migration. Row locks do not make an external provider call exactly once. AtlasNow is not the merchant of record.
+
 ## 2026-10-26 — Conversational M2.1A booking writes are row-level and QA-only
 
 Booking and idempotency writes lock the rows for that operation and apply the existing in-memory transitions. They do not take `pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))` and they do not delete and reinsert the `Cc*` tables. Claim stays `INSERT ... ON CONFLICT` plus `SELECT ... FOR UPDATE`. Payment, webhook, attribution, credential, and policy writes still use the QA snapshot rewrite. That path is not production ready and can overwrite a concurrent booking row. M2.1B has to replace it before the adapter is called production-grade. No production migration.

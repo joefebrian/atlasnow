@@ -68,6 +68,13 @@ M1C.2, in unit tests only:
 - `readBooking`, `openPaymentAttempt`, `recordPayment`, and `cancelReservation` match the actor's tenant and the reference before location authorization. Two tenants can share one internal reference string. A foreign-only reference returns `CROSS_TENANT` and does not include the other tenant's record. A wrong outlet is still `LOCATION_FORBIDDEN`
 - The read-only snapshot maps still key bookings and transactions by reference alone. Those maps are not the lookup used by the four operations above. A SQL adapter must not copy that keying
 
+M2.1B QA row-level persistence, exercised by `persistence.pg.cross.test.ts` with two Prisma clients:
+
+- Payment attempts, ledger rows, payment events, webhooks, attribution, policy evidence, and credential references update only the rows for that operation. The memory transition still decides the outcome. `writeSnapshot()` is gone. The global QA advisory lock is gone
+- A payment event commits the ledger, its dedupe row, and the transaction payment cache in one transaction. A failure flushes nothing. A second live capture stores no ledger event. Refund and chargeback do not change the booking
+- Two workers on one attempt store one capture amount. Two workers on one webhook store one row. A rejected webhook is not marked applied. Tenant A and Tenant B can write at the same time
+- A payment write finishes while another session holds the former `pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))`
+
 M2.1A QA booking persistence, exercised by `persistence.pg.workers.test.ts` with two Prisma clients on one disposable database:
 
 - Booking, idempotency, intent, event, transaction compare-and-swap, and connection registration update only the rows for that operation. `Read Committed`. `SELECT ... FOR UPDATE` on the rows the memory transition will change. `INSERT ... ON CONFLICT` for the first claim. A version mismatch or a lost row lock returns `VERSION_CONFLICT` and rolls back
@@ -75,17 +82,16 @@ M2.1A QA booking persistence, exercised by `persistence.pg.workers.test.ts` with
 - Two workers on one key produce one booking and one provider call. An authoritative absence retry is consumed by one worker. A different request hash is `IDEMPOTENCY_CONFLICT`. A replay does not call the provider
 - A provider success followed by a crash before the local write stays recoverable on a new Prisma client. Concurrent reconciliation stores one booking. Cancel and reschedule cannot both commit
 - A booking write finishes while another session holds `pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))`, and while another tenant holds a row lock on its own booking
-- Payment, webhook, attribution, credential, and policy writes still rewrite the whole QA snapshot under that global lock. They are explicitly not production ready
 
 M2 QA PostgreSQL, exercised by `persistence.pg.test.ts` on a disposable database:
 
 - `Cc*` models and two migration folders. Partial unique indexes are provider-scoped for live slots. A nullable idempotency foreign key allows a no-commit row. Location triggers reject a booking or payment attempt in a different outlet from its transaction
-- `postgres-store.ts` implements `CommercePersistence` with `Read Committed` transactions, an advisory lock around snapshot writes, and `INSERT ... ON CONFLICT` for the claim. Provider calls stay outside the transaction
+- `postgres-store.ts` implements `CommercePersistence` with `Read Committed` transactions and `INSERT ... ON CONFLICT` for the claim. Provider calls stay outside the transaction. M2.1B removed the snapshot rewrite and the advisory lock
 - Uncertain provider results stay `PENDING_RESOLUTION` across a new Prisma client. Explicit `NO_COMMIT` stores a null `transactionRef`. Recovery adopts one booking on the original transaction
 - Duplicate payment events insert once. A second live capture is rejected. Refund and chargeback do not change the booking. Amounts above the safe integer range are not returned as numbers
 - Slice 2.5 still applies 39 migrations and leaves `CcBooking` absent
 
-Not built: production migration, row-level payment, webhook, and attribution writes (M2.1B), webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender, offer-specific Meta exception rows. The in-process payment HMAC is not a gateway signature. Row locks do not make external delivery exactly once. Outcome certainty is only as honest as the adapter that sets it.
+Not built: production migration, webhook routes, Flows, gateway calls, native inventory, UI, feature flags, a live provider, production RBAC, split tender, offer-specific Meta exception rows. The in-process payment HMAC is not a gateway signature. Row locks do not make external delivery exactly once. Outcome certainty is only as honest as the adapter that sets it. The QA adapter is not a production deployment.
 
 Contracts: `docs/CONVERSATIONAL_COMMERCE_PRD.md`, `docs/CONVERSATIONAL_COMMERCE_PERSISTENCE.md`, and the companion docs named in `docs/CONVERSATIONAL_COMMERCE_IMPLEMENTATION_PLAN.md`.
 

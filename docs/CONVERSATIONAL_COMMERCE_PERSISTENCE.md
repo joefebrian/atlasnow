@@ -1,6 +1,6 @@
 # Conversational commerce persistence (M1B)
 
-Status: **in-memory ports plus a QA PostgreSQL adapter.** M1C.2 behavior is unchanged. M2.1A booking and idempotency writes are row-level in `postgres-booking.ts`. They do not rewrite every `Cc*` table and they do not take the global QA advisory lock. Payment, webhook, attribution, credential, and policy writes still use `writeSnapshot()` in `postgres-store.ts`. That snapshot path is not production ready. The adapter uses disposable `atlasnow_cc_qa_*` databases only. Money columns are `BIGINT`. The sketch below is the old review draft and still says `INTEGER`. The migration folders are the SQL. No production migration. No HTTP route. No gateway client. Payment HMAC stays outside the adapter.
+Status: **in-memory ports plus a QA PostgreSQL adapter.** M1C.2 behavior is unchanged. M2.1B writes for bookings, payments, webhooks, attribution, policy, and credentials are row-level in `postgres-booking.ts` and `postgres-finance.ts`. They do not rewrite every `Cc*` table and they do not take the global QA advisory lock. `exportSnapshot()` is read-only. The adapter uses disposable `atlasnow_cc_qa_*` databases only. Money columns are `BIGINT`. The sketch below is the old review draft and still says `INTEGER`. The migration folders are the SQL. No production migration. No HTTP route. No gateway client. Payment HMAC stays outside the adapter.
 
 The runnable contract is `src/lib/conversational-commerce/ports.ts` and `memory-store.ts`. This document is the table sketch a reviewer can reject before any SQL is added.
 

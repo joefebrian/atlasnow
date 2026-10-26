@@ -554,12 +554,14 @@ Mock provider only. Two real sessions where the case says concurrent.
 - `prisma/schema.prisma` — `Location` `@@unique([tenantId, id])` and the `Cc*` models. No edits to catalog models
 - `prisma/migrations/20261026120000_cc_location_tenant_key/migration.sql`
 - `prisma/migrations/20261026140000_cc_persistence/migration.sql`
-- `src/lib/conversational-commerce/postgres-store.ts` — `CommercePersistence` on Prisma, `runAtomic` as `$transaction`, no provider call inside it. M2.1A moves booking and idempotency writes to `postgres-booking.ts`. Payment, webhook, attribution, credential, and policy writes still use `writeSnapshot()` and the global QA advisory lock. That remaining path is not production ready
-- `src/lib/conversational-commerce/postgres-booking.ts` — targeted row locks, claim `INSERT ... ON CONFLICT`, and diff writes. No global advisory lock
+- `src/lib/conversational-commerce/postgres-store.ts` — `CommercePersistence` on Prisma, `runAtomic` as `$transaction`, no provider call inside it. Reads for `exportSnapshot()` stay here. Writes do not
+- `src/lib/conversational-commerce/postgres-booking.ts` — targeted row locks, claim `INSERT ... ON CONFLICT`, and booking diff writes. No global advisory lock
+- `src/lib/conversational-commerce/postgres-finance.ts` — payment, webhook, attribution, policy, and credential diffs. No snapshot rewrite
 - `src/lib/conversational-commerce/persistence.pg.test.ts` — the QA cases above
-- `src/lib/conversational-commerce/persistence.pg.workers.test.ts` — two Prisma clients. This is the concurrency evidence. `settleConcurrent()` is not
+- `src/lib/conversational-commerce/persistence.pg.workers.test.ts` — two Prisma clients for booking races. `settleConcurrent()` is not the evidence
+- `src/lib/conversational-commerce/persistence.pg.cross.test.ts` — two Prisma clients for booking, payment, webhook, and attribution together
 - `src/lib/commerce/slice25-release.db.test.ts` — omit the two new folders and assert `CcBooking` is absent
-- `.github/workflows/commerce.yml` — separate-process steps for `persistence.pg.test.ts` and `persistence.pg.workers.test.ts`, via the GitHub connection that can edit workflows
+- `.github/workflows/commerce.yml` — separate-process steps for `persistence.pg.test.ts`, `persistence.pg.workers.test.ts`, and `persistence.pg.cross.test.ts`, via the GitHub connection that can edit workflows
 
 No route, webhook, gateway client, Meta call, Flow runtime, feature flag, or pilot workspace.
 

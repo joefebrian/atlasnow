@@ -1,26 +1,21 @@
 /**
  * PostgreSQL CommercePersistence for a disposable QA database.
- * Booking and idempotency writes lock only the rows for that operation.
- * Provider calls stay in the orchestrator, outside runAtomic.
+ * Every mutation locks and updates only the rows for that operation.
+ * Provider calls stay in the orchestrator, outside the database transaction.
  * Payment HMAC and gateway trust stay in payment.ts. This file does not call a provider.
  * Live-slot uniqueness is per provider. It is not global capacity across booking systems.
- * Payment, webhook, attribution, credential, and policy writes still use writeSnapshot.
- * That path is NOT PRODUCTION READY and can overwrite concurrent booking rows. M2.1B replaces it.
+ * exportSnapshot() is a read-only diagnostic. It is not a write source.
  */
 
 import { Prisma, PrismaClient } from "@prisma/client";
-import { AmountRejected, assertSafeSum, idrFromBigInt, idrToBigInt } from "./idr-amount";
-import { createMemoryCommerceStore } from "./memory-store";
-import { readTrustedPayment, type PaymentLedger, type VerifiedPaymentEvent } from "./payment";
-import { bindRowPersistence, commerceLive, mapDbError } from "./postgres-booking";
+import { AmountRejected, assertSafeSum, idrFromBigInt } from "./idr-amount";
+import { type PaymentLedger, type VerifiedPaymentEvent } from "./payment";
+import { bindRowPersistence } from "./postgres-booking";
+import { bindFinancePersistence } from "./postgres-finance";
 import type { DisposableQaDatabase } from "./qa-database";
 import type {
   CommercePersistence,
-  MaybeAsync,
   PersistenceSnapshot,
-  PortCode,
-  PortFailure,
-  PortResult,
   StoredAggregate,
   StoredAttempt,
   StoredBooking,
@@ -41,30 +36,8 @@ import type {
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-function fail(code: PortCode, message: string): PortFailure {
-  return { ok: false, code, message };
-}
-
-function isFailure(value: unknown): value is PortFailure {
-  return Boolean(value && typeof value === "object" && "ok" in value && (value as { ok: boolean }).ok === false);
-}
-
-function snapshotOf(mem: CommercePersistence): PersistenceSnapshot {
-  const exported = mem.exportSnapshot();
-  if (exported instanceof Promise) throw new Error("The snapshot copy returned a promise.");
-  return exported;
-}
-
 function iso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
-}
-
-function asDate(value: string | null): Date | null {
-  return value ? new Date(value) : null;
-}
-
-function json(value: unknown): Prisma.InputJsonValue {
-  return value as Prisma.InputJsonValue;
 }
 
 function ledgerDetail(value: Prisma.JsonValue): Pick<PaymentLedger, "currency" | "appliedEventIds" | "rejectedEventIds" | "queued"> {
@@ -319,157 +292,6 @@ async function readSnapshot(db: Db): Promise<PersistenceSnapshot> {
   return snapshot;
 }
 
-/**
- * NOT PRODUCTION READY.
- * Deletes and reinserts every conversational row under one global advisory lock.
- * Booking and idempotency writes do not call this. A later payment or webhook write can
- * still overwrite booking rows committed by another worker. M2.1B removes this path.
- */
-async function writeSnapshot(db: Db, snap: PersistenceSnapshot): Promise<void> {
-  for (const row of snap.attempts) idrToBigInt(row.expectedAmountIdr);
-  for (const row of snap.ledgers) {
-    if (row.ledger.amountIdr != null) idrToBigInt(row.ledger.amountIdr);
-    idrToBigInt(row.ledger.refundedIdr);
-  }
-  for (const row of snap.ledgerEvents) idrToBigInt(row.amountIdr);
-  await db.ccPaymentEvent.deleteMany();
-  await db.ccPaymentLedger.deleteMany();
-  await db.ccWebhookEvent.deleteMany();
-  await db.ccProviderCredential.deleteMany();
-  await db.ccInflight.deleteMany();
-  await db.ccIdempotency.deleteMany();
-  await db.ccBooking.deleteMany();
-  await db.ccTransactionEvent.deleteMany();
-  await db.ccPaymentAttempt.deleteMany();
-  await db.ccExternalRef.deleteMany();
-  await db.ccTouchpoint.deleteMany();
-  await db.ccAttributionAggregate.deleteMany();
-  await db.ccTransaction.deleteMany();
-  await db.ccIntent.deleteMany();
-  await db.ccProviderConnection.deleteMany();
-  await db.ccPolicyEvidence.deleteMany();
-  if (snap.policyEvidence.length) {
-    await db.ccPolicyEvidence.createMany({
-      data: snap.policyEvidence.map((row) => ({
-        tenantId: row.tenantId,
-        offeringCategory: row.offeringCategory,
-        experience: row.experience,
-        source: row.source,
-        status: row.status,
-        reference: row.reference,
-        validatedBy: row.validatedBy,
-        integrity: row.integrity,
-        version: row.version,
-      })),
-    });
-  }
-  if (snap.connections.length) {
-    await db.ccProviderConnection.createMany({
-      data: snap.connections.map((row) => ({
-        connectionId: row.connectionId,
-        tenantId: row.tenantId,
-        locationId: row.locationId,
-        providerId: row.providerId,
-        kind: row.kind,
-        mode: row.mode,
-        capabilities: json(row.capabilities),
-        status: row.status,
-        health: row.health,
-        lastCheckedAt: asDate(row.lastCheckedAt),
-        credentialRef: row.credentialRef,
-        webhookSecretRef: row.webhookSecretRef,
-        version: row.version,
-      })),
-    });
-  }
-  if (snap.intents.length) {
-    await db.ccIntent.createMany({
-      data: snap.intents.map((row) => ({
-        id: `${row.tenantId}:${row.intentRef}`,
-        tenantId: row.tenantId,
-        locationId: row.locationId,
-        intentRef: row.intentRef,
-        experience: row.experience,
-        intentType: row.intentType,
-        qualified: row.qualified,
-        customerRef: row.customerRef,
-        commerceOrderRef: row.commerceOrderRef,
-        version: row.version,
-      })),
-    });
-  }
-  if (snap.transactions.length) {
-    await db.ccTransaction.createMany({ data: snap.transactions.map((row) => ({ ...row })) });
-  }
-  if (snap.aggregates.length) await db.ccAttributionAggregate.createMany({ data: snap.aggregates });
-  if (snap.touchpoints.length) {
-    await db.ccTouchpoint.createMany({
-      data: snap.touchpoints.map(({ warnings: _warnings, ...row }) => ({ ...row, erasedAt: asDate(row.erasedAt) })),
-    });
-  }
-  if (snap.externalRefs.length) await db.ccExternalRef.createMany({ data: snap.externalRefs });
-  if (snap.attempts.length) {
-    await db.ccPaymentAttempt.createMany({
-      data: snap.attempts.map((row) => ({ ...row, expectedAmountIdr: idrToBigInt(row.expectedAmountIdr) })),
-    });
-  }
-  if (snap.events.length) {
-    await db.ccTransactionEvent.createMany({
-      data: snap.events.map((row) => ({
-        tenantId: row.tenantId,
-        eventId: row.eventId,
-        transactionRef: row.transactionRef,
-        type: row.type,
-        at: new Date(row.at),
-        payload: json(row.payload),
-      })),
-    });
-  }
-  if (snap.bookings.length) {
-    await db.ccBooking.createMany({
-      data: snap.bookings.map((row) => ({ ...row, holdExpiresAt: asDate(row.holdExpiresAt) })),
-    });
-  }
-  if (snap.idempotency.length) await db.ccIdempotency.createMany({ data: snap.idempotency });
-  if (snap.inflight.length) await db.ccInflight.createMany({ data: snap.inflight });
-  if (snap.credentials.length) {
-    await db.ccProviderCredential.createMany({
-      data: snap.credentials.map((row) => ({ ...row, ciphertext: null, revokedAt: asDate(row.revokedAt) })),
-    });
-  }
-  if (snap.webhooks.length) await db.ccWebhookEvent.createMany({ data: snap.webhooks });
-  if (snap.ledgers.length) {
-    await db.ccPaymentLedger.createMany({
-      data: snap.ledgers.map((row) => ({
-        tenantId: row.tenantId,
-        attemptRef: row.attemptRef,
-        providerId: row.providerId,
-        transactionRef: row.transactionRef,
-        status: row.ledger.status,
-        amountIdr: row.ledger.amountIdr == null ? null : idrToBigInt(row.ledger.amountIdr),
-        refundedIdr: idrToBigInt(row.ledger.refundedIdr),
-        verifiedPaid: row.ledger.verifiedPaid,
-        providerReference: row.ledger.providerReference,
-        detail: json({
-          currency: row.ledger.currency,
-          appliedEventIds: row.ledger.appliedEventIds,
-          rejectedEventIds: row.ledger.rejectedEventIds,
-          queued: row.ledger.queued,
-        }),
-        version: row.version,
-      })),
-    });
-  }
-  if (snap.ledgerEvents.length) {
-    await db.ccPaymentEvent.createMany({
-      data: snap.ledgerEvents.map((row) => ({
-        ...row,
-        amountIdr: idrToBigInt(row.amountIdr),
-        occurredAt: new Date(row.occurredAt),
-      })),
-    });
-  }
-}
 
 export async function openPostgresCommerceStore(options: {
   client: PrismaClient;
@@ -481,130 +303,38 @@ export async function openPostgresCommerceStore(options: {
   const policyValidatorKey = options.policyValidatorKey ?? "";
   await qa.assertIdentity(client);
 
-  async function begin<T>(advisory: boolean, work: (tx: Db) => Promise<T>): Promise<T> {
+  async function begin<T>(work: (tx: Db) => Promise<T>): Promise<T> {
     return client.$transaction(async (tx) => {
       await qa.assertIdentity(tx);
       const level = await tx.$queryRaw<Array<{ isolation: string }>>`SELECT current_setting('transaction_isolation') AS isolation`;
       if (level[0]?.isolation !== "read committed") throw new Error("PostgreSQL transaction is not read committed.");
-      if (advisory) {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))`;
-      }
       return work(tx);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 15_000, timeout: 20_000 });
   }
 
-  async function mutate<T>(work: (mem: CommercePersistence) => MaybeAsync<PortResult<T>>): Promise<PortResult<T>> {
-    const existing = commerceLive.getStore();
-    if (existing?.mode === "rows") throw new Error("A snapshot rewrite cannot run inside a booking transaction.");
-    if (existing?.mode === "snapshot") return work(existing.mem);
-    try {
-      return await begin(true, async (tx) => {
-        const mem = createMemoryCommerceStore({ snapshot: await readSnapshot(tx), policyValidatorKey });
-        const before = JSON.stringify(snapshotOf(mem));
-        const result = await commerceLive.run({ mode: "snapshot", mem }, () => work(mem));
-        if (isFailure(result)) return result;
-        const after = snapshotOf(mem);
-        if (JSON.stringify(after) !== before) await writeSnapshot(tx, after);
-        for (const row of after.ledgers) {
-          const net = after.ledgers.filter((item) => item.tenantId === row.tenantId && item.transactionRef === row.transactionRef);
-          let refunded = BigInt(0);
-          for (const item of net) refunded += BigInt(item.ledger.refundedIdr);
-          if (refunded > BigInt(Number.MAX_SAFE_INTEGER)) throw new AmountRejected("Amount sum is not a safe whole rupiah value.");
-        }
-        return result;
-      });
-    } catch (error) {
-      const mapped = mapDbError(error);
-      if (mapped) return mapped;
-      throw error;
-    }
-  }
-
   const ports = {} as CommercePersistence;
-  const memPorts = () => {
-    throw new Error("PostgreSQL ports are bound per call.");
+  const unbound = () => {
+    throw new Error("PostgreSQL port is not bound.");
   };
-  void memPorts;
-  ports.intents = {
-    save: (actor, intent) => mutate((mem) => mem.intents.save(actor, intent)),
-    read: (actor, tenantId, intentRef) => mutate((mem) => mem.intents.read(actor, tenantId, intentRef)),
-  };
-  ports.transactions = {
-    read: (actor, tenantId, transactionRef) => mutate((mem) => mem.transactions.read(actor, tenantId, transactionRef)),
-    compareAndSwap: (actor, input) => mutate((mem) => mem.transactions.compareAndSwap(actor, input)),
-  };
+  ports.transactions = { read: unbound, compareAndSwap: unbound };
+  ports.intents = { save: unbound, read: unbound };
+  ports.events = { append: unbound, list: unbound };
   ports.connections = {
-    register: (actor, input) => mutate((mem) => mem.connections.register(actor, input)),
-    resolve: (actor, tenantId, locationId, providerId, kind) => mutate((mem) => mem.connections.resolve(actor, tenantId, locationId, providerId, kind)),
-    registerCredential: (actor, input) => mutate((mem) => mem.connections.registerCredential(actor, input)),
-    rotateCredential: (actor, input) => mutate((mem) => mem.connections.rotateCredential(actor, input)),
-    revokeCredential: (actor, tenantId, credentialRef, revokedAt) => mutate((mem) => mem.connections.revokeCredential(actor, tenantId, credentialRef, revokedAt)),
-    reportHealth: (actor, input) => mutate((mem) => mem.connections.reportHealth(actor, input)),
+    register: unbound,
+    resolve: unbound,
+    registerCredential: unbound,
+    rotateCredential: unbound,
+    revokeCredential: unbound,
+    reportHealth: unbound,
   };
-  // NOT PRODUCTION READY. These methods rewrite the whole QA snapshot under the global advisory lock.
-  ports.payments = {
-    openAttempt: (actor, input) => {
-      try {
-        idrToBigInt(input.expectedAmountIdr);
-      } catch (error) {
-        if (error instanceof AmountRejected) return fail("INVALID", error.message);
-        throw error;
-      }
-      return mutate((mem) => mem.payments.openAttempt(actor, input));
-    },
-    applyEvent: (actor, evidence) => {
-      const event = readTrustedPayment(evidence);
-      if (!event) return fail("INVALID", "Payment settlement requires trusted evidence from the payment verifier.");
-      try {
-        idrToBigInt(event.amountIdr);
-      } catch (error) {
-        if (error instanceof AmountRejected) return fail("INVALID", error.message);
-        throw error;
-      }
-      return mutate((mem) => mem.payments.applyEvent(actor, evidence));
-    },
-    reconcileTerminal: (actor, input) => mutate((mem) => mem.payments.reconcileTerminal(actor, input)),
-    net: async (actor, tenantId, transactionRef) => {
-      const result = await mutate((mem) => mem.payments.net(actor, tenantId, transactionRef));
-      if (!result.ok) return result;
-      try {
-        assertSafeSum(result.value.netRevenueIdr);
-        assertSafeSum(result.value.refundedIdr);
-        assertSafeSum(result.value.chargebackIdr);
-      } catch (error) {
-        if (error instanceof AmountRejected) return fail("INVALID", error.message);
-        throw error;
-      }
-      return result;
-    },
-  };
-  // NOT PRODUCTION READY. Webhook identity still follows the snapshot rewrite.
-  ports.webhooks = {
-    accept: (actor, input) => mutate((mem) => mem.webhooks.accept(actor, input)),
-    markApplied: (actor, tenantId, dedupeKey) => mutate((mem) => mem.webhooks.markApplied(actor, tenantId, dedupeKey)),
-  };
-  ports.events = {
-    append: (actor, event) => mutate((mem) => mem.events.append(actor, event)),
-    list: (actor, tenantId, transactionRef) => mutate((mem) => mem.events.list(actor, tenantId, transactionRef)),
-  };
-  // NOT PRODUCTION READY. Attribution writes still follow the snapshot rewrite.
-  ports.attribution = {
-    saveTouchpoint: (actor, input) => mutate((mem) => mem.attribution.saveTouchpoint(actor, input)),
-    saveAggregate: (actor, input) => mutate((mem) => mem.attribution.saveAggregate(actor, input)),
-    eraseIdentifiers: (actor, tenantId, touchpointId, reason, erasedAt) => mutate((mem) => mem.attribution.eraseIdentifiers(actor, tenantId, touchpointId, reason, erasedAt)),
-    readClass: (actor, tenantId, transactionRef) => mutate((mem) => mem.attribution.readClass(actor, tenantId, transactionRef)),
-  };
-  // NOT PRODUCTION READY. Policy evidence still follows the snapshot rewrite.
-  ports.policy = {
-    submit: (actor, tenantId, scope, submission) => mutate((mem) => mem.policy.submit(actor, tenantId, scope, submission)),
-    read: (actor, tenantId, scope) => mutate((mem) => mem.policy.read(actor, tenantId, scope)),
-  };
-  bindRowPersistence(ports, {
+  const deps = {
     client,
     policyValidatorKey,
     begin,
     readSnapshot,
     assertOutside: () => qa.assertIdentity(client),
-  });
+  };
+  bindRowPersistence(ports, deps);
+  bindFinancePersistence(ports, deps);
   return ports;
 }
