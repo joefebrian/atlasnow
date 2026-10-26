@@ -2,6 +2,14 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — M2.2 review correction: migrate deploy is not a history gate
+
+Prisma 5.22.0 `migrate deploy` on a disposable loopback database exited 0 after an applied migration folder was removed, applied a new pending migration, and left an unmigrated column in place. A second probe edited `migration.sql` after it was applied. `migrate deploy` and `migrate status` both exited 0. The stored checksum remained the SHA-256 of the original file. Production metadata is still NOT VERIFIED. An operator must export `migration_name`, `checksum`, `started_at`, `finished_at`, `rolled_back_at`, and `applied_steps_count` from `_prisma_migrations` with their own credentials. Startup must default to not migrating. That change is not in this review. Staging and production stay NO-GO.
+
+## 2026-10-26 — Conversational M2.2 release readiness is a review
+
+`docs/M2_2_RELEASE_READINESS.md` records the git migration inventory at `df3e7f2`, the documented production inventory of 37 migrations, and the boot path that runs `migrate deploy`. Production history was not queried. Staging implementation is NO-GO until the operator's `_prisma_migrations` export passes the preflight and application boot stops applying every folder in the image. The correction entry above replaces an earlier assumption that a missing folder stops `migrate deploy`, and it does not authorize a production dump. No schema change. No `migrate resolve`. YOLA FUN stays NO-GO.
+
 ## 2026-10-26 — Conversational M2.1B rolls back direct SQL when an atomic write returns failure
 
 `registerConnection()` inserted a new `CcProviderConnection` on the open `runAtomic` transaction. Prisma commits a callback that returns, so a later `{ ok: false }` skipped the diff flush and still committed that insert. The adapter now throws that failure inside the transaction and returns the same `PortResult` after rollback. A thrown exception still rolls back. A successful atomic callback still commits the nested connection. Claim SQL stays in its own transaction and does not run while a row scope is already open. No schema change.

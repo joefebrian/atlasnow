@@ -68,6 +68,8 @@ M1C.2, in unit tests only:
 - `readBooking`, `openPaymentAttempt`, `recordPayment`, and `cancelReservation` match the actor's tenant and the reference before location authorization. Two tenants can share one internal reference string. A foreign-only reference returns `CROSS_TENANT` and does not include the other tenant's record. A wrong outlet is still `LOCATION_FORBIDDEN`
 - The read-only snapshot maps still key bookings and transactions by reference alone. Those maps are not the lookup used by the four operations above. A SQL adapter must not copy that keying
 
+M2.2 release readiness is a review in `docs/M2_2_RELEASE_READINESS.md`. It does not apply migrations or open staging. Production migration history was not opened, so it stays unverified. Prisma 5.22.0 `migrate deploy` applied a pending migration on a disposable database after an already applied folder was removed, and it did not reject a changed checksum. The committed entrypoint still runs that command before `node server.js`. Recommendation: NO-GO for staging implementation. The staging matrix has 20 checks, all NOT RUN.
+
 M2.1B QA row-level persistence, exercised by `persistence.pg.cross.test.ts` with two Prisma clients:
 
 - Payment attempts, ledger rows, payment events, webhooks, attribution, policy evidence, and credential references update only the rows for that operation. The memory transition still decides the outcome. `writeSnapshot()` is gone. The global QA advisory lock is gone
