@@ -1,6 +1,6 @@
 # Conversational commerce persistence (M1B)
 
-Status: **design and in-memory ports.** M1B.1 corrects result copies, provider-mode checks, policy scope, webhook identity, location foreign keys, and the concurrency simulation. M1C runs the orchestrator through those ports and the in-memory adapter. M1C.1 closes the claim, payment, and crash boundaries. M1C.2 keeps an uncertain provider result unresolved and looks up tenant-scoped references by the authenticated tenant. No change to `prisma/schema.prisma`. No migration folder. No HTTP route. No gateway client. A SQL adapter is not authorized.
+Status: **in-memory ports plus a QA PostgreSQL adapter.** M1C.2 behavior is unchanged. The QA adapter is `postgres-store.ts`. It uses disposable `atlasnow_cc_qa_*` databases only. Money columns are `BIGINT`. The sketch below is the old review draft and still says `INTEGER`. The migration folders are the SQL. No production migration. No HTTP route. No gateway client. Payment HMAC stays outside the adapter.
 
 The runnable contract is `src/lib/conversational-commerce/ports.ts` and `memory-store.ts`. This document is the table sketch a reviewer can reject before any SQL is added.
 

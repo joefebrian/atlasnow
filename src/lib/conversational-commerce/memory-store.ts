@@ -887,6 +887,18 @@ export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): Com
     const backup = cloneSnapshot(state);
     try {
       const result = work(ports);
+      if (result instanceof Promise) {
+        return result.then(
+          (value) => {
+            if (!value.ok) state = backup;
+            return value;
+          },
+          (error) => {
+            state = backup;
+            throw error;
+          },
+        );
+      }
       if (!result.ok) state = backup;
       return result;
     } catch (error) {

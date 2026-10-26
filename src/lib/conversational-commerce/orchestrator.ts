@@ -24,6 +24,8 @@ import type { OutcomeCertainty, ProviderErrorCode } from "./provider";
 import type {
   CommercePersistence,
   ConnectionCapabilities,
+  MaybeAsync,
+  PersistenceSnapshot,
   PortCode,
   PortResult,
   ReservationDraft,
@@ -124,6 +126,18 @@ export function createOrchestratorState(options?: { persistence?: CommercePersis
   };
 }
 
+async function settle<T>(value: MaybeAsync<T>): Promise<T> {
+  return await value;
+}
+
+export function syncSnapshot(persistence: CommercePersistence): PersistenceSnapshot {
+  const exported = persistence.exportSnapshot();
+  if (exported instanceof Promise) {
+    throw new Error("PostgreSQL snapshots are async. Await persistence.exportSnapshot().");
+  }
+  return exported;
+}
+
 export async function reserve(
   command: ReserveCommand,
   deps: { registry: ProviderRegistry; state: OrchestratorState; now: string; crash?: OrchestratorCrash },
@@ -136,7 +150,7 @@ export async function reserve(
 
   const hash = requestHash(command);
   const ports = deps.state.persistence;
-  const replayed = replayReserve(ports.exportSnapshot(), command, hash);
+  const replayed = replayReserve(await settle(ports.exportSnapshot()), command, hash);
   if (replayed) return replayed;
 
   const policy = evaluateEligibility({
@@ -146,23 +160,23 @@ export async function reserve(
     approvalEvidence: command.approvalEvidence,
   });
   if (policy.transactional !== "ALLOW") {
-    return deny(ports, command, hash, "POLICY_BLOCKED", policy.reasons[0] ?? "Transactional commerce is blocked.");
+    return await deny(ports, command, hash, "POLICY_BLOCKED", policy.reasons[0] ?? "Transactional commerce is blocked.");
   }
 
   const resolved = deps.registry.resolve({ tenantId: command.tenantId, locationId: command.locationId }, command.providerId);
-  if (!resolved.ok) return deny(ports, command, hash, "NOT_FOUND", "No provider connection is registered for this tenant.");
+  if (!resolved.ok) return await deny(ports, command, hash, "NOT_FOUND", "No provider connection is registered for this tenant.");
 
   const capabilities = resolved.provider.getCapabilities();
   const hold = capabilities.supportsHold && capabilities.operations.holdReservation === "supported";
   const create = capabilities.operations.createBooking === "supported";
   if (!hold && !create) {
-    return deny(ports, command, hash, "UNSUPPORTED", "This provider cannot hold or create a reservation.");
+    return await deny(ports, command, hash, "UNSUPPORTED", "This provider cannot hold or create a reservation.");
   }
-  if (!attested(ports.exportSnapshot(), command)) {
-    return deny(ports, command, hash, "POLICY_DENIED", "Stored policy evidence does not approve this merchant, category, and surface.");
+  if (!attested(await settle(ports.exportSnapshot()), command)) {
+    return await deny(ports, command, hash, "POLICY_DENIED", "Stored policy evidence does not approve this merchant, category, and surface.");
   }
 
-  const registered = ensureBookingConnection(ports, command, resolved.provider.getCapabilities(), resolved.mode);
+  const registered = await settle(ensureBookingConnection(ports, command, resolved.provider.getCapabilities(), resolved.mode));
   if (!registered.ok) return failure(asReserveCode(registered.code), registered.message, false);
 
   const transactionRef = refFromMaterial("CTX", `${command.tenantId}:${command.idempotencyKey}`);
@@ -184,7 +198,7 @@ export async function reserve(
   );
   if (!claimed.ok) return failure(asReserveCode(claimed.code), claimed.message, false);
   if (claimed.replay) {
-    const reread = replayReserve(ports.exportSnapshot(), command, hash);
+    const reread = replayReserve(await settle(ports.exportSnapshot()), command, hash);
     if (reread) return reread;
     return { ...unresolved("TIMEOUT", "The reservation was claimed and has no authoritative outcome.", null), replay: true };
   }
@@ -202,17 +216,17 @@ export async function reserve(
   const response = hold ? await resolved.provider.holdReservation(request) : await resolved.provider.createBooking(request);
 
   if (!response.ok && mayHaveCommitted(response)) {
-    return holdUnresolved(ports, command, hash, transactionRef, response.code, response.message, deps);
+    return await holdUnresolved(ports, command, hash, transactionRef, response.code, response.message, deps);
   }
 
-  if (!response.ok) return deny(ports, command, hash, response.code, response.message);
+  if (!response.ok) return await deny(ports, command, hash, response.code, response.message);
 
   const external = resolved.mode === "EXTERNAL_API" || resolved.mode === "EXTERNAL_CHECKOUT";
   const referenceMissing =
     !response.data.bookingRef.trim() ||
     ((response.data.state === "CONFIRMED" || response.data.state === "HELD") && external && !response.data.providerReference?.trim());
   if (referenceMissing) {
-    return holdUnresolved(
+    return await holdUnresolved(
       ports,
       command,
       hash,
@@ -224,17 +238,17 @@ export async function reserve(
   }
   deps.crash?.beforePersist?.();
 
-  const persisted = ports.runAtomic((draft): PortResult<{ transaction: StoredTransaction; booking: StoredBooking }> => {
-    const inflight = findInflight(draft.exportSnapshot(), command.tenantId, command.idempotencyKey);
+  const persisted = await settle(ports.runAtomic(async (draft): Promise<PortResult<{ transaction: StoredTransaction; booking: StoredBooking }>> => {
+    const inflight = findInflight(await settle(draft.exportSnapshot()), command.tenantId, command.idempotencyKey);
     if (inflight && !inflight.absenceVerified) {
-      const noted = draft.idempotency.noteFound(command.actor, command.tenantId, command.idempotencyKey, {
+      const noted = await settle(draft.idempotency.noteFound(command.actor, command.tenantId, command.idempotencyKey, {
         providerId: command.providerId,
         locationId: command.locationId,
         bookingRef: response.data.bookingRef,
-      });
+      }));
       if (!noted.ok) return noted;
     }
-    const opened = draft.bookings.openReservation(
+    const opened = await settle(draft.bookings.openReservation(
       reservationDraft({
         command,
         requestHash: hash,
@@ -245,16 +259,16 @@ export async function reserve(
         referenceAuthoritative: response.data.referenceAuthoritative,
         now: deps.now,
       }),
-    );
+    ));
     if (!opened.ok) return opened;
-    const intent = saveIntent(draft, command);
+    const intent = await settle(saveIntent(draft, command));
     if (!intent.ok) return intent;
-    const appended = appendEvent(draft, command.actor, command.tenantId, transactionRef, "booking.updated", deps.now, {
+    const appended = await settle(appendEvent(draft, command.actor, command.tenantId, transactionRef, "booking.updated", deps.now, {
       state: opened.value.booking.state,
-    });
+    }));
     if (!appended.ok) return appended;
     return opened;
-  });
+  }));
   if (!persisted.ok) return failure(asReserveCode(persisted.code), persisted.message, false);
   return successResult(persisted.value.transaction, persisted.value.booking, response.replay, false);
 }
@@ -263,12 +277,12 @@ export async function reserve(
  * A person acknowledging a timeout does not authorize another booking create.
  * The inflight record stays until reconcileTimedOut.
  */
-export function releaseTimedOut(
+export async function releaseTimedOut(
   state: OrchestratorState,
   actor: Actor,
   idempotencyKey: string,
-): { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "RECONCILIATION_REQUIRED" } {
-  const pending = findInflight(state.persistence.exportSnapshot(), actor.tenantId, idempotencyKey);
+): Promise<{ ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "RECONCILIATION_REQUIRED" }> {
+  const pending = findInflight(await settle(state.persistence.exportSnapshot()), actor.tenantId, idempotencyKey);
   if (!pending) return { ok: false, code: "NOT_FOUND" };
   const allowed = authorize(actor, { tenantId: pending.tenantId, locationId: pending.locationId }, "write");
   if (!allowed.ok) return allowed;
@@ -285,7 +299,7 @@ export async function reconcileTimedOut(
   deps: { registry: ProviderRegistry; state: OrchestratorState; now: string; crash?: OrchestratorCrash },
 ): Promise<ReserveResult> {
   const ports = deps.state.persistence;
-  const snap = ports.exportSnapshot();
+  const snap = await settle(ports.exportSnapshot());
   const pending = findInflight(snap, command.tenantId, command.idempotencyKey);
   if (!pending) return failure("NOT_FOUND", "No timed-out reservation is waiting for this key.", false);
   const transaction = findTransaction(snap, pending.tenantId, pending.transactionRef);
@@ -315,7 +329,7 @@ export async function reconcileTimedOut(
     if (!response.ok) {
       return unresolved("TIMEOUT", "The provider still has not returned an authoritative result. No second booking was authorized.", publicTransaction(transaction));
     }
-    return adoptProviderBooking(ports, command.actor, pending, resolved.mode, response.data, deps.now, deps.crash);
+    return await adoptProviderBooking(ports, command.actor, pending, resolved.mode, response.data, deps.now, deps.crash);
   }
 
   const lookup = await resolved.provider.findByIdempotencyKey({
@@ -336,20 +350,20 @@ export async function reconcileTimedOut(
       );
     }
     if (terminalBooking(lookup.data.found.state)) {
-      const failed = failTransaction(ports, command.actor, pending.tenantId, pending.transactionRef);
+      const failed = await failTransaction(ports, command.actor, pending.tenantId, pending.transactionRef);
       if (!failed.ok) return failure(asReserveCode(failed.code), failed.message, false);
       return terminalReplay(failed.value);
     }
-    return adoptProviderBooking(ports, command.actor, pending, resolved.mode, lookup.data.found, deps.now, deps.crash);
+    return await adoptProviderBooking(ports, command.actor, pending, resolved.mode, lookup.data.found, deps.now, deps.crash);
   }
   if (lookup.data.authoritative) {
-    const noted = ports.idempotency.noteAbsence(command.actor, pending.tenantId, pending.idempotencyKey, {
+    const noted = await settle(ports.idempotency.noteAbsence(command.actor, pending.tenantId, pending.idempotencyKey, {
       providerId: pending.providerId,
       locationId: pending.locationId,
       requirementId: MOCK_ABSENCE,
       satisfied: true,
       observedEmpty: true,
-    });
+    }));
     if (!noted.ok) return unresolved(asReserveCode(noted.code), noted.message, publicTransaction(transaction));
     return unresolved("TIMEOUT", "Authoritative lookup found no reservation. One retry may use the same idempotency key.", publicTransaction(transaction));
   }
@@ -360,7 +374,7 @@ export async function cancelReservation(
   command: { actor: Actor; bookingRef: string; idempotencyKey: string },
   deps: { registry: ProviderRegistry; state: OrchestratorState; now: string },
 ): Promise<ReserveResult> {
-  const bookingSnap = deps.state.persistence.exportSnapshot();
+  const bookingSnap = await settle(deps.state.persistence.exportSnapshot());
   const booking = bookingForTenant(bookingSnap, command.actor.tenantId, command.bookingRef);
   if (!booking) return failure(foreignBookingCode(bookingSnap, command.actor.tenantId, command.bookingRef), "Booking was not found.", false);
   const allowed = authorize(command.actor, booking, "write");
@@ -378,21 +392,21 @@ export async function cancelReservation(
   if (response.data.state !== "CANCELLED") {
     return failure("RECONCILIATION_REQUIRED", "The provider did not cancel the booking.", false);
   }
-  const persisted = deps.state.persistence.runAtomic((draft): PortResult<unknown> => {
-    const moved = draft.bookings.transition(command.actor, {
+  const persisted = await settle(deps.state.persistence.runAtomic(async (draft) => {
+    const moved = await settle(draft.bookings.transition(command.actor, {
       tenantId: booking.tenantId,
       bookingRef: booking.bookingRef,
       expectedVersion,
       to: "CANCELLED",
       nowIso: deps.now,
-    });
+    }));
     if (!moved.ok) return moved;
     return appendEvent(draft, command.actor, booking.tenantId, booking.transactionRef, "booking.cancelled", deps.now, {
       state: "CANCELLED",
     });
-  });
+  }));
   if (!persisted.ok) return failure(asReserveCode(persisted.code), persisted.message, false);
-  const after = deps.state.persistence.exportSnapshot();
+  const after = await settle(deps.state.persistence.exportSnapshot());
   const saved = after.bookings.find((row) => row.tenantId === booking.tenantId && row.bookingRef === booking.bookingRef);
   const transaction = findTransaction(after, booking.tenantId, booking.transactionRef);
   if (!saved || !transaction) return failure("NOT_FOUND", "Booking was not found.", false);
@@ -410,30 +424,31 @@ export async function cancelReservation(
   };
 }
 
-export function openPaymentAttempt(
+export async function openPaymentAttempt(
   state: OrchestratorState,
   actor: Actor,
   input: { transactionRef: string; attemptRef: string; providerId: string; expectedAmountIdr: number },
-):
+): Promise<
   | { ok: true; replay: boolean }
-  | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "MISMATCH" | "ATTEMPT_CONFLICT" } {
-  const paymentSnap = state.persistence.exportSnapshot();
+  | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" | "MISMATCH" | "ATTEMPT_CONFLICT" }
+> {
+  const paymentSnap = await settle(state.persistence.exportSnapshot());
   const transaction = transactionForTenant(paymentSnap, actor.tenantId, input.transactionRef);
   if (!transaction) return { ok: false, code: foreignTransactionCode(paymentSnap, actor.tenantId, input.transactionRef) };
   const allowed = authorize(actor, transaction, "write");
   if (!allowed.ok) return { ok: false, code: allowed.code };
   if (!input.attemptRef.trim() || !input.providerId.trim()) return { ok: false, code: "MISMATCH" };
   if (!Number.isSafeInteger(input.expectedAmountIdr) || input.expectedAmountIdr < 1) return { ok: false, code: "MISMATCH" };
-  const registered = state.persistence.connections.register(actor, {
+  const registered = await settle(state.persistence.connections.register(actor, {
     tenantId: transaction.tenantId,
     locationId: transaction.locationId,
     providerId: input.providerId,
     kind: "PAYMENT",
     mode: "MERCHANT_PAYMENT_GATEWAY",
     capabilities: paymentCapabilities(input.providerId),
-  });
+  }));
   if (!registered.ok) return paymentFailure(registered.code);
-  const opened = state.persistence.payments.openAttempt(actor, {
+  const opened = await settle(state.persistence.payments.openAttempt(actor, {
     tenantId: transaction.tenantId,
     locationId: transaction.locationId,
     transactionRef: transaction.transactionRef,
@@ -441,12 +456,12 @@ export function openPaymentAttempt(
     providerId: input.providerId,
     providerMode: "MERCHANT_PAYMENT_GATEWAY",
     expectedAmountIdr: input.expectedAmountIdr,
-  });
+  }));
   if (!opened.ok) return paymentFailure(opened.code);
   return { ok: true, replay: opened.replay };
 }
 
-export function recordPayment(
+export async function recordPayment(
   state: OrchestratorState,
   actor: Actor,
   input: {
@@ -456,7 +471,7 @@ export function recordPayment(
     connection: { tenantId: string; providerId: string; secret: string };
   },
   _now: string,
-):
+): Promise<
   | { ok: true; effect: string; ledger: PaymentLedger; transaction: CommerceTransaction; booking: Booking | null }
   | {
       ok: false;
@@ -470,8 +485,9 @@ export function recordPayment(
         | "MISMATCH"
         | "REJECTED_EVIDENCE"
         | "ATTEMPT_CONFLICT";
-    } {
-  const snap = state.persistence.exportSnapshot();
+    }
+> {
+  const snap = await settle(state.persistence.exportSnapshot());
   const transaction = transactionForTenant(snap, actor.tenantId, input.transactionRef);
   if (!transaction) return { ok: false, code: foreignTransactionCode(snap, actor.tenantId, input.transactionRef) };
   const allowed = authorize(actor, transaction, "write");
@@ -502,12 +518,12 @@ export function recordPayment(
   if (ledger?.ledger.providerReference && ledger.ledger.providerReference !== verified.evidence.event.providerReference) {
     return { ok: false, code: "MISMATCH" };
   }
-  const applied = state.persistence.payments.applyEvent(actor, verified.evidence);
+  const applied = await settle(state.persistence.payments.applyEvent(actor, verified.evidence));
   if (!applied.ok) {
     if (applied.code === "REFERENCE_CONFLICT") return { ok: false, code: "MISMATCH" };
     return paymentFailure(applied.code);
   }
-  const after = state.persistence.exportSnapshot();
+  const after = await settle(state.persistence.exportSnapshot());
   const saved = findTransaction(after, transaction.tenantId, transaction.transactionRef);
   if (!saved) return { ok: false, code: "NOT_FOUND" };
   const savedBooking = findBookingForTransaction(after, saved);
@@ -520,12 +536,12 @@ export function recordPayment(
   };
 }
 
-export function readBooking(
+export async function readBooking(
   state: OrchestratorState,
   actor: Actor,
   bookingRef: string,
-): { ok: true; booking: Booking } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" } {
-  const bookingSnap = state.persistence.exportSnapshot();
+): Promise<{ ok: true; booking: Booking } | { ok: false; code: "NOT_FOUND" | "CROSS_TENANT" | "LOCATION_FORBIDDEN" | "FORBIDDEN" }> {
+  const bookingSnap = await settle(state.persistence.exportSnapshot());
   const booking = bookingForTenant(bookingSnap, actor.tenantId, bookingRef);
   if (!booking) return { ok: false, code: foreignBookingCode(bookingSnap, actor.tenantId, bookingRef) };
   const allowed = authorize(actor, booking, "read");
@@ -533,57 +549,63 @@ export function readBooking(
   return { ok: true, booking: publicBooking(booking) };
 }
 
-export function acceptWebhook(
+export async function acceptWebhook(
   state: OrchestratorState,
   actor: Actor,
   input: { tenantId: string; connectionId: string; eventId: string; eventType: string },
 ) {
-  return state.persistence.webhooks.accept(actor, input);
+  return await settle(state.persistence.webhooks.accept(actor, input));
 }
 
-export function markWebhookApplied(state: OrchestratorState, actor: Actor, tenantId: string, dedupeKey: string) {
-  return state.persistence.webhooks.markApplied(actor, tenantId, dedupeKey);
+export async function markWebhookApplied(state: OrchestratorState, actor: Actor, tenantId: string, dedupeKey: string) {
+  return await settle(state.persistence.webhooks.markApplied(actor, tenantId, dedupeKey));
 }
 
-export function recordTouchpoint(
+export async function recordTouchpoint(
   state: OrchestratorState,
   actor: Actor,
   input: Parameters<CommercePersistence["attribution"]["saveTouchpoint"]>[1],
 ) {
-  return state.persistence.attribution.saveTouchpoint(actor, input);
+  return await settle(state.persistence.attribution.saveTouchpoint(actor, input));
+}
+
+export function orchestratorPolicySubmission() {
+  const actor = { tenantId: "tenant-a", locationIds: null };
+  const scope = { offeringCategory: "GENERAL_GOODS" as const, experience: "WHATSAPP_CATALOG" as const };
+  const submission = {
+    kind: "AUTHORIZED_PROCESS" as const,
+    processId: FIXTURE_PROCESS,
+    reference: FIXTURE_REFERENCE,
+    outcome: "VERIFIED" as const,
+    attestation: signPolicyAttestation(ORCHESTRATOR_POLICY_KEY, {
+      tenantId: "tenant-a",
+      offeringCategory: "GENERAL_GOODS" as const,
+      experience: "WHATSAPP_CATALOG" as const,
+      processId: FIXTURE_PROCESS,
+      reference: FIXTURE_REFERENCE,
+      outcome: "VERIFIED" as const,
+    }),
+  };
+  return { actor, scope, submission };
 }
 
 /**
  * Test-only goods/catalog attestation for tenant-a.
  * The normal orchestrator constructor does not call this.
  * The HMAC is not Meta approval and does not approve YOLA FUN.
+ * PostgreSQL fixtures must await policy.submit. This helper stays synchronous for the memory store.
  */
 export function seedOrchestratorPolicyFixture(persistence: CommercePersistence): void {
-  const actor = { tenantId: "tenant-a", locationIds: null };
-  const saved = persistence.policy.submit(
-    actor,
-    "tenant-a",
-    { offeringCategory: "GENERAL_GOODS", experience: "WHATSAPP_CATALOG" },
-    {
-      kind: "AUTHORIZED_PROCESS",
-      processId: FIXTURE_PROCESS,
-      reference: FIXTURE_REFERENCE,
-      outcome: "VERIFIED",
-      attestation: signPolicyAttestation(ORCHESTRATOR_POLICY_KEY, {
-        tenantId: "tenant-a",
-        offeringCategory: "GENERAL_GOODS",
-        experience: "WHATSAPP_CATALOG",
-        processId: FIXTURE_PROCESS,
-        reference: FIXTURE_REFERENCE,
-        outcome: "VERIFIED",
-      }),
-    },
-  );
+  const fixture = orchestratorPolicySubmission();
+  const saved = persistence.policy.submit(fixture.actor, fixture.actor.tenantId, fixture.scope, fixture.submission);
+  if (saved instanceof Promise) {
+    throw new Error("PostgreSQL policy fixtures are async. Await persistence.policy.submit(orchestratorPolicySubmission()).");
+  }
   if (!saved.ok) throw new Error(`Compatibility policy fixture was rejected: ${saved.code}`);
 }
 
 function replayReserve(
-  snap: ReturnType<CommercePersistence["exportSnapshot"]>,
+  snap: PersistenceSnapshot,
   command: ReserveCommand,
   hash: string,
 ): ReserveResult | null {
@@ -614,7 +636,7 @@ function replayReserve(
  * Keeps the claim envelope when the provider may already have a reservation.
  * Does not call finishDenied and does not call the provider.
  */
-function holdUnresolved(
+async function holdUnresolved(
   ports: CommercePersistence,
   command: ReserveCommand,
   hash: string,
@@ -622,9 +644,9 @@ function holdUnresolved(
   code: ReserveResult["code"],
   message: string,
   deps: { now: string; crash?: OrchestratorCrash },
-): ReserveResult {
-  const persisted = ports.runAtomic((draft): PortResult<unknown> => {
-    const timeout = draft.idempotency.recordTimeout(command.actor, {
+): Promise<ReserveResult> {
+  const persisted = await settle(ports.runAtomic(async (draft) => {
+    const timeout = await settle(draft.idempotency.recordTimeout(command.actor, {
       tenantId: command.tenantId,
       locationId: command.locationId,
       providerId: command.providerId,
@@ -637,23 +659,23 @@ function holdUnresolved(
       category: command.category,
       offeringId: command.offeringId,
       startsAt: command.startsAt,
-    });
+    }));
     if (!timeout.ok) return timeout;
     if (timeout.value.absenceVerified) {
-      const cleared = draft.idempotency.clearAbsence(command.actor, command.tenantId, command.idempotencyKey);
+      const cleared = await settle(draft.idempotency.clearAbsence(command.actor, command.tenantId, command.idempotencyKey));
       if (!cleared.ok) return cleared;
     }
-    const intent = saveIntent(draft, command);
+    const intent = await saveIntent(draft, command);
     if (!intent.ok) return intent;
     const eventType = code === "TIMEOUT" ? "provider.timeout" : "provider.uncertain";
     return appendEvent(draft, command.actor, command.tenantId, transactionRef, eventType, deps.now, {
       providerId: command.providerId,
       code,
     });
-  });
+  }));
   if (!persisted.ok) return failure(asReserveCode(persisted.code), persisted.message, false);
   deps.crash?.afterTimeout?.();
-  const transaction = findTransaction(ports.exportSnapshot(), command.tenantId, transactionRef);
+  const transaction = findTransaction(await settle(ports.exportSnapshot()), command.tenantId, transactionRef);
   if (!transaction) return unresolved(code, message, null);
   return unresolved(code, message, publicTransaction(transaction));
 }
@@ -662,19 +684,19 @@ function mayHaveCommitted(failure: { outcomeCertainty?: OutcomeCertainty }): boo
   return failure.outcomeCertainty !== "NO_COMMIT";
 }
 
-function deny(ports: CommercePersistence, command: ReserveCommand, hash: string, code: ReserveResult["code"], message: string): ReserveResult {
-  const saved = ports.idempotency.finishDenied(command.actor, {
+async function deny(ports: CommercePersistence, command: ReserveCommand, hash: string, code: ReserveResult["code"], message: string): Promise<ReserveResult> {
+  const saved = await settle(ports.idempotency.finishDenied(command.actor, {
     tenantId: command.tenantId,
     locationId: command.locationId,
     idempotencyKey: command.idempotencyKey,
     requestHash: hash,
     outcomeCode: code,
-  });
+  }));
   if (!saved.ok) return failure(asReserveCode(saved.code), saved.message, false);
   return failure(code, message, false);
 }
 
-function adoptProviderBooking(
+async function adoptProviderBooking(
   ports: CommercePersistence,
   actor: Actor,
   pending: StoredInflight,
@@ -682,9 +704,9 @@ function adoptProviderBooking(
   data: { bookingRef: string; state: BookingState; slotKey: string; providerReference: string | null; referenceAuthoritative: boolean },
   now: string,
   crash?: OrchestratorCrash,
-): ReserveResult {
+): Promise<ReserveResult> {
   if (data.slotKey !== pending.slotKey) {
-    const transaction = findTransaction(ports.exportSnapshot(), pending.tenantId, pending.transactionRef);
+    const transaction = findTransaction(await settle(ports.exportSnapshot()), pending.tenantId, pending.transactionRef);
     return unresolved(
       "RECONCILIATION_REQUIRED",
       "The recovered booking does not match the original request. No second booking was authorized.",
@@ -693,7 +715,7 @@ function adoptProviderBooking(
   }
   const external = mode === "EXTERNAL_API" || mode === "EXTERNAL_CHECKOUT";
   if ((data.state === "CONFIRMED" || data.state === "HELD") && external && !data.providerReference) {
-    const transaction = findTransaction(ports.exportSnapshot(), pending.tenantId, pending.transactionRef);
+    const transaction = findTransaction(await settle(ports.exportSnapshot()), pending.tenantId, pending.transactionRef);
     const result = failure("MISSING_REFERENCE", "The external provider did not return a booking reference.", false);
     result.resolutionRequired = true;
     result.transaction = transaction ? publicTransaction(transaction) : null;
@@ -701,14 +723,14 @@ function adoptProviderBooking(
   }
   const request = requestFromInflight(pending);
   crash?.beforeAdopt?.();
-  const persisted = ports.runAtomic((draft): PortResult<{ transaction: StoredTransaction; booking: StoredBooking }> => {
-    const noted = draft.idempotency.noteFound(actor, pending.tenantId, pending.idempotencyKey, {
+  const persisted = await settle(ports.runAtomic(async (draft) => {
+    const noted = await settle(draft.idempotency.noteFound(actor, pending.tenantId, pending.idempotencyKey, {
       providerId: pending.providerId,
       locationId: pending.locationId,
       bookingRef: data.bookingRef,
-    });
+    }));
     if (!noted.ok) return noted;
-    const opened = draft.bookings.openReservation(
+    const opened = await settle(draft.bookings.openReservation(
       reservationDraft({
         command: {
           actor,
@@ -732,9 +754,9 @@ function adoptProviderBooking(
         referenceAuthoritative: data.referenceAuthoritative,
         now,
       }),
-    );
+    ));
     if (!opened.ok) return opened;
-    const intent = saveIntent(draft, {
+    const intent = await saveIntent(draft, {
       actor,
       tenantId: pending.tenantId,
       locationId: pending.locationId,
@@ -742,14 +764,14 @@ function adoptProviderBooking(
       experience: pending.experience,
     });
     if (!intent.ok) return intent;
-    const appended = appendEvent(draft, actor, pending.tenantId, pending.transactionRef, "booking.recovered", now, {
+    const appended = await appendEvent(draft, actor, pending.tenantId, pending.transactionRef, "booking.recovered", now, {
       state: opened.value.booking.state,
     });
     if (!appended.ok) return appended;
     return opened;
-  });
+  }));
   if (!persisted.ok) {
-    const transaction = findTransaction(ports.exportSnapshot(), pending.tenantId, pending.transactionRef);
+    const transaction = findTransaction(await settle(ports.exportSnapshot()), pending.tenantId, pending.transactionRef);
     const result = failure(asReserveCode(persisted.code), persisted.message, false);
     result.resolutionRequired = true;
     result.transaction = transaction ? publicTransaction(transaction) : null;
@@ -761,23 +783,23 @@ function adoptProviderBooking(
   };
 }
 
-function failTransaction(
+async function failTransaction(
   ports: CommercePersistence,
   actor: Actor,
   tenantId: string,
   transactionRef: string,
-): PortResult<StoredTransaction> {
-  return ports.runAtomic((draft) => {
-    const current = findTransaction(draft.exportSnapshot(), tenantId, transactionRef);
+): Promise<PortResult<StoredTransaction>> {
+  return await settle(ports.runAtomic(async (draft) => {
+    const current = findTransaction(await settle(draft.exportSnapshot()), tenantId, transactionRef);
     if (!current) return { ok: false, code: "NOT_FOUND", message: "Transaction not found." };
     if (current.state === "FAILED") return { ok: true, replay: true, value: current };
-    return draft.transactions.compareAndSwap(actor, {
+    return settle(draft.transactions.compareAndSwap(actor, {
       tenantId,
       transactionRef,
       expectedVersion: current.version,
       state: "FAILED",
-    });
-  });
+    }));
+  }));
 }
 
 function reservationDraft(input: {
@@ -816,12 +838,12 @@ function reservationDraft(input: {
   };
 }
 
-function ensureBookingConnection(
+async function ensureBookingConnection(
   ports: CommercePersistence,
   command: ReserveCommand,
   capabilities: { providerId: string; supportsHold: boolean; guaranteesIdempotency: boolean },
   mode: BookingProviderMode,
-): PortResult<unknown> {
+): Promise<PortResult<unknown>> {
   const issues = mode === "NATIVE" || mode === "EXTERNAL_API";
   const connection: ConnectionCapabilities = {
     providerId: capabilities.providerId,
@@ -832,14 +854,14 @@ function ensureBookingConnection(
     holdExpiryOwner: capabilities.supportsHold ? "PROVIDER" : "NONE",
     issuesAuthoritativeReference: issues,
   };
-  return ports.connections.register(command.actor, {
+  return await settle(ports.connections.register(command.actor, {
     tenantId: command.tenantId,
     locationId: command.locationId,
     providerId: command.providerId,
     kind: "BOOKING",
     mode,
     capabilities: connection,
-  });
+  }));
 }
 
 function paymentCapabilities(providerId: string): ConnectionCapabilities {
@@ -854,11 +876,11 @@ function paymentCapabilities(providerId: string): ConnectionCapabilities {
   };
 }
 
-function saveIntent(
+async function saveIntent(
   ports: CommercePersistence,
   command: { actor: Actor; tenantId: string; locationId: string; idempotencyKey: string; experience: CustomerExperience },
 ) {
-  return ports.intents.save(command.actor, {
+  return await settle(ports.intents.save(command.actor, {
     intentRef: refFromMaterial("CIN", `${command.tenantId}:${command.idempotencyKey}`),
     tenantId: command.tenantId,
     locationId: command.locationId,
@@ -867,10 +889,10 @@ function saveIntent(
     qualified: false,
     customerRef: null,
     commerceOrderRef: null,
-  });
+  }));
 }
 
-function appendEvent(
+async function appendEvent(
   ports: CommercePersistence,
   actor: Actor,
   tenantId: string,
@@ -879,18 +901,18 @@ function appendEvent(
   at: string,
   payload: Record<string, string | number | boolean | null>,
 ) {
-  const count = ports.exportSnapshot().events.filter((row) => row.tenantId === tenantId && row.transactionRef === transactionRef).length;
-  return ports.events.append(actor, {
+  const count = (await settle(ports.exportSnapshot())).events.filter((row) => row.tenantId === tenantId && row.transactionRef === transactionRef).length;
+  return await settle(ports.events.append(actor, {
     eventId: refFromMaterial("CEV", `${transactionRef}:${type}:${count}`),
     tenantId,
     transactionRef,
     type,
     at,
     payload,
-  });
+  }));
 }
 
-function attested(snap: ReturnType<CommercePersistence["exportSnapshot"]>, command: ReserveCommand): boolean {
+function attested(snap: PersistenceSnapshot, command: ReserveCommand): boolean {
   const row = snap.policyEvidence.find(
     (item) => item.tenantId === command.tenantId && item.offeringCategory === command.category && item.experience === command.experience,
   );
@@ -931,16 +953,16 @@ function requestFromInflight(pending: StoredInflight) {
   };
 }
 
-function bookingForTenant(snap: ReturnType<CommercePersistence["exportSnapshot"]>, tenantId: string, bookingRef: string) {
+function bookingForTenant(snap: PersistenceSnapshot, tenantId: string, bookingRef: string) {
   return snap.bookings.find((row) => row.tenantId === tenantId && row.bookingRef === bookingRef);
 }
 
-function transactionForTenant(snap: ReturnType<CommercePersistence["exportSnapshot"]>, tenantId: string, transactionRef: string) {
+function transactionForTenant(snap: PersistenceSnapshot, tenantId: string, transactionRef: string) {
   return snap.transactions.find((row) => row.tenantId === tenantId && row.transactionRef === transactionRef);
 }
 
 function foreignBookingCode(
-  snap: ReturnType<CommercePersistence["exportSnapshot"]>,
+  snap: PersistenceSnapshot,
   tenantId: string,
   bookingRef: string,
 ): "NOT_FOUND" | "CROSS_TENANT" {
@@ -948,22 +970,22 @@ function foreignBookingCode(
 }
 
 function foreignTransactionCode(
-  snap: ReturnType<CommercePersistence["exportSnapshot"]>,
+  snap: PersistenceSnapshot,
   tenantId: string,
   transactionRef: string,
 ): "NOT_FOUND" | "CROSS_TENANT" {
   return snap.transactions.some((row) => row.transactionRef === transactionRef && row.tenantId !== tenantId) ? "CROSS_TENANT" : "NOT_FOUND";
 }
 
-function findInflight(snap: ReturnType<CommercePersistence["exportSnapshot"]>, tenantId: string, idempotencyKey: string) {
+function findInflight(snap: PersistenceSnapshot, tenantId: string, idempotencyKey: string) {
   return snap.inflight.find((row) => row.tenantId === tenantId && row.idempotencyKey === idempotencyKey);
 }
 
-function findTransaction(snap: ReturnType<CommercePersistence["exportSnapshot"]>, tenantId: string, transactionRef: string) {
+function findTransaction(snap: PersistenceSnapshot, tenantId: string, transactionRef: string) {
   return snap.transactions.find((row) => row.tenantId === tenantId && row.transactionRef === transactionRef);
 }
 
-function findBookingForTransaction(snap: ReturnType<CommercePersistence["exportSnapshot"]>, transaction: StoredTransaction) {
+function findBookingForTransaction(snap: PersistenceSnapshot, transaction: StoredTransaction) {
   return snap.bookings.find((row) => row.tenantId === transaction.tenantId && row.transactionRef === transaction.transactionRef);
 }
 
@@ -1100,25 +1122,25 @@ function failure(code: ReserveResult["code"], message: string, retryable: boolea
 
 function bookingView(persistence: CommercePersistence): Map<string, Booking> {
   const map = new Map<string, Booking>();
-  for (const row of persistence.exportSnapshot().bookings) map.set(row.bookingRef, publicBooking(row));
+  for (const row of syncSnapshot(persistence).bookings) map.set(row.bookingRef, publicBooking(row));
   return map;
 }
 
 function transactionView(persistence: CommercePersistence): Map<string, CommerceTransaction> {
   const map = new Map<string, CommerceTransaction>();
-  for (const row of persistence.exportSnapshot().transactions) map.set(row.transactionRef, publicTransaction(row));
+  for (const row of syncSnapshot(persistence).transactions) map.set(row.transactionRef, publicTransaction(row));
   return map;
 }
 
 function ledgerView(persistence: CommercePersistence): Map<string, PaymentLedger> {
   const map = new Map<string, PaymentLedger>();
-  for (const row of persistence.exportSnapshot().ledgers) map.set(`${row.tenantId}:${row.attemptRef}`, row.ledger);
+  for (const row of syncSnapshot(persistence).ledgers) map.set(`${row.tenantId}:${row.attemptRef}`, row.ledger);
   return map;
 }
 
 function attemptView(persistence: CommercePersistence): Map<string, StoredPaymentAttempt> {
   const map = new Map<string, StoredPaymentAttempt>();
-  for (const row of persistence.exportSnapshot().attempts) {
+  for (const row of syncSnapshot(persistence).attempts) {
     map.set(`${row.tenantId}:${row.attemptRef}`, {
       tenantId: row.tenantId,
       transactionRef: row.transactionRef,

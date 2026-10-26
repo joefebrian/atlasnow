@@ -98,6 +98,20 @@ model Tenant {
   commerceSyncJobs    CommerceSyncJob[]
   commerceOAuthNonces CommerceOAuthNonce[]
   commerceOrders      CommerceOrder[]
+  ccIntents           CcIntent[]                 @relation("CcIntentTenant")
+  ccTransactions      CcTransaction[]            @relation("CcTransactionTenant")
+  ccBookings          CcBooking[]                @relation("CcBookingTenant")
+  ccConnections       CcProviderConnection[]     @relation("CcConnectionTenant")
+  ccCredentials       CcProviderCredential[]     @relation("CcCredentialTenant")
+  ccExternalRefs      CcExternalRef[]            @relation("CcExternalRefTenant")
+  ccPaymentAttempts   CcPaymentAttempt[]         @relation("CcAttemptTenant")
+  ccIdempotency       CcIdempotency[]            @relation("CcIdempotencyTenant")
+  ccInflight          CcInflight[]               @relation("CcInflightTenant")
+  ccWebhooks          CcWebhookEvent[]           @relation("CcWebhookTenant")
+  ccTransactionEvents CcTransactionEvent[]       @relation("CcEventTenant")
+  ccTouchpoints       CcTouchpoint[]             @relation("CcTouchpointTenant")
+  ccAggregates        CcAttributionAggregate[]   @relation("CcAggregateTenant")
+  ccPolicyEvidence    CcPolicyEvidence[]         @relation("CcPolicyTenant")
 
   @@index([type, status])
   @@index([agencyId])
@@ -235,12 +249,22 @@ model Location {
   loyaltyGoEvents     LoyaltyGoEvent[]
   commerceOutlets     CommerceProductOutlet[]
   commerceOrders      CommerceOrder[]
+  ccIntents           CcIntent[]               @relation("CcIntentLocation")
+  ccTransactions      CcTransaction[]          @relation("CcTransactionLocation")
+  ccBookings          CcBooking[]              @relation("CcBookingLocation")
+  ccConnections       CcProviderConnection[]   @relation("CcConnectionLocation")
+  ccExternalRefs      CcExternalRef[]          @relation("CcExternalRefLocation")
+  ccPaymentAttempts   CcPaymentAttempt[]       @relation("CcAttemptLocation")
+  ccInflight          CcInflight[]             @relation("CcInflightLocation")
+  ccTouchpoints       CcTouchpoint[]           @relation("CcTouchpointLocation")
+  ccAggregates        CcAttributionAggregate[] @relation("CcAggregateLocation")
 
   @@index([tenantId, status])
   @@index([tenantId, city])
   @@index([tenantId, readiness])
   @@index([tenantId, kind])
   @@unique([tenantId, code])
+  @@unique([tenantId, id], map: "Location_tenant_id_key")
 }
 
 /// Google Business Profile (Maps) review — portfolio inbox (S7 foundation).
@@ -1264,4 +1288,310 @@ model CommerceOrderLine {
 
   @@index([tenantId])
   @@index([orderId])
+}
+
+/// Conversational commerce. Not CommerceOrder and not CommerceConnection.
+/// Live-slot uniqueness is per provider. It does not reserve capacity across booking systems.
+/// Financial amounts are BIGINT. The adapter rejects values outside Number.MAX_SAFE_INTEGER.
+
+model CcIntent {
+  id               String  @id
+  tenantId         String
+  locationId       String?
+  intentRef        String
+  experience       String
+  intentType       String
+  qualified        Boolean
+  customerRef      String?
+  commerceOrderRef String?
+  version          Int
+
+  tenant   Tenant    @relation("CcIntentTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location Location? @relation("CcIntentLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, intentRef])
+}
+
+model CcTransaction {
+  tenantId       String
+  transactionRef String
+  locationId     String?
+  intentRef      String?
+  providerId     String
+  state          String
+  bookingRef     String?
+  orderRef       String?
+  paymentStatus  String
+  verifiedPaid   Boolean
+  version        Int
+
+  tenant      Tenant              @relation("CcTransactionTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location    Location?           @relation("CcTransactionLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+  bookings    CcBooking[]
+  attempts    CcPaymentAttempt[]
+  idempotency CcIdempotency[]
+  inflight    CcInflight[]
+  events      CcTransactionEvent[]
+
+  @@id([tenantId, transactionRef])
+}
+
+model CcBooking {
+  tenantId               String
+  bookingRef             String
+  locationId             String
+  transactionRef         String
+  providerId             String
+  providerMode           String
+  slotKey                String
+  state                  String
+  providerReference      String?
+  referenceAuthoritative Boolean
+  idempotencyKey         String
+  holdExpiresAt          DateTime?
+  holdExpiryOwner        String
+  nativeExpiryPolicyId   String?
+  pendingSlotKey         String?
+  version                Int
+
+  tenant      Tenant        @relation("CcBookingTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location    Location      @relation("CcBookingLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+  transaction CcTransaction @relation(fields: [tenantId, transactionRef], references: [tenantId, transactionRef], onDelete: Restrict)
+
+  @@id([tenantId, bookingRef])
+  @@unique([tenantId, providerId, idempotencyKey])
+}
+
+model CcProviderConnection {
+  connectionId     String  @id
+  tenantId         String
+  locationId       String?
+  providerId       String
+  kind             String
+  mode             String
+  capabilities     Json
+  status           String
+  health           String
+  lastCheckedAt    DateTime?
+  credentialRef    String?
+  webhookSecretRef String?
+  version          Int
+
+  tenant      Tenant                 @relation("CcConnectionTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location    Location?              @relation("CcConnectionLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+  credentials CcProviderCredential[]
+  webhooks    CcWebhookEvent[]
+
+  @@unique([tenantId, connectionId])
+}
+
+model CcProviderCredential {
+  credentialRef   String    @id
+  tenantId        String
+  connectionId    String
+  purpose         String
+  keyVersion      Int
+  status          String
+  ciphertext      String?
+  rotatedFromRef  String?
+  revokedAt       DateTime?
+
+  tenant     Tenant               @relation("CcCredentialTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  connection CcProviderConnection @relation(fields: [tenantId, connectionId], references: [tenantId, connectionId], onDelete: Restrict)
+}
+
+model CcExternalRef {
+  tenantId   String
+  locationId String?
+  owner      String
+  ownerRef   String
+  providerId String
+  externalId String
+
+  tenant   Tenant    @relation("CcExternalRefTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location Location? @relation("CcExternalRefLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+
+  @@id([tenantId, providerId, owner, externalId])
+}
+
+model CcPaymentAttempt {
+  tenantId          String
+  attemptRef        String
+  locationId        String?
+  transactionRef    String
+  providerId        String
+  providerMode      String
+  expectedAmountIdr BigInt
+  currency          String
+  version           Int
+
+  tenant      Tenant           @relation("CcAttemptTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location    Location?        @relation("CcAttemptLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+  transaction CcTransaction    @relation(fields: [tenantId, transactionRef], references: [tenantId, transactionRef], onDelete: Restrict)
+  ledger      CcPaymentLedger?
+  events      CcPaymentEvent[]
+
+  @@id([tenantId, attemptRef])
+}
+
+model CcPaymentLedger {
+  tenantId          String
+  attemptRef        String
+  providerId        String
+  transactionRef    String
+  status            String
+  amountIdr         BigInt?
+  refundedIdr       BigInt  @default(0)
+  verifiedPaid      Boolean
+  providerReference String?
+  detail            Json
+  version           Int
+
+  attempt CcPaymentAttempt @relation(fields: [tenantId, attemptRef], references: [tenantId, attemptRef], onDelete: Restrict)
+
+  @@id([tenantId, attemptRef])
+}
+
+model CcPaymentEvent {
+  tenantId          String
+  attemptRef        String
+  eventId           String
+  type              String
+  amountIdr         BigInt
+  providerReference String
+  occurredAt        DateTime
+  sequence          Int?
+
+  attempt CcPaymentAttempt @relation(fields: [tenantId, attemptRef], references: [tenantId, attemptRef], onDelete: Restrict)
+
+  @@id([tenantId, attemptRef, eventId])
+}
+
+model CcIdempotency {
+  tenantId       String
+  scope          String
+  idempotencyKey String
+  requestHash    String
+  status         String
+  transactionRef String?
+  outcomeCode    String?
+  version        Int
+
+  tenant      Tenant         @relation("CcIdempotencyTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  transaction CcTransaction? @relation(fields: [tenantId, transactionRef], references: [tenantId, transactionRef], onDelete: Restrict)
+
+  @@id([tenantId, scope, idempotencyKey])
+}
+
+model CcInflight {
+  tenantId          String
+  idempotencyKey    String
+  locationId        String
+  providerId        String
+  requestHash       String
+  slotKey           String
+  transactionRef    String
+  merchantConfirmed Boolean
+  experience        String
+  category          String
+  offeringId        String
+  startsAt          String
+  absenceVerified   Boolean
+  adoptBookingRef   String?
+  version           Int
+
+  tenant      Tenant        @relation("CcInflightTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location    Location      @relation("CcInflightLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+  transaction CcTransaction @relation(fields: [tenantId, transactionRef], references: [tenantId, transactionRef], onDelete: Restrict)
+
+  @@id([tenantId, idempotencyKey])
+}
+
+model CcWebhookEvent {
+  connectionId String
+  eventId      String
+  dedupeKey    String @unique
+  tenantId     String
+  providerId   String
+  eventType    String
+  status       String
+  version      Int
+
+  tenant     Tenant               @relation("CcWebhookTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  connection CcProviderConnection @relation(fields: [tenantId, connectionId], references: [tenantId, connectionId], onDelete: Restrict)
+
+  @@id([connectionId, eventId])
+}
+
+model CcTransactionEvent {
+  tenantId       String
+  eventId        String
+  transactionRef String
+  type           String
+  at             DateTime
+  payload        Json
+
+  tenant      Tenant        @relation("CcEventTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  transaction CcTransaction @relation(fields: [tenantId, transactionRef], references: [tenantId, transactionRef], onDelete: Restrict)
+
+  @@id([tenantId, eventId])
+}
+
+model CcTouchpoint {
+  touchpointId  String    @id
+  tenantId      String
+  locationId    String?
+  transactionRef String?
+  intentRef     String?
+  bookingRef    String?
+  attemptRef    String?
+  channel       String
+  confidence    String
+  userLevel     Boolean
+  ctwaClid      String?
+  gclid         String?
+  gbraid        String?
+  wbraid        String?
+  utmSource     String?
+  utmMedium     String?
+  utmCampaign   String?
+  qrCampaignId  String?
+  erasedAt      DateTime?
+  erasureReason String?
+  version       Int
+
+  tenant   Tenant    @relation("CcTouchpointTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location Location? @relation("CcTouchpointLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, transactionRef])
+}
+
+model CcAttributionAggregate {
+  aggregateId String
+  tenantId    String
+  locationId  String?
+  channel     String
+  count       Int
+  version     Int
+
+  tenant   Tenant    @relation("CcAggregateTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+  location Location? @relation("CcAggregateLocation", fields: [tenantId, locationId], references: [tenantId, id], onDelete: Restrict)
+
+  @@id([aggregateId])
+}
+
+model CcPolicyEvidence {
+  tenantId         String
+  offeringCategory String
+  experience       String
+  source           String
+  status           String
+  reference        String
+  validatedBy      String?
+  integrity        String?
+  version          Int
+
+  tenant Tenant @relation("CcPolicyTenant", fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@id([tenantId, offeringCategory, experience])
 }

@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — Conversational M2 persistence is QA-only
+
+PostgreSQL stores conversational bookings and payments only in a disposable `atlasnow_cc_qa_*` database. Production `migrate deploy` is a separate approval. Amounts are `BIGINT`. Writes stop at the catalog ceiling of 1000000000 whole rupiah. Reads reject values above `Number.MAX_SAFE_INTEGER`. A live slot is unique per provider, not across booking systems. `CcIdempotency.transactionRef` may be null when the provider definitely did not commit. Payment trust stays in the in-process HMAC, not in the database adapter. AtlasNow is not the merchant of record.
+
 ## 2026-10-23 — Commerce is multi-tenant, not a single pilot
 
 The first build is a merchant product master. Pilot names stay out of the code. AtlasNow SKUs are the source of truth.
@@ -97,6 +101,10 @@ The poll worker loads the product again after `check_batch_request_status` and t
 ## 2026-10-23 — Catalog polling has an entry and stays off
 
 `POST /api/internal/commerce/poll` accepts a bearer `COMMERCE_POLL_SECRET` and polls only when `COMMERCE_CATALOG_POLL_ENABLED=true`. Both are unset. The server process does not start a timer. The row lock stays with the worker until that tick returns.
+
+## 2026-10-26 — Conversational commerce M2 schema review is not a migration
+
+The PostgreSQL proposal is `docs/CONVERSATIONAL_COMMERCE_M2_SCHEMA_REVIEW.md`. It keeps the M1C.2 ports, adds the location unique key the composite foreign keys need, and fills the inflight and idempotency columns the ports already store. Claim, booking persist, uncertain outcome, and payment settlement are each one database transaction. Provider calls stay outside those transactions. `settleConcurrent` is not the concurrency proof. QA uses a disposable localhost database named `atlasnow_cc_qa`. The two migration folders are not created. `prisma/schema.prisma` is unchanged. PR #1 and PR #2 stay open and unmerged. A SQL adapter waits for a separate approval.
 
 ## 2026-10-26 — Conversational commerce M1C.2 separates uncertain outcomes from tenant lookups
 

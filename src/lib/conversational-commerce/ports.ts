@@ -1,6 +1,6 @@
 /**
  * Persistence ports for conversational commerce.
- * In-memory adapters live in memory-store.ts. No database adapter is authorized.
+ * The memory adapter is memory-store.ts. The QA PostgreSQL adapter is postgres-store.ts.
  */
 
 import type { Actor } from "./auth";
@@ -50,6 +50,8 @@ export type PortCode = (typeof PORT_CODES)[number];
 export type PortFailure = { ok: false; code: PortCode; message: string };
 export type PortSuccess<T> = { ok: true; replay: boolean; value: T };
 export type PortResult<T> = PortSuccess<T> | PortFailure;
+/** Memory methods return a value. The PostgreSQL adapter returns a promise. Callers await both. */
+export type MaybeAsync<T> = T | Promise<T>;
 
 export type HoldExpiryOwner = "PROVIDER" | "NATIVE_POLICY" | "NONE";
 export type ConnectionKind = "BOOKING" | "PAYMENT";
@@ -315,36 +317,36 @@ export type ReservationDraft = {
 export type ConcurrentConflict = { code: PortCode; key: string };
 
 export interface IntentRepository {
-  save(actor: Actor, intent: CommerceIntent): PortResult<StoredIntent>;
-  read(actor: Actor, tenantId: string, intentRef: string): PortResult<StoredIntent>;
+  save(actor: Actor, intent: CommerceIntent): MaybeAsync<PortResult<StoredIntent>>;
+  read(actor: Actor, tenantId: string, intentRef: string): MaybeAsync<PortResult<StoredIntent>>;
 }
 
 export interface TransactionRepository {
-  read(actor: Actor, tenantId: string, transactionRef: string): PortResult<StoredTransaction>;
+  read(actor: Actor, tenantId: string, transactionRef: string): MaybeAsync<PortResult<StoredTransaction>>;
   compareAndSwap(
     actor: Actor,
     input: { tenantId: string; transactionRef: string; expectedVersion: number; state?: TransactionState },
-  ): PortResult<StoredTransaction>;
+  ): MaybeAsync<PortResult<StoredTransaction>>;
 }
 
 export interface BookingRepository {
-  read(actor: Actor, tenantId: string, bookingRef: string): PortResult<StoredBooking>;
-  list(actor: Actor, tenantId: string, locationId: string | null): PortResult<StoredBooking[]>;
-  openReservation(draft: ReservationDraft): PortResult<{ transaction: StoredTransaction; booking: StoredBooking }>;
+  read(actor: Actor, tenantId: string, bookingRef: string): MaybeAsync<PortResult<StoredBooking>>;
+  list(actor: Actor, tenantId: string, locationId: string | null): MaybeAsync<PortResult<StoredBooking[]>>;
+  openReservation(draft: ReservationDraft): MaybeAsync<PortResult<{ transaction: StoredTransaction; booking: StoredBooking }>>;
   transition(
     actor: Actor,
     input: { tenantId: string; bookingRef: string; expectedVersion: number; to: BookingState; nowIso: string },
-  ): PortResult<StoredBooking>;
+  ): MaybeAsync<PortResult<StoredBooking>>;
   requestReschedule(
     actor: Actor,
     input: { tenantId: string; bookingRef: string; expectedVersion: number; nextSlotKey: string },
-  ): PortResult<StoredBooking>;
+  ): MaybeAsync<PortResult<StoredBooking>>;
   commitReschedule(
     actor: Actor,
     input: { tenantId: string; bookingRef: string; expectedVersion: number },
-  ): PortResult<StoredBooking>;
-  expireDue(actor: Actor, tenantId: string, locationId: string, nowIso: string): PortResult<{ expired: number; leftUnset: number }>;
-  findByExternalRef(actor: Actor, tenantId: string, providerId: string, externalId: string): PortResult<StoredBooking>;
+  ): MaybeAsync<PortResult<StoredBooking>>;
+  expireDue(actor: Actor, tenantId: string, locationId: string, nowIso: string): MaybeAsync<PortResult<{ expired: number; leftUnset: number }>>;
+  findByExternalRef(actor: Actor, tenantId: string, providerId: string, externalId: string): MaybeAsync<PortResult<StoredBooking>>;
 }
 
 export interface ConnectionRepository {
@@ -358,8 +360,8 @@ export interface ConnectionRepository {
       mode: BookingProviderMode | PaymentProviderMode;
       capabilities: ConnectionCapabilities;
     },
-  ): PortResult<StoredConnection>;
-  resolve(actor: Actor, tenantId: string, locationId: string | null, providerId: string, kind: ConnectionKind): PortResult<StoredConnection>;
+  ): MaybeAsync<PortResult<StoredConnection>>;
+  resolve(actor: Actor, tenantId: string, locationId: string | null, providerId: string, kind: ConnectionKind): MaybeAsync<PortResult<StoredConnection>>;
   registerCredential(
     actor: Actor,
     input: {
@@ -370,16 +372,16 @@ export interface ConnectionRepository {
       plaintext?: string;
       ciphertext?: string;
     },
-  ): PortResult<StoredCredential>;
+  ): MaybeAsync<PortResult<StoredCredential>>;
   rotateCredential(
     actor: Actor,
     input: { tenantId: string; connectionId: string; purpose: CredentialPurpose; credentialRef: string; plaintext?: string },
-  ): PortResult<StoredCredential>;
-  revokeCredential(actor: Actor, tenantId: string, credentialRef: string, revokedAt: string): PortResult<StoredCredential>;
+  ): MaybeAsync<PortResult<StoredCredential>>;
+  revokeCredential(actor: Actor, tenantId: string, credentialRef: string, revokedAt: string): MaybeAsync<PortResult<StoredCredential>>;
   reportHealth(
     actor: Actor,
     input: { tenantId: string; connectionId: string; expectedVersion: number; health: ConnectionHealth; at: string },
-  ): PortResult<StoredConnection>;
+  ): MaybeAsync<PortResult<StoredConnection>>;
 }
 
 export interface PaymentRepository {
@@ -394,7 +396,7 @@ export interface PaymentRepository {
       providerMode: PaymentProviderMode;
       expectedAmountIdr: number;
     },
-  ): PortResult<StoredAttempt>;
+  ): MaybeAsync<PortResult<StoredAttempt>>;
   /**
    * Privileged server-side settlement. A Commerce write permission is not enough.
    * The argument must be trusted evidence produced by trustPaymentNotice in this process.
@@ -404,7 +406,7 @@ export interface PaymentRepository {
    * authoritative API response before it asks trustPaymentNotice for evidence.
    * The in-process HMAC is not that verification.
    */
-  applyEvent(actor: Actor, evidence: TrustedPaymentEvidence): PortResult<{ ledger: PaymentLedger; effect: PaymentEffect; netRevenueIdr: number }>;
+  applyEvent(actor: Actor, evidence: TrustedPaymentEvidence): MaybeAsync<PortResult<{ ledger: PaymentLedger; effect: PaymentEffect; netRevenueIdr: number }>>;
   reconcileTerminal(
     actor: Actor,
     input: {
@@ -416,12 +418,12 @@ export interface PaymentRepository {
       satisfied: boolean;
       authoritativeRead: boolean;
     },
-  ): PortResult<{ ledger: PaymentLedger; netRevenueIdr: number }>;
-  net(actor: Actor, tenantId: string, transactionRef: string): PortResult<{ status: PaymentState; verifiedPaid: boolean; netRevenueIdr: number; refundedIdr: number; chargebackIdr: number }>;
+  ): MaybeAsync<PortResult<{ ledger: PaymentLedger; netRevenueIdr: number }>>;
+  net(actor: Actor, tenantId: string, transactionRef: string): MaybeAsync<PortResult<{ status: PaymentState; verifiedPaid: boolean; netRevenueIdr: number; refundedIdr: number; chargebackIdr: number }>>;
 }
 
 export interface IdempotencyRepository {
-  read(actor: Actor, tenantId: string, scope: IdempotencyScope, idempotencyKey: string): PortResult<StoredIdempotency>;
+  read(actor: Actor, tenantId: string, scope: IdempotencyScope, idempotencyKey: string): MaybeAsync<PortResult<StoredIdempotency>>;
   recordTimeout(
     actor: Actor,
     input: {
@@ -438,7 +440,7 @@ export interface IdempotencyRepository {
       offeringId?: string;
       startsAt?: string;
     },
-  ): PortResult<StoredInflight>;
+  ): MaybeAsync<PortResult<StoredInflight>>;
   /**
    * Atomically stores the idempotency row, the operation envelope, and a
    * PENDING_RESOLUTION transaction before any provider call.
@@ -463,7 +465,7 @@ export interface IdempotencyRepository {
       experience: CustomerExperience;
       category: OfferingCategory;
     },
-  ): PortResult<StoredIdempotency>;
+  ): MaybeAsync<PortResult<StoredIdempotency>>;
   /**
    * Closes a definitive no-commit denial. Does not create a booking.
    * An uncertain provider result must not call this. The envelope stays for reconciliation.
@@ -471,30 +473,30 @@ export interface IdempotencyRepository {
   finishDenied(
     actor: Actor,
     input: { tenantId: string; locationId: string; idempotencyKey: string; requestHash: string; outcomeCode: string },
-  ): PortResult<StoredIdempotency>;
+  ): MaybeAsync<PortResult<StoredIdempotency>>;
   /** Binds an unresolved inflight row to a booking the original provider already returned. */
   noteFound(
     actor: Actor,
     tenantId: string,
     idempotencyKey: string,
     found: { providerId: string; locationId: string; bookingRef: string },
-  ): PortResult<StoredInflight>;
+  ): MaybeAsync<PortResult<StoredInflight>>;
   /** Clears a proven absence after that one retry times out again. */
-  clearAbsence(actor: Actor, tenantId: string, idempotencyKey: string): PortResult<StoredInflight>;
-  noteAbsence(actor: Actor, tenantId: string, idempotencyKey: string, claim: AbsenceClaim): PortResult<StoredInflight>;
+  clearAbsence(actor: Actor, tenantId: string, idempotencyKey: string): MaybeAsync<PortResult<StoredInflight>>;
+  noteAbsence(actor: Actor, tenantId: string, idempotencyKey: string, claim: AbsenceClaim): MaybeAsync<PortResult<StoredInflight>>;
 }
 
 export interface WebhookRepository {
   accept(
     actor: Actor,
     input: { tenantId: string; connectionId: string; eventId: string; eventType: string },
-  ): PortResult<StoredWebhook>;
-  markApplied(actor: Actor, tenantId: string, dedupeKey: string): PortResult<StoredWebhook>;
+  ): MaybeAsync<PortResult<StoredWebhook>>;
+  markApplied(actor: Actor, tenantId: string, dedupeKey: string): MaybeAsync<PortResult<StoredWebhook>>;
 }
 
 export interface EventRepository {
-  append(actor: Actor, event: TransactionEvent): PortResult<StoredEvent>;
-  list(actor: Actor, tenantId: string, transactionRef: string): PortResult<StoredEvent[]>;
+  append(actor: Actor, event: TransactionEvent): MaybeAsync<PortResult<StoredEvent>>;
+  list(actor: Actor, tenantId: string, transactionRef: string): MaybeAsync<PortResult<StoredEvent[]>>;
 }
 
 export interface AttributionRepository {
@@ -519,22 +521,22 @@ export interface AttributionRepository {
       gscClicks?: number | null;
       gbpViews?: number | null;
     },
-  ): PortResult<StoredTouchpoint>;
+  ): MaybeAsync<PortResult<StoredTouchpoint>>;
   saveAggregate(
     actor: Actor,
     input: { tenantId: string; locationId: string | null; channel: "GOOGLE_SEARCH" | "GOOGLE_MAPS"; count: number },
-  ): PortResult<StoredAggregate>;
-  eraseIdentifiers(actor: Actor, tenantId: string, touchpointId: string, reason: string, erasedAt: string): PortResult<StoredTouchpoint>;
+  ): MaybeAsync<PortResult<StoredAggregate>>;
+  eraseIdentifiers(actor: Actor, tenantId: string, touchpointId: string, reason: string, erasedAt: string): MaybeAsync<PortResult<StoredTouchpoint>>;
   readClass(
     actor: Actor,
     tenantId: string,
     transactionRef: string,
-  ): PortResult<{ level: EvidenceLevel; countsAsRevenue: boolean; channel: AttributionChannel | null; confidence: AttributionConfidence | null }>;
+  ): MaybeAsync<PortResult<{ level: EvidenceLevel; countsAsRevenue: boolean; channel: AttributionChannel | null; confidence: AttributionConfidence | null }>>;
 }
 
 export interface PolicyRepository {
-  submit(actor: Actor, tenantId: string, scope: PolicyScope, submission: EvidenceSubmission): PortResult<StoredPolicyEvidence>;
-  read(actor: Actor, tenantId: string, scope: PolicyScope): PortResult<StoredPolicyEvidence>;
+  submit(actor: Actor, tenantId: string, scope: PolicyScope, submission: EvidenceSubmission): MaybeAsync<PortResult<StoredPolicyEvidence>>;
+  read(actor: Actor, tenantId: string, scope: PolicyScope): MaybeAsync<PortResult<StoredPolicyEvidence>>;
 }
 
 export interface CommercePersistence {
@@ -548,6 +550,6 @@ export interface CommercePersistence {
   events: EventRepository;
   attribution: AttributionRepository;
   policy: PolicyRepository;
-  runAtomic<T>(work: (ports: CommercePersistence) => PortResult<T>): PortResult<T>;
-  exportSnapshot(): PersistenceSnapshot;
+  runAtomic<T>(work: (ports: CommercePersistence) => MaybeAsync<PortResult<T>>): MaybeAsync<PortResult<T>>;
+  exportSnapshot(): MaybeAsync<PersistenceSnapshot>;
 }
