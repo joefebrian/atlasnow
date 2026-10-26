@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — M2.3 prepares the production migration inventory check
+
+The founder who administers the Biznet VPS is the operator. The read-only export is the six `_prisma_migrations` columns plus SHA-256 of `migration.sql` inside the running image. This session did not connect and did not receive the export. Commit `6efaa659` has 40 migration checksums. The two inbox folders have no approved file. The five later folders are in git and are not approved for production boot. Older written counts are not production evidence. Staging and production stay NO-GO.
+
 ## 2026-10-26 — M2.2 review correction: migrate deploy is not a history gate
 
 Prisma 5.22.0 `migrate deploy` on a disposable loopback database exited 0 after an applied migration folder was removed, applied a new pending migration, and left an unmigrated column in place. A second probe edited `migration.sql` after it was applied. `migrate deploy` and `migrate status` both exited 0. The stored checksum remained the SHA-256 of the original file. Production metadata is still NOT VERIFIED. An operator must export `migration_name`, `checksum`, `started_at`, `finished_at`, `rolled_back_at`, and `applied_steps_count` from `_prisma_migrations` with their own credentials. Startup must default to not migrating. That change is not in this review. Staging and production stay NO-GO.
