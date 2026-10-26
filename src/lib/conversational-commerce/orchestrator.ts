@@ -239,6 +239,7 @@ export async function reserve(
   deps.crash?.beforePersist?.();
 
   const persisted = await settle(ports.runAtomic(async (draft): Promise<PortResult<{ transaction: StoredTransaction; booking: StoredBooking }>> => {
+    await settle(draft.idempotency.read(command.actor, command.tenantId, "RESERVE", command.idempotencyKey));
     const inflight = findInflight(await settle(draft.exportSnapshot()), command.tenantId, command.idempotencyKey);
     if (inflight && !inflight.absenceVerified) {
       const noted = await settle(draft.idempotency.noteFound(command.actor, command.tenantId, command.idempotencyKey, {
@@ -790,6 +791,7 @@ async function failTransaction(
   transactionRef: string,
 ): Promise<PortResult<StoredTransaction>> {
   return await settle(ports.runAtomic(async (draft) => {
+    await settle(draft.transactions.read(actor, tenantId, transactionRef));
     const current = findTransaction(await settle(draft.exportSnapshot()), tenantId, transactionRef);
     if (!current) return { ok: false, code: "NOT_FOUND", message: "Transaction not found." };
     if (current.state === "FAILED") return { ok: true, replay: true, value: current };

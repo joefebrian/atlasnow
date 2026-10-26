@@ -1846,7 +1846,7 @@ describe("existing commerce compatibility", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const files = readdirSync(here).filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"));
     assert.ok(files.includes("orchestrator.ts"));
-    const prismaFiles = new Set(["postgres-store.ts", "qa-database.ts"]);
+    const prismaFiles = new Set(["postgres-store.ts", "postgres-booking.ts", "qa-database.ts"]);
     for (const file of files) {
       const text = readFileSync(join(here, file), "utf8");
       if (!prismaFiles.has(file)) {

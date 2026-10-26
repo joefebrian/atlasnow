@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — Conversational M2.1A booking writes are row-level and QA-only
+
+Booking and idempotency writes lock the rows for that operation and apply the existing in-memory transitions. They do not take `pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))` and they do not delete and reinsert the `Cc*` tables. Claim stays `INSERT ... ON CONFLICT` plus `SELECT ... FOR UPDATE`. Payment, webhook, attribution, credential, and policy writes still use the QA snapshot rewrite. That path is not production ready and can overwrite a concurrent booking row. M2.1B has to replace it before the adapter is called production-grade. No production migration.
+
 ## 2026-10-26 — Conversational M2 persistence is QA-only
 
 PostgreSQL stores conversational bookings and payments only in a disposable `atlasnow_cc_qa_*` database. Production `migrate deploy` is a separate approval. Amounts are `BIGINT`. Writes stop at the catalog ceiling of 1000000000 whole rupiah. Reads reject values above `Number.MAX_SAFE_INTEGER`. A live slot is unique per provider, not across booking systems. `CcIdempotency.transactionRef` may be null when the provider definitely did not commit. Payment trust stays in the in-process HMAC, not in the database adapter. AtlasNow is not the merchant of record.

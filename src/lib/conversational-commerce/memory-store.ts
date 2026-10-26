@@ -72,12 +72,39 @@ export function signPolicyAttestation(
     .digest("hex");
 }
 
+const rowAbsorbers = new WeakMap<CommercePersistence, (partial: PersistenceSnapshot) => void>();
+
+/**
+ * Inserts rows the caller has not already loaded.
+ * A row that is already present stays as the in-memory copy, including uncommitted edits.
+ */
+export function absorbMissingRows(store: CommercePersistence, partial: PersistenceSnapshot): void {
+  const absorb = rowAbsorbers.get(store);
+  if (!absorb) throw new Error("Rows can only be absorbed into an in-memory commerce store.");
+  absorb(partial);
+}
+
+export function emptyPersistenceSnapshot(): PersistenceSnapshot {
+  return emptySnapshot();
+}
+
+/** Copies rows whose identity is not already in `target`. Does not replace loaded rows. */
+export function mergeMissingRows(target: PersistenceSnapshot, partial: PersistenceSnapshot): void {
+  mergeMissing(target, partial);
+  normalizeLoadedSnapshot(target);
+}
+
 export function createMemoryCommerceStore(options: MemoryStoreOptions = {}): CommercePersistence {
   let state = options.snapshot ? cloneSnapshot(options.snapshot) : emptySnapshot();
   const policyValidatorKey = options.policyValidatorKey ?? "";
   normalizeLoadedSnapshot(state);
   sanitizePolicyEvidence(state, policyValidatorKey);
   const ports = {} as CommercePersistence;
+  rowAbsorbers.set(ports, (partial) => {
+    mergeMissing(state, partial);
+    normalizeLoadedSnapshot(state);
+    sanitizePolicyEvidence(state, policyValidatorKey);
+  });
 
   ports.intents = {
     save(actor, intent) {
@@ -1502,6 +1529,32 @@ function emptySnapshot(): PersistenceSnapshot {
 
 function cloneSnapshot(snapshot: PersistenceSnapshot): PersistenceSnapshot {
   return structuredClone(snapshot);
+}
+
+function mergeMissing(state: PersistenceSnapshot, partial: PersistenceSnapshot): void {
+  const add = <T>(rows: T[], incoming: readonly T[] | undefined, same: (left: T, right: T) => boolean) => {
+    if (!incoming) return;
+    for (const row of incoming) {
+      if (rows.some((item) => same(item, row))) continue;
+      rows.push(structuredClone(row));
+    }
+  };
+  add(state.transactions, partial.transactions, (left, right) => left.tenantId === right.tenantId && left.transactionRef === right.transactionRef);
+  add(state.bookings, partial.bookings, (left, right) => left.tenantId === right.tenantId && left.bookingRef === right.bookingRef);
+  add(state.idempotency, partial.idempotency, (left, right) => left.tenantId === right.tenantId && left.scope === right.scope && left.idempotencyKey === right.idempotencyKey);
+  add(state.inflight, partial.inflight, (left, right) => left.tenantId === right.tenantId && left.idempotencyKey === right.idempotencyKey);
+  add(state.intents, partial.intents, (left, right) => left.tenantId === right.tenantId && left.intentRef === right.intentRef);
+  add(state.events, partial.events, (left, right) => left.tenantId === right.tenantId && left.eventId === right.eventId);
+  add(state.externalRefs, partial.externalRefs, (left, right) => left.tenantId === right.tenantId && left.providerId === right.providerId && left.owner === right.owner && left.externalId === right.externalId);
+  add(state.connections, partial.connections, (left, right) => left.connectionId === right.connectionId);
+  add(state.credentials, partial.credentials, (left, right) => left.credentialRef === right.credentialRef);
+  add(state.policyEvidence, partial.policyEvidence, (left, right) => left.tenantId === right.tenantId && left.offeringCategory === right.offeringCategory && left.experience === right.experience);
+  add(state.attempts, partial.attempts, (left, right) => left.tenantId === right.tenantId && left.attemptRef === right.attemptRef);
+  add(state.ledgers, partial.ledgers, (left, right) => left.tenantId === right.tenantId && left.attemptRef === right.attemptRef);
+  add(state.ledgerEvents, partial.ledgerEvents, (left, right) => left.tenantId === right.tenantId && left.attemptRef === right.attemptRef && left.eventId === right.eventId);
+  add(state.webhooks, partial.webhooks, (left, right) => left.dedupeKey === right.dedupeKey);
+  add(state.touchpoints, partial.touchpoints, (left, right) => left.touchpointId === right.touchpointId);
+  add(state.aggregates, partial.aggregates, (left, right) => left.aggregateId === right.aggregateId);
 }
 
 function normalizeLoadedSnapshot(state: PersistenceSnapshot): void {

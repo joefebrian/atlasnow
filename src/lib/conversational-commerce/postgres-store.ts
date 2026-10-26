@@ -1,16 +1,18 @@
 /**
  * PostgreSQL CommercePersistence for a disposable QA database.
+ * Booking and idempotency writes lock only the rows for that operation.
  * Provider calls stay in the orchestrator, outside runAtomic.
- * Payment HMAC and gateway trust stay in payment.ts. This file only locks and stores.
+ * Payment HMAC and gateway trust stay in payment.ts. This file does not call a provider.
  * Live-slot uniqueness is per provider. It is not global capacity across booking systems.
+ * Payment, webhook, attribution, credential, and policy writes still use writeSnapshot.
+ * That path is NOT PRODUCTION READY and can overwrite concurrent booking rows. M2.1B replaces it.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
-import { authorize } from "./auth";
 import { AmountRejected, assertSafeSum, idrFromBigInt, idrToBigInt } from "./idr-amount";
 import { createMemoryCommerceStore } from "./memory-store";
 import { readTrustedPayment, type PaymentLedger, type VerifiedPaymentEvent } from "./payment";
+import { bindRowPersistence, commerceLive, mapDbError } from "./postgres-booking";
 import type { DisposableQaDatabase } from "./qa-database";
 import type {
   CommercePersistence,
@@ -38,9 +40,6 @@ import type {
 } from "./ports";
 
 type Db = PrismaClient | Prisma.TransactionClient;
-type Live = { mem: CommercePersistence };
-
-const liveStore = new AsyncLocalStorage<Live>();
 
 function fail(code: PortCode, message: string): PortFailure {
   return { ok: false, code, message };
@@ -66,24 +65,6 @@ function asDate(value: string | null): Date | null {
 
 function json(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
-}
-
-function mapDbError(error: unknown): PortFailure | null {
-  if (error instanceof AmountRejected) return fail("INVALID", error.message);
-  const message = error instanceof Error ? error.message : "";
-  if (message.includes("cc_location_mismatch")) return fail("SCOPE_MISMATCH", "Transaction location does not match the related row.");
-  if (message.includes("CcBooking_live_slot")) return fail("SLOT_CONFLICT", "That slot is already reserved for this provider.");
-  if (message.includes("CcBooking_provider_ref") || message.includes("CcPaymentLedger_provider_ref")) {
-    return fail("REFERENCE_CONFLICT", "That provider reference is already claimed.");
-  }
-  if (message.includes("CcPaymentLedger_one_live_capture")) return fail("ATTEMPT_CONFLICT", "This transaction already has a live capture.");
-  if (message.includes("CcProviderCredential_one_active")) return fail("DUPLICATE", "Rotate the active credential instead of registering a second one.");
-  if (message.includes("CcProviderConnection_scope")) return fail("DUPLICATE", "This connection is already registered.");
-  if (message.includes("violates foreign key") || message.includes("Foreign key constraint")) {
-    return fail("INVALID", "A referenced tenant, location, or transaction was rejected.");
-  }
-  if (message.includes("_amount_safe") || message.includes("_currency_idr")) return fail("INVALID", "Amount is not a safe whole rupiah value.");
-  return null;
 }
 
 function ledgerDetail(value: Prisma.JsonValue): Pick<PaymentLedger, "currency" | "appliedEventIds" | "rejectedEventIds" | "queued"> {
@@ -338,6 +319,12 @@ async function readSnapshot(db: Db): Promise<PersistenceSnapshot> {
   return snapshot;
 }
 
+/**
+ * NOT PRODUCTION READY.
+ * Deletes and reinserts every conversational row under one global advisory lock.
+ * Booking and idempotency writes do not call this. A later payment or webhook write can
+ * still overwrite booking rows committed by another worker. M2.1B removes this path.
+ */
 async function writeSnapshot(db: Db, snap: PersistenceSnapshot): Promise<void> {
   for (const row of snap.attempts) idrToBigInt(row.expectedAmountIdr);
   for (const row of snap.ledgers) {
@@ -494,24 +481,27 @@ export async function openPostgresCommerceStore(options: {
   const policyValidatorKey = options.policyValidatorKey ?? "";
   await qa.assertIdentity(client);
 
-  async function writeTransaction<T>(work: (tx: Db) => Promise<T>): Promise<T> {
+  async function begin<T>(advisory: boolean, work: (tx: Db) => Promise<T>): Promise<T> {
     return client.$transaction(async (tx) => {
       await qa.assertIdentity(tx);
       const level = await tx.$queryRaw<Array<{ isolation: string }>>`SELECT current_setting('transaction_isolation') AS isolation`;
       if (level[0]?.isolation !== "read committed") throw new Error("PostgreSQL transaction is not read committed.");
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))`;
+      if (advisory) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('atlasnow-cc'), hashtext('qa'))`;
+      }
       return work(tx);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, maxWait: 15_000, timeout: 20_000 });
   }
 
   async function mutate<T>(work: (mem: CommercePersistence) => MaybeAsync<PortResult<T>>): Promise<PortResult<T>> {
-    const existing = liveStore.getStore();
-    if (existing) return work(existing.mem);
+    const existing = commerceLive.getStore();
+    if (existing?.mode === "rows") throw new Error("A snapshot rewrite cannot run inside a booking transaction.");
+    if (existing?.mode === "snapshot") return work(existing.mem);
     try {
-      return await writeTransaction(async (tx) => {
+      return await begin(true, async (tx) => {
         const mem = createMemoryCommerceStore({ snapshot: await readSnapshot(tx), policyValidatorKey });
         const before = JSON.stringify(snapshotOf(mem));
-        const result = await liveStore.run({ mem }, () => work(mem));
+        const result = await commerceLive.run({ mode: "snapshot", mem }, () => work(mem));
         if (isFailure(result)) return result;
         const after = snapshotOf(mem);
         if (JSON.stringify(after) !== before) await writeSnapshot(tx, after);
@@ -522,104 +512,6 @@ export async function openPostgresCommerceStore(options: {
           if (refunded > BigInt(Number.MAX_SAFE_INTEGER)) throw new AmountRejected("Amount sum is not a safe whole rupiah value.");
         }
         return result;
-      });
-    } catch (error) {
-      const mapped = mapDbError(error);
-      if (mapped) return mapped;
-      throw error;
-    }
-  }
-
-  async function claim(actor: Parameters<CommercePersistence["idempotency"]["claim"]>[0], input: Parameters<CommercePersistence["idempotency"]["claim"]>[1]): Promise<PortResult<StoredIdempotency>> {
-    const existing = liveStore.getStore();
-    if (existing) return existing.mem.idempotency.claim(actor, input);
-    const allowed = authorize(actor, { tenantId: input.tenantId, locationId: input.locationId }, "write");
-    if (!allowed.ok) return fail(allowed.code, "The claim is outside this actor.");
-    if (!input.idempotencyKey.trim() || !input.requestHash.trim() || !input.transactionRef.trim() || !input.offeringId.trim() || !input.startsAt.trim()) {
-      return fail("INVALID", "A claim needs a key, a hash, a transaction id, an offering, and a start time.");
-    }
-    try {
-      return await writeTransaction(async (tx) => {
-        await tx.$executeRaw`
-          INSERT INTO "CcTransaction" (
-            "tenantId", "transactionRef", "locationId", "intentRef", "providerId", "state",
-            "bookingRef", "orderRef", "paymentStatus", "verifiedPaid", "version"
-          ) VALUES (
-            ${input.tenantId}, ${input.transactionRef}, ${input.locationId}, NULL, ${input.providerId}, 'PENDING_RESOLUTION',
-            NULL, NULL, 'NOT_STARTED', false, 1
-          )
-          ON CONFLICT ("tenantId", "transactionRef") DO NOTHING
-        `;
-        const inserted = await tx.$queryRaw<Array<{ tenantId: string }>>`
-          INSERT INTO "CcIdempotency" (
-            "tenantId", "scope", "idempotencyKey", "requestHash", "status", "transactionRef", "outcomeCode", "version"
-          ) VALUES (
-            ${input.tenantId}, 'RESERVE', ${input.idempotencyKey}, ${input.requestHash}, 'IN_PROGRESS', ${input.transactionRef}, NULL, 1
-          )
-          ON CONFLICT ("tenantId", "scope", "idempotencyKey") DO NOTHING
-          RETURNING "tenantId"
-        `;
-        if (inserted.length === 1) {
-          await tx.$executeRaw`
-            INSERT INTO "CcInflight" (
-              "tenantId", "idempotencyKey", "locationId", "providerId", "requestHash", "slotKey", "transactionRef",
-              "merchantConfirmed", "experience", "category", "offeringId", "startsAt", "absenceVerified", "adoptBookingRef", "version"
-            ) VALUES (
-              ${input.tenantId}, ${input.idempotencyKey}, ${input.locationId}, ${input.providerId}, ${input.requestHash}, ${input.slotKey},
-              ${input.transactionRef}, ${input.merchantConfirmed}, ${input.experience}, ${input.category}, ${input.offeringId}, ${input.startsAt},
-              false, NULL, 1
-            )
-          `;
-          return {
-            ok: true as const,
-            replay: false,
-            value: {
-              tenantId: input.tenantId,
-              scope: "RESERVE" as const,
-              idempotencyKey: input.idempotencyKey,
-              requestHash: input.requestHash,
-              status: "IN_PROGRESS" as const,
-              transactionRef: input.transactionRef,
-              outcomeCode: null,
-              version: 1,
-            },
-          };
-        }
-        const locked = await tx.$queryRaw<StoredIdempotency[]>`
-          SELECT "tenantId", "scope", "idempotencyKey", "requestHash", "status", "transactionRef", "outcomeCode", "version"
-          FROM "CcIdempotency"
-          WHERE "tenantId" = ${input.tenantId} AND "scope" = 'RESERVE' AND "idempotencyKey" = ${input.idempotencyKey}
-          FOR UPDATE
-        `;
-        const row = locked[0];
-        if (!row) return fail("NOT_FOUND", "Idempotency key not found.");
-        if (row.requestHash !== input.requestHash) return fail("IDEMPOTENCY_CONFLICT", "This idempotency key was already used for a different request.");
-        await tx.$queryRaw`
-          SELECT "idempotencyKey" FROM "CcInflight"
-          WHERE "tenantId" = ${input.tenantId} AND "idempotencyKey" = ${input.idempotencyKey}
-          FOR UPDATE
-        `;
-        const retried = await tx.$queryRaw<Array<{ transactionRef: string }>>`
-          UPDATE "CcInflight"
-          SET "absenceVerified" = false, "version" = "version" + 1
-          WHERE "tenantId" = ${input.tenantId}
-            AND "idempotencyKey" = ${input.idempotencyKey}
-            AND "absenceVerified" = true
-            AND "requestHash" = ${input.requestHash}
-            AND "providerId" = ${input.providerId}
-            AND "locationId" = ${input.locationId}
-          RETURNING "transactionRef"
-        `;
-        if (retried.length === 1) {
-          const updated = await tx.$queryRaw<StoredIdempotency[]>`
-            UPDATE "CcIdempotency"
-            SET "status" = 'IN_PROGRESS', "outcomeCode" = NULL, "transactionRef" = ${retried[0].transactionRef}, "version" = "version" + 1
-            WHERE "tenantId" = ${input.tenantId} AND "scope" = 'RESERVE' AND "idempotencyKey" = ${input.idempotencyKey}
-            RETURNING "tenantId", "scope", "idempotencyKey", "requestHash", "status", "transactionRef", "outcomeCode", "version"
-          `;
-          return { ok: true, replay: false, value: updated[0] };
-        }
-        return { ok: true, replay: true, value: row };
       });
     } catch (error) {
       const mapped = mapDbError(error);
@@ -641,16 +533,6 @@ export async function openPostgresCommerceStore(options: {
     read: (actor, tenantId, transactionRef) => mutate((mem) => mem.transactions.read(actor, tenantId, transactionRef)),
     compareAndSwap: (actor, input) => mutate((mem) => mem.transactions.compareAndSwap(actor, input)),
   };
-  ports.bookings = {
-    read: (actor, tenantId, bookingRef) => mutate((mem) => mem.bookings.read(actor, tenantId, bookingRef)),
-    list: (actor, tenantId, locationId) => mutate((mem) => mem.bookings.list(actor, tenantId, locationId)),
-    openReservation: (draft) => mutate((mem) => mem.bookings.openReservation(draft)),
-    transition: (actor, input) => mutate((mem) => mem.bookings.transition(actor, input)),
-    requestReschedule: (actor, input) => mutate((mem) => mem.bookings.requestReschedule(actor, input)),
-    commitReschedule: (actor, input) => mutate((mem) => mem.bookings.commitReschedule(actor, input)),
-    expireDue: (actor, tenantId, locationId, nowIso) => mutate((mem) => mem.bookings.expireDue(actor, tenantId, locationId, nowIso)),
-    findByExternalRef: (actor, tenantId, providerId, externalId) => mutate((mem) => mem.bookings.findByExternalRef(actor, tenantId, providerId, externalId)),
-  };
   ports.connections = {
     register: (actor, input) => mutate((mem) => mem.connections.register(actor, input)),
     resolve: (actor, tenantId, locationId, providerId, kind) => mutate((mem) => mem.connections.resolve(actor, tenantId, locationId, providerId, kind)),
@@ -659,6 +541,7 @@ export async function openPostgresCommerceStore(options: {
     revokeCredential: (actor, tenantId, credentialRef, revokedAt) => mutate((mem) => mem.connections.revokeCredential(actor, tenantId, credentialRef, revokedAt)),
     reportHealth: (actor, input) => mutate((mem) => mem.connections.reportHealth(actor, input)),
   };
+  // NOT PRODUCTION READY. These methods rewrite the whole QA snapshot under the global advisory lock.
   ports.payments = {
     openAttempt: (actor, input) => {
       try {
@@ -695,15 +578,7 @@ export async function openPostgresCommerceStore(options: {
       return result;
     },
   };
-  ports.idempotency = {
-    read: (actor, tenantId, scope, idempotencyKey) => mutate((mem) => mem.idempotency.read(actor, tenantId, scope, idempotencyKey)),
-    recordTimeout: (actor, input) => mutate((mem) => mem.idempotency.recordTimeout(actor, input)),
-    claim,
-    finishDenied: (actor, input) => mutate((mem) => mem.idempotency.finishDenied(actor, input)),
-    noteFound: (actor, tenantId, idempotencyKey, found) => mutate((mem) => mem.idempotency.noteFound(actor, tenantId, idempotencyKey, found)),
-    clearAbsence: (actor, tenantId, idempotencyKey) => mutate((mem) => mem.idempotency.clearAbsence(actor, tenantId, idempotencyKey)),
-    noteAbsence: (actor, tenantId, idempotencyKey, absence) => mutate((mem) => mem.idempotency.noteAbsence(actor, tenantId, idempotencyKey, absence)),
-  };
+  // NOT PRODUCTION READY. Webhook identity still follows the snapshot rewrite.
   ports.webhooks = {
     accept: (actor, input) => mutate((mem) => mem.webhooks.accept(actor, input)),
     markApplied: (actor, tenantId, dedupeKey) => mutate((mem) => mem.webhooks.markApplied(actor, tenantId, dedupeKey)),
@@ -712,22 +587,24 @@ export async function openPostgresCommerceStore(options: {
     append: (actor, event) => mutate((mem) => mem.events.append(actor, event)),
     list: (actor, tenantId, transactionRef) => mutate((mem) => mem.events.list(actor, tenantId, transactionRef)),
   };
+  // NOT PRODUCTION READY. Attribution writes still follow the snapshot rewrite.
   ports.attribution = {
     saveTouchpoint: (actor, input) => mutate((mem) => mem.attribution.saveTouchpoint(actor, input)),
     saveAggregate: (actor, input) => mutate((mem) => mem.attribution.saveAggregate(actor, input)),
     eraseIdentifiers: (actor, tenantId, touchpointId, reason, erasedAt) => mutate((mem) => mem.attribution.eraseIdentifiers(actor, tenantId, touchpointId, reason, erasedAt)),
     readClass: (actor, tenantId, transactionRef) => mutate((mem) => mem.attribution.readClass(actor, tenantId, transactionRef)),
   };
+  // NOT PRODUCTION READY. Policy evidence still follows the snapshot rewrite.
   ports.policy = {
     submit: (actor, tenantId, scope, submission) => mutate((mem) => mem.policy.submit(actor, tenantId, scope, submission)),
     read: (actor, tenantId, scope) => mutate((mem) => mem.policy.read(actor, tenantId, scope)),
   };
-  ports.runAtomic = (work) => mutate((mem) => mem.runAtomic(work));
-  ports.exportSnapshot = async () => {
-    const existing = liveStore.getStore();
-    if (existing) return snapshotOf(existing.mem);
-    await qa.assertIdentity(client);
-    return readSnapshot(client);
-  };
+  bindRowPersistence(ports, {
+    client,
+    policyValidatorKey,
+    begin,
+    readSnapshot,
+    assertOutside: () => qa.assertIdentity(client),
+  });
   return ports;
 }
