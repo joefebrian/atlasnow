@@ -51,3 +51,4 @@ jobs:
       - run: npx tsx --test src/lib/commerce/catalog-import.db.test.ts
       - run: npx tsx --test src/lib/commerce/catalog-bidirectional.db.test.ts
       - run: npx tsx --test src/lib/commerce/slice25-release.db.test.ts
+      - run: npx tsx --test src/lib/conversational-commerce/persistence.pg.test.ts
