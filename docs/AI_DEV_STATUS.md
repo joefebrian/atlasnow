@@ -70,7 +70,9 @@ M1C.2, in unit tests only:
 
 M2.2 release readiness is a review in `docs/M2_2_RELEASE_READINESS.md`. It does not apply migrations or open staging. Production migration history was not opened, so it stays unverified. Prisma 5.22.0 `migrate deploy` applied a pending migration on a disposable database after an already applied folder was removed, and it did not reject a changed checksum. The committed entrypoint still runs that command before `node server.js`. Recommendation: NO-GO for staging implementation. The staging matrix has 20 checks, all NOT RUN.
 
-M2.3 prepares the production inventory check in `docs/M2_3_MIGRATION_INVENTORY.md`. The founder first confirms compose project `atlasnow` at `/opt/atlasnow` and stops on a mismatch. The read-only query selects the container's `POSTGRES_USER` and `POSTGRES_DB`. The running image's migration filenames and SHA-256 values are current-image evidence, not the next deployment inventory. The clean commit `6efaa659` has 40 `migration.sql` checksums. The two inbox folders are absent from that commit. The five later folders are present and unapproved. The production export was not collected. Staging and production stay NO-GO.
+M2.3 prepared the production inventory check in `docs/M2_3_MIGRATION_INVENTORY.md`. The founder then ran that read-only check. The verified result is `docs/M2_4_RELEASE_SAFETY.md`: 39 finished rows, the two inbox checksums match the restored SQL, catalog import and feed are applied with unknown historical approval, and orders plus both conversational folders are absent. Staging and production stay NO-GO.
+
+M2.4 restores the two inbox SQL files without editing them, removes `prisma migrate deploy` from `deploy/docker-entrypoint.sh`, and adds `scripts/migration-preflight.mjs`. GitHub could not persist an attestation for this private repository (Actions run `40359014239`). The operator command now checks a detached Ed25519 approval against `scripts/release-trust-fingerprint.txt`, which is `UNPINNED`. A caller-supplied SHA is not proof. A fixture signature is not a production approval. Image binding is NOT VERIFIED. `approvedGitSha` is empty, so this branch fails closed. The change is not deployed.
 
 M2.1B QA row-level persistence, exercised by `persistence.pg.cross.test.ts` with two Prisma clients:
 
@@ -188,7 +190,7 @@ Applied on localhost:5433 only:
 - `20261024200000_commerce_catalog_import` — nullable `lastImportedAt`. Local only.
 - `20261024220000_commerce_catalog_feed` — `publicUrl`, `sourceSnapshot`, `catalogVertical`. Local only. No radius column.
 
-Production remains 37 applied migrations through `20261024100000_commerce_batch_poll`, including the two inbox migrations that are not in this branch. The entrypoint applies every pending file in the image. Do not rebuild.
+The 2026-10-26 read found 39 finished production migrations: the 35 folders through `20261024100000_commerce_batch_poll`, the two inbox folders, plus catalog import and catalog feed. Orders and both conversational folders were absent. Import and feed are not recorded as previously approved. Do not rebuild. See `docs/M2_4_RELEASE_SAFETY.md`.
 
 `migrate deploy` applied `20261024100000_commerce_batch_poll` on localhost:5433. The same five commerce migrations, with the rest of the migration history, applied on a disposable Postgres 16 at `127.0.0.1:5434`. That container was removed. There is no staging database. Server migrate has not been run.
 

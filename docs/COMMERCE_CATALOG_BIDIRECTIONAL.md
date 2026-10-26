@@ -1,5 +1,7 @@
 # Catalog file and publish preview
 
+Verified on 2026-10-26: catalog import and catalog feed are already applied in production. Their historical approval is unknown. See `docs/M2_4_RELEASE_SAFETY.md`. The 37-row sentence below is the older note.
+
 Not deployed. Do not turn on live catalog sync.
 
 Slice 2.5 adds three merchant actions on top of the product master. AtlasNow stays the source of truth after an import. There is no automatic two-way sync.

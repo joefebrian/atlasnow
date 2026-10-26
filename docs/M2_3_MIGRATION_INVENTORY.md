@@ -1,8 +1,8 @@
 # M2.3 production migration inventory verification
 
-Status: **procedure only.** Accepted M2.2 review `6efaa659a14c2f3712d9b6f2dc0d9dfde235d48e`. This document does not open production, does not read a credential, and does not apply a migration.
+Status: **procedure, later executed read-only.** Accepted M2.2 review `6efaa659a14c2f3712d9b6f2dc0d9dfde235d48e`. The founder then ran the commands in this file. The verified result is `docs/M2_4_RELEASE_SAFETY.md`: 39 finished rows, not 37. Import and feed were applied and their earlier approval is unknown. Orders and both conversational folders were absent. This document does not store the production CSV.
 
-Recommendation: **NO-GO** for staging and production. The production `_prisma_migrations` export has not been supplied. Wait for that export.
+Recommendation: **NO-GO** for staging and production.
 
 ## 1. Scorecard
 

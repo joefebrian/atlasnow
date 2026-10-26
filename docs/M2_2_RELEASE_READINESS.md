@@ -1,6 +1,6 @@
 # M2.2 release readiness review
 
-Status: **review only.** Accepted QA foundation `df3e7f2997fcddad6bc7a499d62db40bff146ac9` on Draft PR #5. This document does not apply a migration, open staging, or change `prisma/schema.prisma`.
+Status: **review only.** Accepted QA foundation `df3e7f2997fcddad6bc7a499d62db40bff146ac9` on Draft PR #5. This document does not apply a migration, open staging, or change `prisma/schema.prisma`. The later read-only inventory and the undeployed boot change are `docs/M2_4_RELEASE_SAFETY.md`. The 37-row production hypothesis below was disproven.
 
 Recommendation: **NO-GO** for staging implementation until an operator supplies the production `_prisma_migrations` metadata and startup no longer runs `migrate deploy`. YOLA FUN stays NO-GO for transactional WhatsApp commerce. AtlasNow is not the merchant of record.
 

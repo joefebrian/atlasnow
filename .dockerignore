@@ -8,6 +8,9 @@ node_modules
 prisma/dev.db
 prisma/dev.db-journal
 prisma/migrations_sqlite
+prisma/migrations/20261024180000_commerce_orders
+prisma/migrations/20261026120000_cc_location_tenant_key
+prisma/migrations/20261026140000_cc_persistence
 **/*.md
 .env
 .env.*

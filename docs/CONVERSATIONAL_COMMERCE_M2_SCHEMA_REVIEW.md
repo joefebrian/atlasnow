@@ -1,6 +1,6 @@
 # Conversational commerce M2 — schema and QA plan (review)
 
-Status: **QA adapter implemented. Not applied to production.** The review was conditionally accepted. The SQL that runs is `prisma/migrations/20261026120000_cc_location_tenant_key` and `prisma/migrations/20261026140000_cc_persistence`. Do not run those folders against production. Do not deploy. Do not merge PR #1, PR #2, or PR #3.
+Status: **QA adapter implemented. Not applied to production.** The 2026-10-26 read found both conversational folders absent from production. The 37-row table below is the older note. See `docs/M2_4_RELEASE_SAFETY.md`. The SQL that runs in QA is `prisma/migrations/20261026120000_cc_location_tenant_key` and `prisma/migrations/20261026140000_cc_persistence`. Do not run those folders against production. Do not deploy. Do not merge PR #1, PR #2, or PR #3.
 
 The sketch later in this file is the review draft. Money columns in that sketch say `INTEGER`. The migration uses `BIGINT`. Do not apply the sketch.
 
