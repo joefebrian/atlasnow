@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — M2.3 operator procedure names the database role
+
+The founder confirms compose project `atlasnow` at `/opt/atlasnow` before any command. A mismatch stops the visit. The read-only `psql` command selects `-U "$POSTGRES_USER"` and `-d "$POSTGRES_DB"` inside the `postgres` container. The running image's `migration.sql` names and SHA-256 values are current-image evidence. They are not the inventory of the next deployment. No secrets, application rows, or customer rows are collected. This session did not connect. Staging and production stay NO-GO.
+
 ## 2026-10-26 — M2.3 prepares the production migration inventory check
 
 The founder who administers the Biznet VPS is the operator. The read-only export is the six `_prisma_migrations` columns plus SHA-256 of `migration.sql` inside the running image. This session did not connect and did not receive the export. Commit `6efaa659` has 40 migration checksums. The two inbox folders have no approved file. The five later folders are in git and are not approved for production boot. Older written counts are not production evidence. Staging and production stay NO-GO.

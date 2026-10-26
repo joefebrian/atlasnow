@@ -70,7 +70,7 @@ M1C.2, in unit tests only:
 
 M2.2 release readiness is a review in `docs/M2_2_RELEASE_READINESS.md`. It does not apply migrations or open staging. Production migration history was not opened, so it stays unverified. Prisma 5.22.0 `migrate deploy` applied a pending migration on a disposable database after an already applied folder was removed, and it did not reject a changed checksum. The committed entrypoint still runs that command before `node server.js`. Recommendation: NO-GO for staging implementation. The staging matrix has 20 checks, all NOT RUN.
 
-M2.3 prepares the production inventory check in `docs/M2_3_MIGRATION_INVENTORY.md`. The clean commit `6efaa659` has 40 `migration.sql` checksums. The two inbox folders are absent from that commit. The five later folders are present and unapproved. The production export was not collected. Staging and production stay NO-GO.
+M2.3 prepares the production inventory check in `docs/M2_3_MIGRATION_INVENTORY.md`. The founder first confirms compose project `atlasnow` at `/opt/atlasnow` and stops on a mismatch. The read-only query selects the container's `POSTGRES_USER` and `POSTGRES_DB`. The running image's migration filenames and SHA-256 values are current-image evidence, not the next deployment inventory. The clean commit `6efaa659` has 40 `migration.sql` checksums. The two inbox folders are absent from that commit. The five later folders are present and unapproved. The production export was not collected. Staging and production stay NO-GO.
 
 M2.1B QA row-level persistence, exercised by `persistence.pg.cross.test.ts` with two Prisma clients:
 

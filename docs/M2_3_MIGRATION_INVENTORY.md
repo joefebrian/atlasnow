@@ -31,33 +31,83 @@ The laptop Postgres on port 5433 is not this target. Do not point these commands
 
 ## 3. Operator execution
 
-Run these only on the production host, from the compose directory that is actually serving `atlasnow.co`. The documented path is `/opt/atlasnow`. If that directory is not the live compose project, stop and record the real directory. Do not copy `.env`.
+Run this only after a separate authorization, and only on the production host. Do not copy `.env`. Do not print a password, a database URL, or a container environment.
 
-Do not rebuild, recreate, restart, or stop the `atlas` service. The committed entrypoint at `6efaa659` runs `prisma migrate deploy` before `node server.js`. A recreate can apply every folder baked into the image.
+Do not rebuild, recreate, restart, or stop any service. The committed entrypoint at `6efaa659` runs `prisma migrate deploy` before `node server.js`. A recreate can apply every folder baked into that image.
 
-Forbidden on this visit: `prisma migrate deploy`, `prisma migrate status`, `prisma migrate resolve`, `prisma db push`, `prisma migrate dev`, `pg_dump`, `pg_dumpall`, any write SQL, and any `SELECT` from a table other than `_prisma_migrations`.
+Forbidden on this visit: `docker compose config`, `docker inspect`, `prisma migrate deploy`, `prisma migrate status`, `prisma migrate resolve`, `prisma db push`, `prisma migrate dev`, `pg_dump`, `pg_dumpall`, any write SQL, and any `SELECT` from a table other than `_prisma_migrations`.
 
-### 3.1 Database metadata
+### 3.1 Confirm the compose project
 
-`docker compose exec` does not restart the service. The Postgres role and database name are the ones already set inside the `postgres` container. The command does not print them.
+The documented deployment is compose project `atlasnow` at `/opt/atlasnow`, with running services `postgres` (`postgres:16`), `waha` (`devlikeapro/waha`), `atlas`, and `caddy` (`caddy:2`, host ports 80 and 443). `postgres` has no published host port. The public app is `https://atlasnow.co`.
+
+```sh
+cd /opt/atlasnow
+pwd
+docker compose ls
+docker compose ps --format 'table {{.Service}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+```
+
+Expected `pwd`: `/opt/atlasnow`.
+
+Expected `docker compose ls`: one row named `atlasnow`, status running, config file under `/opt/atlasnow/compose.yaml`.
+
+Expected `docker compose ps`: four running services.
+
+| Service | Image | Ports |
+|---|---|---|
+| `postgres` | `postgres:16` | empty |
+| `waha` | `devlikeapro/waha` | empty |
+| `atlas` | the built app image | empty |
+| `caddy` | `caddy:2` | `80` and `443` |
+
+STOP when the directory, project name, config path, a service, the Postgres 16 image, a published port on `postgres`, `waha`, or `atlas`, or the caddy ports do not match. Do not run the later commands. Do not search for another directory.
+
+### 3.2 Database metadata
+
+`docker compose exec` does not restart the service. `-U "$POSTGRES_USER"` and `-d "$POSTGRES_DB"` select the role and database already set inside the `postgres` container. The host shell does not expand those variables. The command does not print them. If either name is empty, `psql` fails. STOP. Do not type a role, a database name, or a URL.
 
 ```sh
 docker compose exec -T postgres \
-  sh -c 'psql --csv -v ON_ERROR_STOP=1 -d "$POSTGRES_DB" -c "SELECT migration_name, checksum, started_at, finished_at, rolled_back_at, applied_steps_count FROM \"_prisma_migrations\" ORDER BY started_at;"'
+  sh -c 'psql --csv -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT migration_name, checksum, started_at, finished_at, rolled_back_at, applied_steps_count FROM \"_prisma_migrations\" ORDER BY started_at;"'
 ```
 
-Save the CSV outside the git checkout. Do not commit it. A later review may receive that CSV and nothing else.
+Expected output is CSV and nothing else. The first line is:
 
-### 3.2 Image folder inventory
+```text
+migration_name,checksum,started_at,finished_at,rolled_back_at,applied_steps_count
+```
 
-The running image copies `prisma/` to `/app/prisma` (`WORKDIR /app`). That directory is what the next boot would migrate. It can differ from `/opt/atlasnow`.
+Each later line is one migration. `checksum` is 64 hexadecimal characters when it is a SHA-256. `rolled_back_at` is empty when the migration was not rolled back. The row count is unknown until this file exists. A written count of 37 or 39 is not the expected row count. There is no application column and no customer column.
+
+Save the CSV outside the git checkout. Do not commit it.
+
+### 3.3 Current image filenames and checksums
+
+`WORKDIR /app` in the committed Dockerfile places Prisma files at `/app/prisma`. These commands read the migration files inside the image that is running now. They do not describe the next deployment. A later deployment is built from a git commit chosen at that time, and its folder list can differ. The host checkout at `/opt/atlasnow` can differ from both.
 
 ```sh
 docker compose exec -T atlas sh -c 'find prisma/migrations -name migration.sql | sort'
 docker compose exec -T atlas sh -c 'find prisma/migrations -name migration.sql -print0 | sort -z | xargs -0 sha256sum'
 ```
 
-Record the same two commands for the host checkout only if it is a separate tree. Do not send the SQL text. The hashes and the names are the evidence.
+Expected filename list: one relative path per line, sorted, each ending in `/migration.sql`. No SQL text.
+
+Expected checksum list: one line per file. Each line is 64 hexadecimal characters, two spaces, then the same relative path. `sha256sum` prints the hash of the file. It does not print the file.
+
+An empty filename list means the running image has no `migration.sql` at that path. Record that empty result and STOP. Do not create a file in the container.
+
+### 3.4 What may be shared
+
+A later review may receive only these three texts:
+
+1. The CSV from section 3.2.
+2. The filename list from section 3.3.
+3. The `sha256sum` list from section 3.3.
+
+Before sending, read them. They must not contain `postgres://`, `postgresql://`, `PASSWORD`, `SECRET`, `.env` lines, or SQL statements. If they do, do not send them.
+
+Do not send `.env`, a database URL, `docker compose config`, `docker inspect`, container logs, a dump, `migration.sql` contents, or any application or customer row.
 
 ## 4. Expected inventory
 
@@ -159,7 +209,7 @@ When the operator's CSV arrives, join on `migration_name`. Classify every CSV ro
 | Name is one of the first 35, and `checksum` equals section 4 | MATCH. |
 | Name is one of the 40, and `checksum` differs from section 4 | CHECKSUM_MISMATCH. BLOCKED. |
 | Name is one of the first 35 and is absent from the CSV | MISSING_HISTORY. BLOCKED. |
-| Name is an inbox name and the CSV checksum equals the image-file SHA-256 from section 3.2 | FILE_MATCH. The bytes are still not in git. BLOCKED for a release until a later approval adds those exact bytes. |
+| Name is an inbox name and the CSV checksum equals the current-image SHA-256 from section 3.3 | FILE_MATCH. The bytes are still not in git. BLOCKED for a release until a later approval adds those exact bytes. |
 | Name is an inbox name and the CSV checksum differs from the image file, or the image file is absent | INBOX_CHECKSUM_UNRESOLVED. BLOCKED. |
 | Name is an inbox name and is absent from the CSV | INBOX_ABSENT. The 2026-10-23 claim is contradicted. BLOCKED. |
 | Name is one of the five later folders and is absent from the CSV | ABSENT_PENDING. Confirmed not applied. Still BLOCKED for any boot image that contains the folder. |
@@ -169,7 +219,7 @@ When the operator's CSV arrives, join on `migration_name`. Classify every CSV ro
 
 One BLOCKED class fails the inventory. MATCH on the 35 folders does not pass the release by itself.
 
-The image `sha256sum` list is a second comparison. A folder present in the image and absent from the approved set is a boot hazard, because `migrate deploy` applies pending folders. The M2.2 disposable probe showed that a missing applied folder does not stop that command.
+The section 3.3 `sha256sum` list describes the image that is running now. It is not the folder list of the next deployment. A folder in that current image and absent from the approved set is a boot hazard for a recreate of this image, because `migrate deploy` applies pending folders. The M2.2 disposable probe showed that a missing applied folder does not stop that command.
 
 ## 6. Unresolved discrepancies
 
@@ -182,10 +232,10 @@ These are open now. They are not production results.
 5. The written counts 37 and 39 disagree. Neither count was taken from production in this session.
 6. `docs/COMMERCE_SLICE_2_5_RELEASE.md` still says a missing inbox folder makes `migrate deploy` stop. The M2.2 probe showed the opposite. That sentence is not a control.
 7. The committed entrypoint still migrates on boot. This procedure does not change it.
-8. The live VPS path, image id, and `/app/prisma/migrations` contents were not inspected.
+8. The live VPS path, compose project, and current image's `/app/prisma/migrations` contents were not inspected. The operator stops when they do not match section 3.1.
 
 ## 7. Stop
 
 Do not connect to production from an agent session. Do not dump the database. Do not migrate. Do not edit `schema.prisma`. Do not edit Docker. Do not deploy staging. Do not merge. Do not onboard YOLA FUN.
 
-The next review starts when the founder supplies the CSV and the image hash list from section 3.
+The next review starts when the founder supplies the three texts from section 3.4. Staging and production stay NO-GO.
