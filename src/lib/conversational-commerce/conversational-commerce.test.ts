@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
+import "../release/release-safety.test.ts";
 import { fileURLToPath } from "node:url";
 import { sameTenant } from "@/lib/commerce/access";
 import { ORDER_STATUS_PENDING_PAYMENT, PAYMENT_STATUS_NOT_INITIATED } from "@/lib/commerce/order-capture";

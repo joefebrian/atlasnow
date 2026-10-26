@@ -2,6 +2,10 @@
 
 Short record of choices that later work should not undo. Money rules stay in the Monetization PRD. WhatsApp number rules stay in the HQ WhatsApp decision.
 
+## 2026-10-26 — M2.4 release safety stays local
+
+The read-only production inventory is 39 finished migrations. The 37-row note is withdrawn. Catalog import and catalog feed are applied, and that application is not treated as a prior approval. Orders and both conversational folders are not applied. The two inbox SQL files are restored only because their local bytes match the observed checksums. Application boot in this branch does not run `migrate deploy`. `scripts/migration-preflight.mjs` fails closed while `approvedGitSha` is empty and while the three pending folders are present. Nothing was deployed. Staging and production stay NO-GO.
+
 ## 2026-10-26 — M2.3 operator procedure names the database role
 
 The founder confirms compose project `atlasnow` at `/opt/atlasnow` before any command. A mismatch stops the visit. The read-only `psql` command selects `-U "$POSTGRES_USER"` and `-d "$POSTGRES_DB"` inside the `postgres` container. The running image's `migration.sql` names and SHA-256 values are current-image evidence. They are not the inventory of the next deployment. No secrets, application rows, or customer rows are collected. This session did not connect. Staging and production stay NO-GO.

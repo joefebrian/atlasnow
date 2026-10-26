@@ -1,5 +1,7 @@
 # Slice 2.5 release gates
 
+Verified on 2026-10-26: production has 39 finished migrations, including catalog import and catalog feed. The 37-row paragraph below is the older note, not the live count. A missing inbox folder does not stop `migrate deploy`. See `docs/M2_4_RELEASE_SAFETY.md`.
+
 Not approved. Do not merge. Do not deploy. Do not set a commerce switch while preparing this document.
 
 The accepted phase is import, fail-closed catalog type detection, the commerce feed schema, and publish preview. Local catalog export is not fully supported.

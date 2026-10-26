@@ -1,0 +1,215 @@
+{
+  "approvedGitSha": null,
+  "applied": [
+    {
+      "name": "20260819120000_init_postgres",
+      "sha256": "2bd28bc573bcced69601e48a73fc9c4c253d422c09aec78e6a70a80877ee8cba",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260821120000_review_source_type",
+      "sha256": "e749119521976f29d7adcde9cc09394cc785c240dda0bd8f8c7d28c070a890a5",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260821180000_site_pages_contact",
+      "sha256": "4be5b15df952968b72df952ea989be3cc6427ce1b8108d9382b488499ae08356",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260821190000_site_social_json",
+      "sha256": "ba3f851ddced04e231f3b4c37209c09e65843f3102ed82a9c1542a5ed1b536d2",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260821193000_site_faq_json",
+      "sha256": "0a5c1c8a21d9b76838e65710f5b2f5145ae8184ab15e221045408defb89bdb9a",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260824120000_user_signup_terms",
+      "sha256": "d8c26240b2616d9e00ed6cbc1cab4308f5838c32eecc7f4174e3c6063607b9e7",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260824140000_multi_agency_tenancy",
+      "sha256": "9b5c6e508988ac882cdb8911400818e59c1156531ae0fab6d7724b0f576e97df",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260824160000_activity_notices",
+      "sha256": "12e5b63c601e3e33015dd4fc53f1e7435601ed817f55636ca5ce67cfccb003a2",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260825180000_location_kind_hq",
+      "sha256": "f03fd676aa5e54581b14b56cdb7f65ee611f8fed6bf8c282f9321b0fea26a10e",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260825190000_loyalty",
+      "sha256": "cc2271ae9536da4f7a294eac5a0fed78dc3404516bd2fa377b7331b8226217e2",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260825200000_loyalty_tiers",
+      "sha256": "39f31d98b30c45964e545b4c68fbf77fb0f41c76339b3c97f23e4a7b0b10aae3",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260825210000_loyalty_members",
+      "sha256": "de8f43db64f442a014607c7995b723b0859d6696d1deb3bcae41b690fb2a5ec1",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260827120000_loyalty_wa_replies",
+      "sha256": "7dcfc2867ff62dd091276addebeafd45cd83d37f7971e67ee1803ef23ba00865",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260827140000_loyalty_stamp_card_image",
+      "sha256": "ee794fc35f4d7e4458996718d302c70a3d82ab0d15b0178c7654de80e208e004",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260827160000_tenant_brand_logo",
+      "sha256": "92f65bdc590041c5ac6511b47164f1ac54e779274cc7fcbcf937864fd67e3e33",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260827180000_member_domicile",
+      "sha256": "ff5f26d6ba81dbeb973dfae76b3f1a46ad54f74e592b20e1db20e35d7c276fb2",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260827210000_broadcast_fee_config",
+      "sha256": "6fa05c2a6188c9289eb86dfef7f3ecbb61502bc24559024f094408a1466d3a69",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260827230000_role_menu_branch_location",
+      "sha256": "adda0c6c22e2c203d23b3c70faf7cdcea2ecf2d4affcb94433981fdedda5121e",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260828120000_receipt_photo_ocr",
+      "sha256": "51dc1f947cde29561ef193877ea48661042b8a44dbcf1922317cd71c534bc627",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260828140000_guest_receipt_upload",
+      "sha256": "8a828948ea16b048803b72b3f8c64bee6d19e4b4e7978fc063e6468f564255f6",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260829120000_loyalty_point_exclusive",
+      "sha256": "395d286cc782b010d44fcd36b97098f5845a4de0acceaeb8042c7bc0cd993659",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260901120000_birthday_wa_send",
+      "sha256": "09d4f359f941bd51c27fa6db6bfd91fa59c63379a28b1ba5f1fa94440b0c7d38",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260901140000_birthday_voucher_code",
+      "sha256": "a5aa97a9f97599f84bce425d3982b5703c1cfe6f2c01bad9e754ed7942991433",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260901160000_birthday_voucher_style",
+      "sha256": "f4a5b6a260663539470a6e3fc8e8b8750e4a516e423da11fef97f40a027b0614",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260901200000_support_helpdesk",
+      "sha256": "7f2af55d0a6d24401db3649d320db758b5f6fa29c7413f2a501ed09f7b23bac6",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260902120000_broadcast_meta_history",
+      "sha256": "2d6eab3a546ffba646896b23b4f3349519e38e8e7bc9870888a32afb28a75c10",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260902180000_tiktok_go_events",
+      "sha256": "f0332b5bba2953c78f26bbc17d742fdbe12d692d29ed39c020be1a4b7dd51150",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260906120000_waba_service_quota",
+      "sha256": "045ffbbfffb556e32b92f4b819b066be5d6975d244c59d84650519d73c06d330",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260909120000_tenant_plan",
+      "sha256": "17b506bf89631377c33ea3353c5b4c642e55f38b53b97e76ee9714bb9d27d25a",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20260911180000_review_capture",
+      "sha256": "c4d58ea7727801992ccaf5a9a56b4e009672307929b467a6b5599df7ae4c143b",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261004120000_wa_message_image",
+      "sha256": "4b976d08e35a360d8abcc7be696b2fa51fc7d7894efd230a1ea0b82dae5d8163",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261004143000_inbox_image_retention",
+      "sha256": "d84e9881c254e2164e649caabedbec078640d968051cef578e1406edef2dae32",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261023120000_commerce_products",
+      "sha256": "f4d0beab120321370f74b9ae5de31958534d5c377f21e55ce2ac85a6621bab12",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261023180000_commerce_image_sku",
+      "sha256": "d701a4747cd66988508199d5642ade9c5ae6f4332399f2edaad1039e94502b47",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261023210000_commerce_catalog_connection",
+      "sha256": "27aeb25ec5d5a2a9cccc824d8bde7a80883510ae26bcdbce47d2ede0ece4d03a",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261023233000_commerce_sync_hardening",
+      "sha256": "8e2dd93a16b2dbdf077c5b64d5b97a1ddf001dd599175cd26ba5c1a361b88c8f",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261024100000_commerce_batch_poll",
+      "sha256": "e9a5df0cf50c7701dd2ffd11f18147cdd8fc6c08c2cd09c7d16c750cbf6ded71",
+      "authorization": "verified_applied"
+    },
+    {
+      "name": "20261024200000_commerce_catalog_import",
+      "sha256": "a76b86a739c9621706cade51dc3dad2f3592a926ddb491b3a39df1de08c84326",
+      "authorization": "applied_authorization_unknown"
+    },
+    {
+      "name": "20261024220000_commerce_catalog_feed",
+      "sha256": "f0e5bf21b219a547107fc5997b177547f82e551a1c6caad08c06cb585b663fce",
+      "authorization": "applied_authorization_unknown"
+    }
+  ],
+  "approvedPending": [],
+  "trackedPending": [
+    {
+      "name": "20261024180000_commerce_orders",
+      "sha256": "36fb63f76b0101d8ce28eeecf7f9f6e0e8eaf6961e44e5ec41596cb40692b82e"
+    },
+    {
+      "name": "20261026120000_cc_location_tenant_key",
+      "sha256": "cea4b5c877ead3830d4830cb1f8dd1f649eb7eb7662ca5aae193be5ef3da402a"
+    },
+    {
+      "name": "20261026140000_cc_persistence",
+      "sha256": "b38e2d43b739f797f8c7dc957f44b9ea76f0b87501b328ba23d1a7db78b62f21"
+    }
+  ]
+}

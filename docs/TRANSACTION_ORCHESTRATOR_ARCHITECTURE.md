@@ -1,6 +1,6 @@
 # Transaction orchestrator architecture
 
-Status: **M1A foundation, in memory only.** The orchestrator does not open a database connection and does not call Meta or a payment host.
+Status: **M1A foundation, in memory only.** The orchestrator does not open a database connection and does not call Meta or a payment host. A later sentence that says production history is 39 finished migrations was the disposable Slice 2.5 count. The 2026-10-26 read also found 39 rows, and that live set includes the inbox pair plus catalog import and feed. See `docs/M2_4_RELEASE_SAFETY.md`.
 
 ## Separated concerns
 
