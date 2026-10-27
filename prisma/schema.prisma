@@ -57,6 +57,8 @@ model Tenant {
   address      String?
   notes        String?
   activatedAt  DateTime?
+  /// Inbox image retention. Already applied on production as 20261004143000.
+  inboxImageRetentionDays Int @default(30)
   /// Parent agency when type=CLIENT. Null = standalone brand.
   agencyId     String?
   /// Compressed square mark for the public join page (WebP). Upload original; Atlas resizes.
@@ -754,6 +756,11 @@ model WaMessage {
   body           String   @default("")
   fromMe         Boolean  @default(false)
   rawJson        String?
+  /// Inbox image bytes. Already applied on production as 20261004120000 and 20261004143000.
+  mediaImage     Bytes?
+  mediaMime      String   @default("")
+  inboxImage     Boolean  @default(false)
+  mediaPurgedAt  DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
