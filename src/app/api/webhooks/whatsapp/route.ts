@@ -4,6 +4,7 @@ import { ingestCloudWhatsAppPayload } from "@/lib/conversations/cloud-ingest";
 import { cloudSignatureValid } from "@/lib/conversations/cloud-signature";
 import { cloudWebhookSecrets } from "@/lib/conversations/cloud-verify";
 import { logAppError } from "@/lib/error-log";
+import { routeYolaFromWhatsApp } from "@/lib/yola/engine";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -46,12 +47,27 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ error: "ingest_failed" }, { status: 500 });
   }
+  const yolaTrusted = Boolean(secrets.appSecret.trim());
+  let yola: { ran: boolean; reason?: string } = { ran: false, reason: yolaTrusted ? "not_run" : "signature_required" };
+  if (yolaTrusted) {
+    try {
+      const routed = await routeYolaFromWhatsApp({ trusted: true, body });
+      yola = routed.ran ? { ran: true } : { ran: false, reason: routed.reason };
+    } catch (e) {
+      await logAppError({
+        source: "WhatsApp Cloud webhook",
+        title: "YOLA routing failed",
+        detail: e instanceof Error ? e.message : "yola_failed",
+      });
+      yola = { ran: false, reason: "yola_failed" };
+    }
+  }
   if (!plan.capture) {
-    return NextResponse.json({ ok: true, results });
+    return NextResponse.json({ ok: true, results, yola });
   }
   try {
     const orders = await captureWhatsAppOrders(body);
-    return NextResponse.json({ ok: true, results, orders });
+    return NextResponse.json({ ok: true, results, orders, yola });
   } catch {
     await logAppError({
       source: "WhatsApp Cloud webhook",

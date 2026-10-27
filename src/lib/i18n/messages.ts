@@ -758,6 +758,10 @@ const en: Messages = {
         label: "Commerce",
         description: "Products for this brand. Catalog sync is off.",
       },
+      "/yola": {
+        label: "YOLA FUN",
+        description: "Presale orders for this workspace. Sends and live payments stay off.",
+      },
       "/customers": {
         label: "Customers",
         description: "Join QR members and people who messaged HQ or a branch",
@@ -1582,6 +1586,10 @@ const id: Messages = {
       "/commerce": {
         label: "Commerce",
         description: "Produk merek ini. Sinkron katalog belum nyala.",
+      },
+      "/yola": {
+        label: "YOLA FUN",
+        description: "Order presale workspace ini. Pengiriman dan pembayaran live tetap mati.",
       },
       "/customers": {
         label: "Pelanggan",

@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { headers } from "next/headers";
 import { navCtxForSession } from "@/lib/role-menu";
 import { homePathForNav, pathAllowedForNav } from "@/lib/nav-access";
+import { tenantOwnsYola, yolaRoleAllowed } from "@/lib/yola/access";
 
 export const metadata = { robots: { index: false, follow: false } };
 
@@ -23,9 +24,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const roleLabel = ROLE_LABELS[session.role as Role] || session.role;
   const branding = await getLocalizedBranding(locale);
   const navCtx = await navCtxForSession(session);
+  const showYola = yolaRoleAllowed(session.role) && (await tenantOwnsYola(session.tenantId));
   const pathname = (await headers()).get("x-atlas-pathname") || "";
   if (pathname && !session.isAgencyStaff && session.tenantType === "CLIENT") {
-    if (!pathAllowedForNav(navCtx, pathname)) {
+    const yolaPath = pathname === "/yola" || pathname.startsWith("/yola/");
+    if (yolaPath) {
+      if (!showYola) redirect(homePathForNav(navCtx));
+    } else if (!pathAllowedForNav(navCtx, pathname)) {
       redirect(homePathForNav(navCtx));
     }
   }
@@ -59,6 +64,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       logoLetter={branding.logoLetter}
       tagline={branding.tagline}
       allowedHrefs={navCtx.hrefs ? [...navCtx.hrefs] : null}
+      showYola={showYola}
     >
       {children}
     </AppShell>

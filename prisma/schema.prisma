@@ -98,6 +98,16 @@ model Tenant {
   commerceSyncJobs    CommerceSyncJob[]
   commerceOAuthNonces CommerceOAuthNonce[]
   commerceOrders      CommerceOrder[]
+  yolaCustomers       YolaCustomer[]
+  yolaSessions        YolaFlowSession[]
+  yolaOrders          YolaOrder[]
+  yolaPaymentSessions YolaPaymentSession[]
+  yolaPaymentEvents   YolaPaymentEvent[]
+  yolaTickets         YolaTicket[]
+  yolaRedemptions     YolaRedemption[]
+  yolaAutomationEvents YolaAutomationEvent[]
+  yolaOutboundMessages YolaOutboundMessage[]
+  yolaOrderDaySeqs    YolaOrderDaySeq[]
 
   @@index([type, status])
   @@index([agencyId])
@@ -1264,4 +1274,200 @@ model CommerceOrderLine {
 
   @@index([tenantId])
   @@index([orderId])
+}
+
+/// YOLA FUN presale. Rows belong to the tenant that owns the configured WhatsApp phone.
+/// Phone numbers stay off the admin list. Sandbox payment is not revenue.
+
+model YolaCustomer {
+  id            String    @id @default(cuid())
+  tenantId      String
+  waId          String
+  phoneE164     String    @default("")
+  name          String    @default("")
+  optedOut      Boolean   @default(false)
+  lastInboundAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions YolaFlowSession[]
+  orders   YolaOrder[]
+
+  @@unique([tenantId, waId])
+  @@index([tenantId])
+}
+
+model YolaFlowSession {
+  id            String    @id @default(cuid())
+  tenantId      String
+  customerId    String
+  waId          String
+  flowToken     String
+  status        String    @default("invited")
+  source        String    @default("direct")
+  phoneNumberId String    @default("")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer YolaCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orders   YolaOrder[]
+
+  @@unique([tenantId, flowToken])
+  @@index([tenantId, waId, status])
+}
+
+model YolaOrder {
+  id             String   @id @default(cuid())
+  tenantId       String
+  humanId        String
+  customerId     String
+  sessionId      String?
+  waId           String
+  wamid          String
+  flowToken      String
+  buyerName      String
+  buyerPhoneE164 String
+  phoneMismatch  Boolean  @default(false)
+  visitDate      String
+  visitTime      String
+  amountIdr      Int
+  currency       String   @default("IDR")
+  status         String   @default("PENDING_PAYMENT")
+  preferenceNote String   @default("")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant   Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer YolaCustomer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  session  YolaFlowSession?     @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  payments YolaPaymentSession[]
+  events   YolaPaymentEvent[]
+  tickets  YolaTicket[]
+
+  @@unique([tenantId, humanId])
+  @@unique([tenantId, wamid])
+  @@unique([tenantId, flowToken])
+  @@index([tenantId, createdAt])
+}
+
+model YolaPaymentSession {
+  id          String   @id @default(cuid())
+  tenantId    String
+  orderId     String
+  provider    String   @default("sandbox")
+  mode        String   @default("sandbox")
+  status      String   @default("PENDING")
+  amountIdr   Int
+  currency    String   @default("IDR")
+  nonceHash   String
+  providerRef String   @default("")
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  YolaOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, orderId])
+}
+
+model YolaPaymentEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  orderId   String
+  eventId   String
+  provider  String
+  outcome   String
+  amountIdr Int
+  currency  String   @default("IDR")
+  live      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  YolaOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, eventId])
+  @@index([orderId])
+}
+
+model YolaTicket {
+  id           String   @id @default(cuid())
+  tenantId     String
+  orderId      String   @unique
+  publicId     String
+  tokenHash    String   @unique
+  remaining    Int      @default(2)
+  issuanceMode String   @default("TEST")
+  validFrom    String
+  validUntil   String
+  createdAt    DateTime @default(now())
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order       YolaOrder        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  redemptions YolaRedemption[]
+
+  @@unique([tenantId, publicId])
+  @@index([tenantId])
+}
+
+model YolaRedemption {
+  id             String   @id @default(cuid())
+  tenantId       String
+  ticketId       String
+  idempotencyKey String
+  result         String
+  remainingAfter Int
+  createdAt      DateTime @default(now())
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ticket YolaTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, idempotencyKey])
+  @@index([tenantId])
+}
+
+model YolaAutomationEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  kind      String
+  dedupeKey String
+  detail    String   @default("")
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, dedupeKey])
+  @@index([tenantId, createdAt])
+}
+
+model YolaOutboundMessage {
+  id             String   @id @default(cuid())
+  tenantId       String
+  waId           String
+  kind           String
+  status         String   @default("held")
+  body           String   @default("")
+  payloadJson    String   @default("")
+  providerWamid  String   @default("")
+  deliveryStatus String   @default("")
+  createdAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, waId, createdAt])
+  @@index([providerWamid])
+}
+
+/// Daily human order sequence. Asia/Jakarta day key. Not a customer-facing id by itself.
+model YolaOrderDaySeq {
+  id       String @id @default(cuid())
+  tenantId String
+  dayKey   String
+  next     Int    @default(1)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, dayKey])
 }

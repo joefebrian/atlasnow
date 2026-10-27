@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 
-const PRISMA_REV = "commerce-feed-1";
+const PRISMA_REV = "yola-fun-1";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined; prismaRev?: string };
 
 function createPrisma() {
@@ -27,7 +27,8 @@ function getPrisma(): PrismaClient {
     typeof (existing as { commerceProduct?: unknown }).commerceProduct !== "undefined" &&
     typeof (existing as { commerceConnection?: unknown }).commerceConnection !== "undefined" &&
     typeof (existing as { commerceOAuthNonce?: unknown }).commerceOAuthNonce !== "undefined" &&
-    typeof (existing as { commerceOrder?: unknown }).commerceOrder !== "undefined";
+    typeof (existing as { commerceOrder?: unknown }).commerceOrder !== "undefined" &&
+    typeof (existing as { yolaOrder?: unknown }).yolaOrder !== "undefined";
   if (ok) {
     return existing;
   }

@@ -133,6 +133,7 @@ export const NAV_ICON_KEY: Record<string, string> = {
   "/conversations": "chat",
   "/broadcast": "broadcast",
   "/commerce": "bag",
+  "/yola": "bag",
   "/customers": "clients",
   "/loyalty": "star",
   "/action-center": "check",

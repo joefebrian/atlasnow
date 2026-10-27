@@ -130,6 +130,12 @@ export const APP_NAV: NavItem[] = [
     fase: "E3",
   },
   {
+    href: "/yola",
+    label: "YOLA FUN",
+    description: "Presale orders for this workspace. Sends and live payments stay off.",
+    fase: "E3",
+  },
+  {
     href: "/customers",
     label: "Customers",
     description: "Join QR and WhatsApp people",

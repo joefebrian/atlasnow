@@ -32,6 +32,7 @@ type Props = {
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   onNavigate?: () => void;
+  showYola?: boolean;
 };
 
 function navItemActive(pathname: string, href: string) {
@@ -44,7 +45,7 @@ function navItemActive(pathname: string, href: string) {
 const NAV_GROUPS: { key: keyof Messages["nav"]["groups"]; hrefs: string[] }[] = [
   { key: "platform", hrefs: ["/agencies", "/agencies/follow-up", "/support", "/billing", "/activity"] },
   { key: "admin", hrefs: ["/clients", "/clients/follow-up"] },
-  { key: "work", hrefs: ["/control-tower", "/conversations", "/broadcast", "/commerce", "/leakage-queue"] },
+  { key: "work", hrefs: ["/control-tower", "/conversations", "/broadcast", "/commerce", "/yola", "/leakage-queue"] },
   { key: "people", hrefs: ["/customers", "/loyalty"] },
   { key: "reputation", hrefs: ["/reputation"] },
   { key: "places", hrefs: ["/locations"] },
@@ -75,6 +76,7 @@ export function AppSidebar({
   collapsed = false,
   onToggleCollapse,
   onNavigate,
+  showYola = false,
 }: Props) {
   const pathname = usePathname();
   const router = useRouter();
@@ -90,6 +92,7 @@ export function AppSidebar({
   const navCtx = { role: roleId, mode, isAgencyStaff, isPlatformAdmin, hrefs: allowedHrefs };
 
   function hrefVisible(groupKey: keyof Messages["nav"]["groups"], href: string) {
+    if (href === "/yola") return showYola;
     const item = byHref[href];
     if (!item) return false;
     if (item.platformOnly && !(isPlatformAdmin && mode === "platform")) return false;
@@ -133,7 +136,7 @@ export function AppSidebar({
             if (!item) return null;
             if (item.platformOnly && !(isPlatformAdmin && mode === "platform")) return null;
             if (item.agencyOnly && !isAgencyStaff) return null;
-            if (!canSeeNavHref(navCtx, item.href)) return null;
+            if (href === "/yola" ? !showYola : !canSeeNavHref(navCtx, item.href)) return null;
             const labels = t.items[item.href] || { label: item.label, description: item.description };
             const active = navItemActive(pathname, item.href);
             const iconKey = NAV_ICON_KEY[item.href] || "settings";

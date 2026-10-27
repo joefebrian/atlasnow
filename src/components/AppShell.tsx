@@ -34,6 +34,7 @@ type Props = {
   logoLetter: string;
   tagline: string;
   allowedHrefs?: string[] | null;
+  showYola?: boolean;
 };
 
 export function AppShell({
@@ -57,6 +58,7 @@ export function AppShell({
   logoLetter,
   tagline,
   allowedHrefs = null,
+  showYola = false,
 }: Props) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
@@ -152,6 +154,7 @@ export function AppShell({
           tenantId={tenantId}
           agencies={agencies}
           allowedHrefs={allowedHrefs}
+          showYola={showYola}
           t={nav}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleDesktop}
