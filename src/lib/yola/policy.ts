@@ -62,6 +62,27 @@ export function phonesDiffer(waId: string, e164: string) {
   return waId.replace(/\D/g, "") !== e164.replace(/\D/g, "");
 }
 
+/** Published Flow dropdown ids. The stored visit time is always HH:MM. */
+const FLOW_SLOT_TIMES = {
+  SLOT_1000: "10:00",
+  SLOT_1200: "12:00",
+  SLOT_1400: "14:00",
+  SLOT_1600: "16:00",
+} as const;
+
+/**
+ * Accept the published Flow slot id or the legacy HH:MM value.
+ * Any other identifier is rejected. The Flow JSON is not changed.
+ */
+export function normalizeVisitTime(value: string): (typeof TIME_SLOTS)[number] | null {
+  const raw = value.trim();
+  if ((TIME_SLOTS as readonly string[]).includes(raw)) return raw as (typeof TIME_SLOTS)[number];
+  if (Object.prototype.hasOwnProperty.call(FLOW_SLOT_TIMES, raw)) {
+    return FLOW_SLOT_TIMES[raw as keyof typeof FLOW_SLOT_TIMES];
+  }
+  return null;
+}
+
 export function visitChoiceOk(date: string, time: string) {
   return visitDateOk(date) && (TIME_SLOTS as readonly string[]).includes(time);
 }
@@ -125,14 +146,14 @@ export function parseFlowForm(responseJson: string): { form: ParsedFlowForm | nu
   const buyerName = text(row.buyer_name).replace(/\s+/g, " ").trim();
   const buyerPhone = text(row.buyer_phone).replace(/[^\d+]/g, "");
   const visitDate = text(row.visit_date).trim();
-  const visitTime = text(row.visit_time).trim();
+  const visitTime = normalizeVisitTime(text(row.visit_time));
   const flowToken = text(row.flow_token).trim();
   const phoneDigits = buyerPhone.replace(/\D/g, "");
   if (buyerName.length < 2 || buyerName.length > 80) errors.push("buyer_name");
   if (phoneDigits.length < 8 || phoneDigits.length > 15 || !/^\+?\d+$/.test(buyerPhone)) errors.push("buyer_phone");
   if (!visitDateOk(visitDate)) errors.push("visit_date");
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(visitTime)) errors.push("visit_time");
+  if (!visitTime) errors.push("visit_time");
   if (!/^[A-Za-z0-9._:-]{12,128}$/.test(flowToken)) errors.push("flow_token");
-  if (errors.length) return { form: null, errors };
+  if (errors.length || !visitTime) return { form: null, errors };
   return { form: { buyerName, buyerPhone, visitDate, visitTime, flowToken }, errors: [] };
 }

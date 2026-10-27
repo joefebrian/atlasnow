@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { classifyIntent, toE164, phonesDiffer } from "@/lib/yola/policy";
+import { classifyIntent, normalizeVisitTime, parseFlowForm, toE164, phonesDiffer } from "@/lib/yola/policy";
 import { bulkMarketingEnabled, flowSendEnabled, livePaymentsEnabled, ticketLiveIssuanceEnabled } from "@/lib/yola/config";
 import { sendBulkCampaign } from "@/lib/yola/template";
 import { xenditChargeAllowed } from "@/lib/yola/payments";
@@ -19,6 +19,39 @@ describe("yola policy", () => {
     assert.equal(toE164("08111111111"), "+628111111111");
     assert.equal(phonesDiffer("628111111111", "+628111111111"), false);
     assert.equal(phonesDiffer("628222222222", "+628111111111"), true);
+  });
+
+  it("maps the four published Flow slots and keeps the legacy clock times", () => {
+    const slots = [
+      ["SLOT_1000", "10:00"],
+      ["SLOT_1200", "12:00"],
+      ["SLOT_1400", "14:00"],
+      ["SLOT_1600", "16:00"],
+    ] as const;
+    for (const [slot, clock] of slots) {
+      assert.equal(normalizeVisitTime(slot), clock);
+      assert.equal(normalizeVisitTime(clock), clock);
+      const parsed = parseFlowForm(JSON.stringify({
+        buyer_name: "Sari",
+        buyer_phone: "08111111111",
+        visit_date: "2026-12-01",
+        visit_time: slot,
+        flow_token: "flow-token-value",
+      }));
+      assert.equal(parsed.form?.visitTime, clock);
+    }
+    assert.equal(normalizeVisitTime("SLOT_1800"), null);
+    assert.equal(normalizeVisitTime("10.00 (demo)"), null);
+    assert.equal(normalizeVisitTime("09:00"), null);
+    const rejected = parseFlowForm(JSON.stringify({
+      buyer_name: "Sari",
+      buyer_phone: "08111111111",
+      visit_date: "2026-12-01",
+      visit_time: "SLOT_1800",
+      flow_token: "flow-token-value",
+    }));
+    assert.equal(rejected.form, null);
+    assert.deepEqual(rejected.errors, ["visit_time"]);
   });
 
   it("keeps customer-facing flags off unless each one is exactly true", () => {

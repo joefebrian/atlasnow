@@ -188,6 +188,77 @@ describe("yola postgres engine", { skip: enabled ? false : "YOLA_TEST_DATABASE_U
     assert.equal(desk.orders.length, 1);
   });
 
+  it("stores one order per published Flow slot and ignores a webhook replay", async () => {
+    const slots = [
+      ["SLOT_1000", "10:00", "62815551000"],
+      ["SLOT_1200", "12:00", "62815551200"],
+      ["SLOT_1400", "14:00", "62815551400"],
+      ["SLOT_1600", "16:00", "62815551600"],
+    ] as const;
+    const stamp = String(Math.floor(now.getTime() / 1000));
+    for (const [slot, clock, from] of slots) {
+      const invited = await routeYolaFromWhatsApp({
+        trusted: true,
+        body: textBody(`wamid.SLOT.INVITE.${slot}`, from, "yola fun", stamp),
+        now,
+      });
+      assert.equal(invited.ran, true);
+      if (!invited.ran) return;
+      assert.equal(invited.results[0]?.action, "flow_invited");
+      const session = await prisma.yolaFlowSession.findFirstOrThrow({
+        where: { tenantId, waId: from, status: "invited" },
+      });
+      const body = nfmBody(`wamid.SLOT.NFM.${slot}`, from, {
+        buyer_name: "Sari",
+        buyer_phone: "081234567890",
+        visit_date: "2026-12-01",
+        visit_time: slot,
+        flow_token: session.flowToken,
+      });
+      const created = await routeYolaFromWhatsApp({ trusted: true, body, now });
+      assert.equal(created.ran, true);
+      if (!created.ran) return;
+      assert.equal(created.results[0]?.action, "order_created");
+      assert.equal(created.results[0]?.duplicate, false);
+      const order = await prisma.yolaOrder.findFirstOrThrow({ where: { tenantId, flowToken: session.flowToken } });
+      assert.equal(order.visitTime, clock);
+      assert.equal(order.visitDate, "2026-12-01");
+      assert.equal(order.status, "PENDING_PAYMENT");
+      assert.equal(order.amountIdr, 499000);
+      const replay = await routeYolaFromWhatsApp({ trusted: true, body, now });
+      assert.equal(replay.ran, true);
+      if (!replay.ran) return;
+      assert.equal(replay.results[0]?.duplicate, true);
+      assert.equal(replay.results[0]?.orderId, order.humanId);
+      assert.equal(await prisma.yolaOrder.count({ where: { tenantId, flowToken: session.flowToken } }), 1);
+    }
+    const badFrom = "62815551800";
+    await routeYolaFromWhatsApp({
+      trusted: true,
+      body: textBody("wamid.SLOT.INVITE.BAD", badFrom, "yola fun", stamp),
+      now,
+    });
+    const badSession = await prisma.yolaFlowSession.findFirstOrThrow({
+      where: { tenantId, waId: badFrom, status: "invited" },
+    });
+    const before = await prisma.yolaOrder.count({ where: { tenantId } });
+    const rejected = await routeYolaFromWhatsApp({
+      trusted: true,
+      body: nfmBody("wamid.SLOT.NFM.BAD", badFrom, {
+        buyer_name: "Sari",
+        buyer_phone: "081234567890",
+        visit_date: "2026-12-01",
+        visit_time: "SLOT_1800",
+        flow_token: badSession.flowToken,
+      }),
+      now,
+    });
+    assert.equal(rejected.ran, true);
+    if (!rejected.ran) return;
+    assert.equal(rejected.results[0]?.reason, "visit_time");
+    assert.equal(await prisma.yolaOrder.count({ where: { tenantId } }), before);
+  });
+
   it("does not route an unsigned or unmatched webhook into an order", async () => {
     const blocked = await routeYolaFromWhatsApp({ trusted: false, body: textBody("wamid.NO", "628111111111", "yola fun", "1"), now });
     assert.equal(blocked.ran, false);
