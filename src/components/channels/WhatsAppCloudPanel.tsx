@@ -37,6 +37,9 @@ type WaNumber = {
   health: "healthy" | "not_configured" | "disconnected" | "unauthorized" | "needs_attention";
   lastActivity: string;
   onboardingError: string;
+  pilot?: boolean;
+  crmInbound?: boolean;
+  replyConfigured?: boolean;
   automation?: {
     inboundEnabled: boolean;
     paymentFollowUpEnabled: boolean;
@@ -322,29 +325,6 @@ export function WhatsAppCloudPanel({
     }
   }
 
-  async function tickPayment(ok: boolean) {
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await fetch(`/api/whatsapp-cloud${qs}`, {
-        method: "PATCH",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paymentMethodOk: ok }),
-      });
-      const data = (await res.json()) as Status;
-      if (!res.ok) {
-        setErr(data.error || "Could not save");
-        return;
-      }
-      await load();
-    } catch {
-      setErr("Network error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function disconnect(phoneNumberId?: string) {
     if (
       !window.confirm(
@@ -412,7 +392,17 @@ export function WhatsAppCloudPanel({
                   </p>
                   <p className="text-[12px] text-slate-500">{number.displayPhone || "No display number"}</p>
                 </div>
-                <span className="text-[11px] font-semibold text-slate-700">{healthLabel(number.health)}</span>
+                <div className="text-right text-[11px] font-semibold text-slate-700">
+                  {number.pilot ? (
+                    <>
+                      <p>Registered Phone — YOLA Pilot</p>
+                      <p className="font-medium text-slate-500">CRM Inbound Enabled</p>
+                      <p className="font-medium text-slate-500">Manual Reply Not Configured</p>
+                    </>
+                  ) : (
+                    healthLabel(number.health)
+                  )}
+                </div>
               </div>
               <dl className="mt-2 grid gap-2 text-[12px] text-slate-600 sm:grid-cols-2">
                 <div>
@@ -547,19 +537,6 @@ export function WhatsAppCloudPanel({
 
       {status?.quota?.connected ? (
         <ServiceQuotaChip quota={status.quota} locale="en" />
-      ) : null}
-
-      {status?.canEditOps && status.quota?.connected ? (
-        <label className="flex items-start gap-2 text-[12px] text-slate-600">
-          <input
-            type="checkbox"
-            className="mt-0.5"
-            checked={Boolean(status.quota.paymentMethodOk)}
-            disabled={busy}
-            onChange={(e) => void tickPayment(e.target.checked)}
-          />
-          <span>Payment method on file in WhatsApp Manager (Super Admin). Needed before 30 Sep 2026.</span>
-        </label>
       ) : null}
 
       {blocked && (

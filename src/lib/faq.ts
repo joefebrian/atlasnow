@@ -56,9 +56,9 @@ export const DEFAULT_FAQ: FaqItem[] = [
   {
     id: "bots",
     qEn: "Do you auto-reply with a bot?",
-    aEn: "No canned “thanks for visiting.” HQ can send Status Stamp / menu copy the brand wrote, after the customer wrote first. A person still owns reviews and the rest of the inbox. From 1 October 2026 Meta bills those human replies as service messages after 1,000 free per HQ number per month — see help.atlasnow.co.",
+    aEn: "No canned “thanks for visiting.” HQ can send Status Stamp / menu copy the brand wrote, after the customer wrote first. A person still owns reviews and the rest of the inbox. Meta bills those human replies as service messages after 1,000 free per business number per month. See help.atlasnow.co.",
     qId: "Ada bot auto-reply?",
-    aId: "Tidak ada “thanks for visiting” kalengan. HQ bisa kirim Status Stamp / menu yang merek tulis, setelah pelanggan nulis dulu. Orang tetap pegang ulasan dan sisa inbox. Mulai 1 Oktober 2026 Meta menagih balasan orang itu sebagai service message setelah 1.000 gratis per nomor HQ per bulan — lihat help.atlasnow.co.",
+    aId: "Tidak ada “thanks for visiting” kalengan. HQ bisa kirim Status Stamp / menu yang merek tulis, setelah pelanggan nulis dulu. Orang tetap pegang ulasan dan sisa inbox. Meta menagih balasan orang itu sebagai service message setelah 1.000 gratis per nomor bisnis per bulan. Lihat help.atlasnow.co.",
   },
   {
     id: "whatsapp",

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   CONVERSATION_GAP_MS,
+  displayStoredBody,
   previewBody,
   shouldStartNewConversation,
 } from "./window";
@@ -21,6 +22,14 @@ describe("shouldStartNewConversation", () => {
   it("starts when gap is 24h or more", () => {
     const last = new Date(now.getTime() - CONVERSATION_GAP_MS);
     assert.equal(shouldStartNewConversation(last, now), true);
+  });
+});
+
+describe("displayStoredBody", () => {
+  it("labels known placeholders and keeps customer text", () => {
+    assert.equal(displayStoredBody("[image]"), "Image");
+    assert.equal(displayStoredBody("[unsupported]"), "Unsupported WhatsApp message");
+    assert.equal(displayStoredBody("Gue lagi test nih"), "Gue lagi test nih");
   });
 });
 

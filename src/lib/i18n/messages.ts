@@ -1375,7 +1375,7 @@ const en: Messages = {
     noOptIn: "Nobody ticked birthday WhatsApp on the join form.",
     paygTitle: "Pay as you go",
     paygHint:
-      "Estimates use Meta’s 1 Oct 2026 IDR rate card now (Indonesia marketing Rp 586.33, utility/service Rp 356.65). AtlasNow adds a platform fee on top. Human session notes are service messages: first 1,000 per HQ number per month are Meta-free, then the utility rate. Until 30 Sep Meta still invoices the July card; we show October so it is not a surprise.",
+      "Estimates use Meta’s 1 Oct 2026 IDR rate card (recipient country sets the rate; Indonesia marketing Rp 586.33, utility/service Rp 356.65 on that card). AtlasNow adds a platform fee on top. Human session notes are service messages: first 1,000 delivered per business number per month are Meta-free, then Meta’s utility rate for that recipient. This screen is an estimate. Confirm the invoice in WhatsApp Manager.",
     paygMetaNote: "CSV rates are exclusive of VAT. If Meta invoices in Indonesia, PPN 11% may apply on the Meta line.",
     example: "Examples",
     attach: "Image or PDF",
@@ -2210,7 +2210,7 @@ const id: Messages = {
     noOptIn: "Belum ada yang centang WhatsApp ultah di form daftar.",
     paygTitle: "Pay as you go",
     paygHint:
-      "Estimasi memakai rate card IDR Meta 1 Okt 2026 dari sekarang (Indonesia marketing Rp 586,33, utility/service Rp 356,65). AtlasNow menambah biaya platform. Catatan sesi = service: 1.000 pertama per nomor HQ per bulan gratis dari Meta, setelah itu tarif utility. Sampai 30 Sep Meta masih menagih kartu Juli; kami tampilkan Oktober supaya tidak kaget.",
+      "Estimasi memakai rate card IDR Meta 1 Okt 2026 (negara penerima yang menentukan tarif; Indonesia marketing Rp 586,33, utility/service Rp 356,65 di kartu itu). AtlasNow menambah biaya platform. Catatan sesi = service: 1.000 terkirim pertama per nomor bisnis per bulan gratis dari Meta, setelah itu tarif utility Meta untuk penerima itu. Layar ini perkiraan. Konfirmasi faktur di WhatsApp Manager.",
     paygMetaNote: "Angka CSV belum termasuk PPN. Kalau Meta tagih di Indonesia, PPN 11% bisa muncul di baris Meta.",
     example: "Contoh",
     attach: "Gambar atau PDF",

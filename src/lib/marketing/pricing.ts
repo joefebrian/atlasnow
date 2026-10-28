@@ -155,7 +155,7 @@ const EN: PricingCopy = {
   extra: [
     {
       title: "WhatsApp templates",
-      body: "Opt-in blasts from the official HQ number. Meta’s rate, on Silver, Gold, Platinum, and Diamond after login is on. Not a CSV. STOP still works. From 1 Oct 2026 Meta gives 1,000 free service messages per WABA phone per month — that gift is Meta’s, not this table.",
+      body: "Opt-in blasts from the official HQ number. Meta’s rate, on Silver, Gold, Platinum, and Diamond after login is on. Not a CSV. STOP still works. Meta includes 1,000 free service messages per business phone per month. That allowance is Meta’s, not this table.",
     },
     {
       title: "Not live, not sold",
@@ -326,7 +326,7 @@ const ID: PricingCopy = {
   extra: [
     {
       title: "Template WhatsApp",
-      body: "Blast opt-in dari nomor HQ resmi. Tarif Meta, di Silver, Gold, Platinum, dan Diamond setelah login nyala. Bukan CSV. STOP tetap jalan. Mulai 1 Okt 2026 Meta kasih 1.000 service message gratis per nomor WABA per bulan — itu pemberian Meta, bukan tabel ini.",
+      body: "Blast opt-in dari nomor HQ resmi. Tarif Meta, di Silver, Gold, Platinum, dan Diamond setelah login nyala. Bukan CSV. STOP tetap jalan. Meta mencakup 1.000 service message gratis per nomor bisnis per bulan. Jatah itu milik Meta, bukan tabel ini.",
     },
     {
       title: "Belum live, tidak dijual",

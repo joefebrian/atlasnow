@@ -331,6 +331,8 @@ describe("multi-number whatsapp", { skip: enabled ? false : "YOLA_TEST_DATABASE_
     const numbers = await listWorkspaceWhatsAppNumbers(id);
     assert.equal(numbers.length, 1);
     assert.equal(numbers[0]?.health, "not_configured");
+    assert.equal(numbers[0]?.pilot, false);
+    assert.equal(numbers[0]?.replyConfigured, false);
     assert.equal(numbers[0]?.phoneNumberId, phone);
     assert.equal(await getCloudHqConfig(id, phone), null);
     assert.equal(await prisma.connector.count({ where: { tenantId: id, provider: "WHATSAPP_CLOUD" } }), 0);
@@ -427,11 +429,96 @@ describe("multi-number whatsapp", { skip: enabled ? false : "YOLA_TEST_DATABASE_
         expiresAt,
       },
     });
+    const paid = await prisma.yolaOrder.create({
+      data: {
+        tenantId: id,
+        humanId: `B32-PAID-${Date.now()}`,
+        customerId: customer.id,
+        waId: "628123450666",
+        wamid: `wamid.paid.${Date.now()}`,
+        flowToken: `flow-paid-${Date.now()}`,
+        buyerName: "Sari",
+        buyerPhoneE164: "+628123450666",
+        visitDate: "2026-11-24",
+        visitTime: "10:00",
+        amountIdr: 499000,
+        origin: "pilot",
+      },
+    });
+    await prisma.yolaPaymentSession.create({
+      data: {
+        tenantId: id,
+        orderId: paid.id,
+        provider: "xendit",
+        status: "PAID",
+        mode: "live",
+        amountIdr: 499000,
+        currency: "IDR",
+        nonceHash: `live-session-${Date.now()}`,
+        expiresAt,
+      },
+    });
+    await prisma.yolaPaymentEvent.create({
+      data: {
+        tenantId: id,
+        orderId: paid.id,
+        eventId: `evt-live-${Date.now()}`,
+        provider: "xendit",
+        outcome: "PAID",
+        amountIdr: 499000,
+        currency: "IDR",
+        live: true,
+      },
+    });
+    await prisma.yolaPaymentEvent.create({
+      data: {
+        tenantId: id,
+        orderId: paid.id,
+        eventId: `evt-live-dup-${Date.now()}`,
+        provider: "xendit",
+        outcome: "PAID",
+        amountIdr: 499000,
+        currency: "IDR",
+        live: true,
+      },
+    });
     const report = await workspaceChannelReport(id);
     assert.equal(report.simulatedPaymentsExcluded, 1);
+    assert.equal(report.unverifiedPaid, 2);
     assert.equal(report.verifiedPayments, 1);
     assert.equal(report.verifiedRevenueIdr, 499000);
+    assert.equal(report.providerConfirmedPayments, 1);
     assert.equal(report.attributedReferrals, 0);
     assert.equal(report.incomingConversations, 1);
+  });
+
+  it("stores a YOLA pilot inbound without a connector and does not copy it to another workspace", async () => {
+    const yola = await tenant("yola-inbox");
+    const other = await tenant("other-inbox");
+    const phone = `b32p-${Date.now()}`;
+    process.env.YOLA_WA_PHONE_NUMBER_ID = phone;
+    await ensureWabaPhone({
+      tenantId: yola,
+      phoneNumberId: phone,
+      wabaId: "waba-yola-pilot",
+      displayPhone: "+1 555-436-2839",
+    });
+    const numbers = await listWorkspaceWhatsAppNumbers(yola);
+    assert.equal(numbers[0]?.health, "not_configured");
+    assert.equal(numbers[0]?.pilot, true);
+    assert.equal(numbers[0]?.crmInbound, true);
+    assert.equal(numbers[0]?.replyConfigured, false);
+    const wamid = `wamid.YOLA-IN-${Date.now()}`;
+    const body = textBody(phone, wamid, "628123450777", "halo yola");
+    await ingestCloudWhatsAppPayload(body);
+    await ingestCloudWhatsAppPayload(body);
+    const stored = await prisma.waMessage.findMany({ where: { externalId: `wacloud:${wamid}` } });
+    assert.equal(stored.length, 1);
+    const chat = await prisma.waConversation.findUniqueOrThrow({ where: { id: stored[0]!.conversationId } });
+    assert.equal(chat.tenantId, yola);
+    assert.equal(chat.businessPhoneNumberId, phone);
+    assert.equal(await prisma.waConversation.count({ where: { tenantId: other } }), 0);
+    assert.equal(await prisma.connector.count({ where: { tenantId: yola, provider: "WHATSAPP_CLOUD" } }), 0);
+    assert.equal(await prisma.waMessage.count({ where: { conversationId: chat.id, fromMe: true } }), 0);
   });
 });

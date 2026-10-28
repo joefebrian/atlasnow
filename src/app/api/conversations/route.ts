@@ -50,6 +50,9 @@ export async function GET(request: Request) {
       teamLabel: number.teamLabel,
       locationId: number.locationId,
       health: number.health,
+      pilot: number.pilot,
+      crmInbound: number.crmInbound,
+      replyConfigured: number.replyConfigured,
     }));
   return NextResponse.json({ ...data, quota, channels });
 }

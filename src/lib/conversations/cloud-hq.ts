@@ -3,6 +3,7 @@ import { connectorUnique } from "@/lib/connectors/key";
 import { decryptSecret, encryptSecret } from "@/lib/google/crypto";
 import { generateAtlasLocationId } from "@/lib/locations/ids";
 import { ensureWabaPhone, PhoneOwnedByAnotherWorkspace } from "@/lib/waba/service-quota";
+import { yolaPhoneNumberId } from "@/lib/yola/config";
 import { keepSyncStatus, type ConnectionMode } from "@/lib/conversations/es-launch";
 import { canonPhone } from "@/lib/conversations/identity";
 
@@ -35,6 +36,9 @@ export type WorkspaceWhatsAppNumber = {
   lastActivity: string;
   phoneStatus: string;
   onboardingError: string;
+  pilot: boolean;
+  crmInbound: boolean;
+  replyConfigured: boolean;
 };
 
 type ConnectorRow = {
@@ -457,6 +461,7 @@ export async function listWorkspaceWhatsAppNumbers(tenantId: string): Promise<Wo
       where: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER },
     }),
   ]);
+  const yolaPhone = yolaPhoneNumberId();
   const byPhone = new Map(connectors.map((row) => [row.accountKey, row]));
   const seen = new Set<string>();
   const out: WorkspaceWhatsAppNumber[] = [];
@@ -473,6 +478,8 @@ export async function listWorkspaceWhatsAppNumbers(tenantId: string): Promise<Wo
           ? "CLOUD_API_ONLY"
           : "";
     const displayPhone = phone.displayPhone || meta.displayPhone || "";
+    const health = deriveNumberHealth(connector);
+    const pilot = !connector && phone.status !== "DISABLED" && phone.phoneNumberId === yolaPhone;
     out.push({
       phoneNumberId: phone.phoneNumberId,
       displayPhone,
@@ -484,10 +491,13 @@ export async function listWorkspaceWhatsAppNumbers(tenantId: string): Promise<Wo
       locationName: phone.location?.name || null,
       isDefault: phone.isDefault,
       connectionMode: mode,
-      health: deriveNumberHealth(connector),
+      health,
       lastActivity: meta.lastWebhookAt || meta.lastHealthAt || "",
       phoneStatus: phone.status,
       onboardingError: meta.onboardingError || connector?.lastError || "",
+      pilot,
+      crmInbound: pilot || Boolean(connector && connector.status !== "DISCONNECTED"),
+      replyConfigured: health === "healthy",
     });
   }
   for (const connector of connectors) {
@@ -509,6 +519,9 @@ export async function listWorkspaceWhatsAppNumbers(tenantId: string): Promise<Wo
       lastActivity: meta.lastWebhookAt || meta.lastHealthAt || "",
       phoneStatus: "",
       onboardingError: meta.onboardingError || connector.lastError || "",
+      pilot: false,
+      crmInbound: connector.status !== "DISCONNECTED",
+      replyConfigured: deriveNumberHealth(connector) === "healthy",
     });
   }
   return out;

@@ -375,29 +375,29 @@ export const HELP_ARTICLES: HelpArticle[] = [
     slug: "whatsapp-cost-october-2026",
     category: "inbox",
     title: {
-      en: "WhatsApp cost from 1 October 2026",
-      id: "Biaya WhatsApp mulai 1 Oktober 2026",
+      en: "WhatsApp usage and billing",
+      id: "Penggunaan dan tagihan WhatsApp",
     },
     summary: {
-      en: "Inbound stays free. Human HQ replies become service messages after 1,000 free per number per month.",
-      id: "Chat masuk tetap gratis. Balasan orang di HQ jadi service message setelah 1.000 gratis per nomor per bulan.",
+      en: "Inbound stays free. Meta bills service replies after 1,000 per number per month. AtlasNow shows an estimate, not the invoice.",
+      id: "Chat masuk tetap gratis. Meta menagih balasan service setelah 1.000 per nomor per bulan. AtlasNow menampilkan perkiraan, bukan faktur.",
     },
     body: [
       {
-        en: "Meta, not AtlasNow, sets Cloud API prices. Inbound customer messages stay free. Until 30 September 2026, a person answering inside the 24-hour window is also free on Meta’s invoice. AtlasNow estimates already use the 1 October 2026 card so October is not a surprise.",
-        id: "Meta, bukan AtlasNow, yang pasang tarif Cloud API. Pesan masuk pelanggan tetap gratis. Sampai 30 September 2026, orang yang membalas di jendela 24 jam masih gratis di tagihan Meta. Estimasi AtlasNow sudah memakai kartu 1 Oktober 2026 supaya Oktober tidak kaget.",
+        en: "Meta sets Cloud API prices. AtlasNow fees are separate. Inbound customer messages stay free. Since 1 October 2026, a non-template reply inside the customer service window is a service message. Each business phone number includes 1,000 delivered service messages per calendar month. Unused messages do not roll over. Meta’s rate depends on the recipient’s country, so AtlasNow does not show one hardcoded price as the bill.",
+        id: "Meta yang memasang tarif Cloud API. Biaya AtlasNow terpisah. Pesan masuk pelanggan tetap gratis. Sejak 1 Oktober 2026, balasan tanpa template di dalam jendela layanan adalah service message. Setiap nomor bisnis mencakup 1.000 service message terkirim per bulan kalender. Sisa tidak menumpuk. Tarif Meta tergantung negara penerima, jadi AtlasNow tidak menampilkan satu harga tetap sebagai tagihan.",
       },
       {
-        en: "From 1 October 2026, 00:00 in the WABA timezone: a non-template reply by a person is a service message. Meta charges it at the same rate as utility for that market. Indonesia on the official card: marketing Rp 586.33, utility / authentication / service Rp 356.65. Each HQ number gets 1,000 free service messages per month. They do not roll over. The 1,001st onward is billed on the WhatsApp invoice (the brand’s WABA, or P2P’s if we pass through). AtlasNow estimates already use this October card.",
-        id: "Mulai 1 Oktober 2026, 00:00 zona waktu WABA: balasan tanpa template oleh orang adalah service message. Meta menagih tarif yang sama dengan utility untuk pasar itu. Indonesia di kartu resmi: marketing Rp 586,33, utility / authentication / service Rp 356,65. Tiap nomor HQ dapat 1.000 service message gratis per bulan. Tidak menumpuk ke bulan depan. Yang ke-1.001 dan seterusnya masuk tagihan WhatsApp (WABA merek, atau P2P kalau kami pass-through). Estimasi AtlasNow sudah memakai kartu Oktober ini.",
+        en: "Chat apps and Conversations show recorded delivered service replies from status webhooks stored by AtlasNow, plus an estimated billable count after 1,000. That is a usage estimate. Confirm the final charge in Meta WhatsApp Manager. A local count is not an official balance.",
+        id: "Chat apps dan Conversations menampilkan balasan service terkirim dari webhook status yang disimpan AtlasNow, plus perkiraan yang bisa ditagih setelah 1.000. Itu perkiraan pemakaian. Konfirmasi tagihan akhir di Meta WhatsApp Manager. Hitungan lokal bukan saldo resmi.",
       },
       {
-        en: "Still free: the customer writing in; the first 1,000 service replies that month; messages in Meta’s click-to-WhatsApp free entry-point window. Marketing blasts stay billed. Utility templates inside the 24-hour window also start being billed on 1 October.",
-        id: "Tetap gratis: pelanggan yang nulis; 1.000 balasan service pertama bulan itu; pesan di jendela gratis click-to-WhatsApp. Blast marketing tetap ditagih. Template utility di dalam jendela 24 jam juga mulai ditagih 1 Oktober.",
+        en: "Still outside that service count: the customer writing in, and messages Meta marks as a click-to-WhatsApp free entry point. Marketing templates stay on Meta’s marketing rate. Utility templates follow Meta’s utility rules for that recipient.",
+        id: "Di luar hitungan service itu: pelanggan yang menulis, dan pesan yang Meta tandai sebagai pintu gratis click-to-WhatsApp. Template marketing tetap di tarif marketing Meta. Template utility mengikuti aturan utility Meta untuk penerima itu.",
       },
       {
-        en: "AtlasNow does not turn the inbox into Meta Business Agent. A person replies. Inbox and Chat apps show remaining free service messages for this Cloud number this calendar month (not daily; no rollover). We do not invent a new Atlas fee on those replies until the founder locks it.",
-        id: "AtlasNow tidak mengubah inbox jadi Meta Business Agent. Orang yang membalas. Inbox dan Chat apps menampilkan sisa service gratis untuk nomor Cloud ini bulan kalender ini (bukan harian; tidak nambah ke bulan depan). Kami tidak menambah biaya Atlas di balasan itu sampai founder mengunci.",
+        en: "AtlasNow does not turn the inbox into Meta Business Agent. A person replies. We do not add an AtlasNow fee on those service replies until the founder locks one.",
+        id: "AtlasNow tidak mengubah inbox jadi Meta Business Agent. Orang yang membalas. Kami tidak menambah biaya AtlasNow pada balasan service itu sampai founder menguncinya.",
       },
     ],
   },

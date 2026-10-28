@@ -8,6 +8,7 @@ import { providerLabel, providerNativeClient } from "@/lib/conversations/provide
 import { formatDateTime } from "@/lib/i18n/format";
 import type { Locale } from "@/lib/i18n/locale";
 import { getMessages } from "@/lib/i18n/messages";
+import { displayStoredBody } from "@/lib/conversations/window";
 import { ServiceQuotaChip } from "@/components/waba/ServiceQuotaChip";
 import type { ServiceQuotaSnapshot } from "@/lib/waba/service-quota";
 
@@ -90,7 +91,9 @@ export function ConversationsInbox({
   const [team, setTeam] = useState("");
   const [agent, setAgent] = useState("");
   const [lead, setLead] = useState("");
-  const [channels, setChannels] = useState<Array<{ phoneNumberId: string; label: string; teamLabel: string }>>([]);
+  const [channels, setChannels] = useState<
+    Array<{ phoneNumberId: string; label: string; teamLabel: string; replyConfigured?: boolean; pilot?: boolean }>
+  >([]);
   const [locationId, setLocationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -479,7 +482,7 @@ export function ConversationsInbox({
                       </td>
                       <td className="max-w-[280px]">
                         <p className="line-clamp-2 leading-snug text-slate-600">
-                          {row.preview || "—"}
+                          {displayStoredBody(row.preview || "") || "—"}
                         </p>
                       </td>
                       <td>
@@ -583,7 +586,7 @@ export function ConversationsInbox({
                             {t.newViaWebhook}
                           </div>
                         ) : null}
-                        <p className="whitespace-pre-wrap leading-snug">{m.body || "—"}</p>
+                        <p className="whitespace-pre-wrap leading-snug">{displayStoredBody(m.body || "") || "—"}</p>
                         {m.fromMe && m.source !== "business_app" && m.source !== "history" && (
                           <div
                             className={`mt-1 text-[10px] ${
@@ -626,7 +629,23 @@ export function ConversationsInbox({
                   );
                 })}
             </div>
-            {active.provider === "META_CLOUD" ||
+            {(() => {
+              const channel = channels.find((row) => row.phoneNumberId === active.businessPhoneNumberId);
+              const readOnlyCloud = active.provider === "META_CLOUD" && channel?.replyConfigured === false;
+              if (readOnlyCloud) {
+                return (
+                  <div className="space-y-1 border-t border-slate-100 px-5 py-3 text-[12px] text-slate-600">
+                    <p className="font-semibold text-slate-800">Registered Phone — YOLA Pilot</p>
+                    <p>CRM Inbound Enabled</p>
+                    <p>Manual Reply Not Configured</p>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+            {active.provider === "META_CLOUD" &&
+            channels.find((row) => row.phoneNumberId === active.businessPhoneNumberId)?.replyConfigured ===
+              false ? null : active.provider === "META_CLOUD" ||
             active.provider === "FACEBOOK" ||
             active.provider === "INSTAGRAM" ? (
               <form

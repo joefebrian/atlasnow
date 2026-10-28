@@ -7,7 +7,21 @@ describe("embedded signup launch", () => {
   it("keeps coexistence launch off unless the platform flag is exactly true", () => {
     assert.equal(coexistenceLaunchEnabled({}), false);
     assert.equal(coexistenceLaunchEnabled({ WHATSAPP_COEXISTENCE_ENABLED: "false" }), false);
-    assert.equal(coexistenceLaunchEnabled({ WHATSAPP_COEXISTENCE_ENABLED: "true" }), true);
+    assert.equal(coexistenceLaunchEnabled({ WHATSAPP_COEXISTENCE_ENABLED: "true" }, "tenant-a"), false);
+    assert.equal(
+      coexistenceLaunchEnabled(
+        { WHATSAPP_COEXISTENCE_ENABLED: "true", WHATSAPP_COEXISTENCE_TENANT_IDS: "tenant-a, tenant-b" },
+        "tenant-b"
+      ),
+      true
+    );
+    assert.equal(
+      coexistenceLaunchEnabled(
+        { WHATSAPP_COEXISTENCE_ENABLED: "true", WHATSAPP_COEXISTENCE_TENANT_IDS: "tenant-a" },
+        "tenant-c"
+      ),
+      false
+    );
   });
 
   it("defaults Embedded Signup to v4 and accepts only v5", () => {

@@ -104,7 +104,7 @@ export async function GET(request: Request) {
       configId: meta.whatsappEsConfigId || null,
       ready: Boolean(meta.appId && meta.whatsappEsConfigId && meta.configured),
       version: embeddedSignupVersion(),
-      coexistenceLaunch: coexistenceLaunchEnabled(),
+      coexistenceLaunch: coexistenceLaunchEnabled(process.env, scoped.tenantId),
     },
   });
 }

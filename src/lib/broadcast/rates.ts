@@ -3,8 +3,8 @@
  * Source: official to-be rate cards (effective 1 October 2026) uploaded by P2P Labs
  *   docs/meta/whatsapp-list-rates-2026-10-01.csv
  *   docs/meta/whatsapp-volume-tiers-2026-10-01.csv
- * Atlas uses this card for estimates now (founder: do not wait until 1 Oct).
- * Meta still invoices the July card until 00:00 WABA timezone on 1 Oct 2026.
+ * The 1 October 2026 card is the current estimate source.
+ * Recipient country sets the rate. Do not present one IDR figure as a Meta invoice.
  *
  * Service = utility/auth by market. First 1_000 service msgs / business phone /
  * month are Meta-free (no rollover). Click-to-WhatsApp free entry-point stays free.

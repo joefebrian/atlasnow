@@ -168,7 +168,7 @@ export async function finishEmbeddedSignup(opts: {
   syncStatus: string;
 }> {
   const requestedMode = opts.requestedMode ?? null;
-  if ((opts.session.coexistence || requestedMode === "COEXISTENCE") && !coexistenceLaunchEnabled()) {
+  if ((opts.session.coexistence || requestedMode === "COEXISTENCE") && !coexistenceLaunchEnabled(process.env, opts.tenantId)) {
     throw new Error("coexistence_disabled");
   }
   const token = await exchangeEsCode(opts.code);
@@ -182,7 +182,7 @@ export async function finishEmbeddedSignup(opts: {
     sessionCoexistence: opts.session.coexistence,
     graphOnBizApp: info.coexistence,
     requestedMode,
-    launchEnabled: coexistenceLaunchEnabled(),
+    launchEnabled: coexistenceLaunchEnabled(process.env, opts.tenantId),
   });
   if ("error" in decision) throw new Error(decision.error);
   await assertCloudPhoneAvailable(opts.tenantId, phoneNumberId);

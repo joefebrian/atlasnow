@@ -71,6 +71,12 @@ function messageBody(msg: Record<string, unknown>): string {
     const image = asRecord(msg.image);
     return str(image?.caption).trim() || "[image]";
   }
+  if (type === "reaction") {
+    const reaction = asRecord(msg.reaction);
+    const emoji = str(reaction?.emoji).trim();
+    return emoji ? `Reaction ${emoji}` : "[reaction]";
+  }
+  if (type === "unsupported") return "[unsupported]";
   if (type === "audio") return "[audio]";
   if (type === "video") return "[video]";
   if (type === "document") return "[document]";

@@ -1,11 +1,16 @@
 import { prisma } from "@/lib/db";
+import { classifyOrderRevenue } from "@/lib/conversations/revenue";
 
 export type ChannelReport = {
   incomingConversations: number;
   attributedReferrals: number;
+  paymentInitiated: number;
+  paymentPending: number;
+  simulatedPaymentsExcluded: number;
+  unverifiedPaid: number;
+  providerConfirmedPayments: number;
   verifiedPayments: number;
   verifiedRevenueIdr: number;
-  simulatedPaymentsExcluded: number;
   byChannel: Array<{ provider: string; conversations: number }>;
   byPhone: Array<{ phoneNumberId: string; conversations: number; attributedReferrals: number }>;
   byLocation: Array<{ locationId: string; conversations: number }>;
@@ -24,7 +29,7 @@ function referralId(raw: string): string {
 
 /** Counts stored facts. Simulated payments are excluded. Missing referral ids are not treated as ads. */
 export async function workspaceChannelReport(tenantId: string): Promise<ChannelReport> {
-  const [grouped, referrals, paidYola, simulated] = await Promise.all([
+  const [grouped, referrals, orders] = await Promise.all([
     prisma.waConversation.groupBy({
       by: ["provider", "businessPhoneNumberId", "locationId"],
       where: { tenantId },
@@ -41,15 +46,43 @@ export async function workspaceChannelReport(tenantId: string): Promise<ChannelR
         conversation: { select: { businessPhoneNumberId: true } },
       },
     }),
-    prisma.yolaPaymentSession.aggregate({
-      where: { tenantId, status: "PAID", NOT: { mode: "sandbox" } },
-      _sum: { amountIdr: true },
-      _count: { _all: true },
-    }),
-    prisma.yolaPaymentSession.count({
-      where: { tenantId, status: "SIMULATED_PAID" },
+    prisma.yolaOrder.findMany({
+      where: { tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        origin: true,
+        amountIdr: true,
+        currency: true,
+        payments: {
+          select: {
+            tenantId: true,
+            orderId: true,
+            provider: true,
+            mode: true,
+            status: true,
+            amountIdr: true,
+            currency: true,
+          },
+        },
+        events: {
+          select: {
+            tenantId: true,
+            orderId: true,
+            eventId: true,
+            provider: true,
+            outcome: true,
+            amountIdr: true,
+            currency: true,
+            live: true,
+          },
+        },
+      },
     }),
   ]);
+  const classes = orders.map((order) =>
+    classifyOrderRevenue({ ...order, sessions: order.payments })
+  );
 
   const byChannel = new Map<string, number>();
   const byPhone = new Map<string, { conversations: number; attributedReferrals: number }>();
@@ -81,9 +114,13 @@ export async function workspaceChannelReport(tenantId: string): Promise<ChannelR
   return {
     incomingConversations,
     attributedReferrals,
-    verifiedPayments: paidYola._count._all,
-    verifiedRevenueIdr: paidYola._sum.amountIdr || 0,
-    simulatedPaymentsExcluded: simulated,
+    paymentInitiated: classes.reduce((sum, row) => sum + row.initiated, 0),
+    paymentPending: classes.reduce((sum, row) => sum + row.pending, 0),
+    simulatedPaymentsExcluded: classes.reduce((sum, row) => sum + row.simulated, 0),
+    unverifiedPaid: classes.reduce((sum, row) => sum + row.unverifiedPaid, 0),
+    providerConfirmedPayments: classes.filter((row) => row.providerConfirmed).length,
+    verifiedPayments: classes.filter((row) => row.verifiedRevenueIdr > 0).length,
+    verifiedRevenueIdr: classes.reduce((sum, row) => sum + row.verifiedRevenueIdr, 0),
     byChannel: [...byChannel.entries()].map(([provider, conversations]) => ({ provider, conversations })),
     byPhone: [...byPhone.entries()].map(([phoneNumberId, row]) => ({ phoneNumberId, ...row })),
     byLocation: [...byLocation.entries()].map(([locationId, conversations]) => ({ locationId, conversations })),

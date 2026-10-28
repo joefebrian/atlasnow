@@ -3,6 +3,8 @@ import { canonPhone, mergeIdentity, resolveIdentity } from "./identity";
 import { parseCloudWhatsAppWebhook, type CloudAccountNote, type CloudContactTouch, type CloudSyncNote, type CloudWhatsAppEvent } from "./cloud-parse";
 import { applyBroadcastStatuses, markBroadcastAction } from "@/lib/broadcast/history";
 import { findCloudHqByPhoneNumberId, ensureHqLocation, mergeCloudConnectorMeta, type CloudHqConfig } from "./cloud-hq";
+import { resolveYolaTenantId } from "@/lib/yola/access";
+import { yolaPhoneNumberId } from "@/lib/yola/config";
 import { previewBody, shouldStartNewConversation } from "./window";
 import { sendCloudHqImage, sendCloudHqText } from "./cloud-send";
 import type { IngestResult } from "./ingest";
@@ -19,6 +21,20 @@ function isPrismaP2002(err: unknown, field?: string): boolean {
   if (Array.isArray(target)) return target.includes(field);
   if (typeof target === "string") return target.includes(field);
   return true;
+}
+
+/** Owned YOLA phone with no workspace connector. Inbound CRM only. No token is copied. */
+async function yolaPilotTarget(phoneNumberId: string): Promise<{ tenantId: string; phoneNumberId: string } | null> {
+  const configured = yolaPhoneNumberId();
+  if (!configured || phoneNumberId !== configured) return null;
+  const tenantId = await resolveYolaTenantId(configured);
+  if (!tenantId) return null;
+  const phone = await prisma.wabaPhone.findUnique({
+    where: { phoneNumberId: configured },
+    select: { tenantId: true, status: true },
+  });
+  if (!phone || phone.status === "DISABLED" || phone.tenantId !== tenantId) return null;
+  return { tenantId, phoneNumberId: configured };
 }
 
 export async function ingestCloudWhatsAppPayload(input: unknown): Promise<{
@@ -82,33 +98,37 @@ async function ingestOne(
   }
 
   const hq = await findCloudHqByPhoneNumberId(ev.phoneNumberId);
-  if (!hq) return { result: { ok: true, ignored: "unmapped_session" } };
+  const pilot = hq ? null : await yolaPilotTarget(ev.phoneNumberId);
+  if (!hq && !pilot) return { result: { ok: true, ignored: "unmapped_session" } };
+  if (pilot && history) return { result: { ok: true, ignored: "skipped_event" } };
+  const ownerTenantId = hq?.tenantId || pilot!.tenantId;
+  const ownerPhoneId = hq?.phoneNumberId || pilot!.phoneNumberId;
 
   const phoneRow = await prisma.wabaPhone.findUnique({
-    where: { phoneNumberId: hq.phoneNumberId },
+    where: { phoneNumberId: ownerPhoneId },
     select: { tenantId: true, locationId: true, isDefault: true },
   });
-  if (phoneRow && phoneRow.tenantId !== hq.tenantId) {
+  if (phoneRow && phoneRow.tenantId !== ownerTenantId) {
     return { result: { ok: true, ignored: "unmapped_session" } };
   }
   let locationId = "";
   if (phoneRow?.locationId) {
     const assigned = await prisma.location.findFirst({
-      where: { id: phoneRow.locationId, tenantId: hq.tenantId, status: { not: "ARCHIVED" } },
+      where: { id: phoneRow.locationId, tenantId: ownerTenantId, status: { not: "ARCHIVED" } },
       select: { id: true },
     });
     locationId = assigned?.id || "";
   }
   if (!locationId) {
     const hqLocation = await ensureHqLocation(
-      hq.tenantId,
+      ownerTenantId,
       !phoneRow || phoneRow.isDefault ? { phone: ev.displayPhone } : undefined
     );
     locationId = hqLocation.id;
   }
   const incoming = resolveIdentity(ev.waId, ev.waId, "META_CLOUD");
-  const tenantId = hq.tenantId;
-  const sessionId = `cloud:${hq.phoneNumberId}`;
+  const tenantId = ownerTenantId;
+  const sessionId = `cloud:${ownerPhoneId}`;
 
   const found =
     (incoming.phone
@@ -181,7 +201,7 @@ async function ingestOne(
             contactId: contact.id,
             provider: "META_CLOUD",
             sessionId,
-            businessPhoneNumberId: hq.phoneNumberId,
+            businessPhoneNumberId: ownerPhoneId,
             status: "OPEN",
             firstMessageAt: ev.sentAt,
             lastMessageAt: ev.sentAt,
@@ -223,14 +243,14 @@ async function ingestOne(
       lastPreview: advance ? previewBody(ev.body) : undefined,
       lastInboundAt: history || ev.fromMe ? undefined : ev.sentAt,
       lastOutboundAt: history || !ev.fromMe ? undefined : ev.sentAt,
-      businessPhoneNumberId: conversation.businessPhoneNumberId || hq.phoneNumberId,
+      businessPhoneNumberId: conversation.businessPhoneNumberId || ownerPhoneId,
       ...(staffReply
         ? { handoffState: "HUMAN_ACTIVE", handoffUntil: handoffExpiry(ev.sentAt) }
         : {}),
     },
   });
 
-  if (history || staffReply) {
+  if (history || staffReply || !hq) {
     return { result: { ok: true, conversationId: conversation.id } };
   }
 
