@@ -5,6 +5,7 @@ import { canAccessTenant } from "@/lib/locations/access";
 import { getCloudHqConfig } from "@/lib/conversations/cloud-hq";
 import { sendCloudHqText } from "@/lib/conversations/cloud-send";
 import { sendMetaInboxText } from "@/lib/conversations/meta-send";
+import { markHumanHandoff } from "@/lib/conversations/handoff";
 
 export async function POST(
   request: Request,
@@ -66,5 +67,6 @@ export async function POST(
   if (!sent.ok) {
     return NextResponse.json({ error: sent.error }, { status: 502 });
   }
+  await markHumanHandoff(row.id, new Date());
   return NextResponse.json({ ok: true, messageId: sent.messageId });
 }

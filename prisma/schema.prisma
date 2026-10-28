@@ -735,6 +735,10 @@ model WaConversation {
   lastInboundAt   DateTime?
   lastOutboundAt  DateTime?
   lastPreview     String    @default("")
+  /// HUMAN_ACTIVE while a person is handling this chat. Empty lets automation run.
+  handoffState    String    @default("")
+  /// Inactivity expiry for HUMAN_ACTIVE. Null means resume is explicit.
+  handoffUntil    DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

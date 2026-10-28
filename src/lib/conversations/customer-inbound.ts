@@ -1,5 +1,3 @@
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
@@ -43,15 +41,26 @@ export function customerInboundBody(body: unknown, suppressWamids: readonly stri
   return { ...root, entry };
 }
 
-/** Staff Business App traffic must not start automation. History never counts as a handoff. */
-export function suppressForHumanHandoff(input: {
-  sentAt: Date;
-  echoInPayload: boolean;
-  previous: { fromMe: boolean; source: string; sentAt: Date } | null;
-}): boolean {
-  if (input.echoInPayload) return true;
-  const previous = input.previous;
-  if (!previous?.fromMe || previous.source !== "business_app") return false;
-  const delta = input.sentAt.getTime() - previous.sentAt.getTime();
-  return delta >= 0 && delta <= DAY_MS;
+/** Default staff handoff. This is not the Cloud API 24-hour customer service window. */
+export const DEFAULT_HANDOFF_MINUTES = 30;
+
+/** Platform setting. 0 keeps HUMAN_ACTIVE until an explicit resume. Values above 4 hours fall back to the default. */
+export function handoffMinutes(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.WHATSAPP_HANDOFF_MINUTES;
+  if (raw == null || raw.trim() === "") return DEFAULT_HANDOFF_MINUTES;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 240) return DEFAULT_HANDOFF_MINUTES;
+  return parsed;
+}
+
+export function handoffExpiry(from: Date, minutes = handoffMinutes()): Date | null {
+  if (minutes <= 0) return null;
+  return new Date(from.getTime() + minutes * 60_000);
+}
+
+/** True only while this conversation is in HUMAN_ACTIVE and its own expiry has not passed. */
+export function humanHandoffActive(input: { state: string; until: Date | null; now: Date }): boolean {
+  if (input.state !== "HUMAN_ACTIVE") return false;
+  if (!input.until) return true;
+  return input.now.getTime() < input.until.getTime();
 }

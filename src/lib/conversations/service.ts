@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { lookupMetaPeerLabel, metaPeerIdFromContact, shouldFetchMetaDisplayName } from "./meta-profile";
+import { humanHandoffActive } from "./customer-inbound";
 
 export type ConversationListItem = {
   id: string;
@@ -265,6 +266,7 @@ export async function getConversationThread(
     fromMe: boolean;
     source: string;
   }>;
+  handoffActive: boolean;
 }> {
   const row = await prisma.waConversation.findUnique({
     where: { id },
@@ -319,6 +321,11 @@ export async function getConversationThread(
       fromMe: m.fromMe,
       source: m.source || "",
     })),
+    handoffActive: humanHandoffActive({
+      state: row.handoffState,
+      until: row.handoffUntil,
+      now: new Date(),
+    }),
   };
 }
 

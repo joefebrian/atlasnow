@@ -187,10 +187,122 @@ describe("coexistence connection", { skip: enabled ? false : "YOLA_TEST_DATABASE
     });
     assert.equal(routed.handled, 0);
     assert.equal(calls.length, 0);
+    const bypass = await routeWorkspaceAutomation({
+      trusted: true,
+      now,
+      body: live,
+      fetchImpl: (async () => new Response(JSON.stringify({ messages: [{ id: "out" }] }), { status: 200 })) as typeof fetch,
+    });
+    assert.equal(bypass.handled, 0);
     const conversation = await prisma.waConversation.findFirstOrThrow({
       where: { tenantId: id, messages: { some: { externalId: "wacloud:wamid.LIVE31" } } },
     });
     assert.ok(conversation.lastInboundAt);
+    assert.equal(conversation.handoffState, "HUMAN_ACTIVE");
+  });
+
+  it("does not keep automation off for the service window after handoff expires", async () => {
+    const id = await tenant("expiry");
+    const phone = `b31x-${Date.now()}`;
+    const prior = process.env.WHATSAPP_HANDOFF_MINUTES;
+    process.env.WHATSAPP_HANDOFF_MINUTES = "30";
+    try {
+      await saveCloudHqConnector({
+        tenantId: id,
+        phoneNumberId: phone,
+        wabaId: `waba-${phone}`,
+        accessToken: "token-expiry",
+        displayPhone: "15550005555",
+        connectionMode: "COEXISTENCE",
+      });
+      const saved = await saveAutomationSettings({
+        tenantId: id,
+        actorUserId: "actor-test",
+        patch: {
+          inboundEnabled: true,
+          paymentFollowUpEnabled: false,
+          marketingEnabled: false,
+          pilotMode: false,
+          flowId: "123456789012345",
+          flowScreen: "START",
+          flowCta: "Open",
+          inboundBody: "Here is the form for this workspace.",
+          triggerPhrases: "order menu",
+          paymentTriggerPhrases: "",
+          paymentMessageText: "",
+        },
+      });
+      assert.equal(saved.ok, true);
+      const echoAt = Math.floor(now.getTime() / 1000) - 3 * 60 * 60;
+      await ingestCloudWhatsAppPayload({
+        object: "whatsapp_business_account",
+        entry: [
+          {
+            changes: [
+              {
+                field: "smb_message_echoes",
+                value: {
+                  metadata: { phone_number_id: phone, display_phone_number: "15550005555" },
+                  message_echoes: [
+                    {
+                      from: "15550005555",
+                      to: "628123450066",
+                      id: "wamid.OLD-ECHO",
+                      timestamp: String(echoAt),
+                      type: "text",
+                      text: { body: "Saya bantu" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      });
+      const live = {
+        object: "whatsapp_business_account",
+        entry: [
+          {
+            changes: [
+              {
+                field: "messages",
+                value: {
+                  metadata: { phone_number_id: phone },
+                  messages: [
+                    {
+                      from: "628123450066",
+                      id: "wamid.AFTER-HANDOFF",
+                      timestamp: String(Math.floor(now.getTime() / 1000)),
+                      type: "text",
+                      text: { body: "order menu" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+      const ingested = await ingestCloudWhatsAppPayload(live);
+      assert.deepEqual(ingested.suppressWamids, []);
+      const calls: string[] = [];
+      const routed = await routeWorkspaceAutomation({
+        trusted: true,
+        now,
+        body: live,
+        fetchImpl: (async (url: string | URL | Request) => {
+          calls.push(String(url));
+          return new Response(JSON.stringify({ messages: [{ id: "out" }] }), { status: 200 });
+        }) as typeof fetch,
+      });
+      assert.equal(routed.handled, 1);
+      assert.equal(calls.length, 1);
+      const message = await prisma.waMessage.findUniqueOrThrow({ where: { externalId: "wacloud:wamid.AFTER-HANDOFF" } });
+      assert.equal(message.source, "cloud");
+    } finally {
+      if (prior === undefined) delete process.env.WHATSAPP_HANDOFF_MINUTES;
+      else process.env.WHATSAPP_HANDOFF_MINUTES = prior;
+    }
   });
 
   it("imports history without moving the service window or creating automation", async () => {
@@ -245,6 +357,7 @@ describe("coexistence connection", { skip: enabled ? false : "YOLA_TEST_DATABASE
     assert.equal(message.source, "history");
     const conversation = await prisma.waConversation.findUniqueOrThrow({ where: { id: message.conversationId } });
     assert.equal(conversation.lastInboundAt, null);
+    assert.equal(conversation.handoffState, "");
     const routed = await routeWorkspaceAutomation({
       trusted: true,
       now,
@@ -350,7 +463,61 @@ describe("coexistence connection", { skip: enabled ? false : "YOLA_TEST_DATABASE
     assert.match(row.lastError || "", /ACCOUNT_DISCONNECTED/);
     const cfg = await getCloudHqConfig(id);
     assert.equal(cfg?.accessToken, "token-account");
-    const meta = JSON.parse(row.metaJson || "{}") as { connectionStatus?: string };
+    const meta = JSON.parse(row.metaJson || "{}") as { connectionStatus?: string; automationPaused?: string };
     assert.equal(meta.connectionStatus, "needs_attention");
+    assert.equal(meta.automationPaused, "true");
+    const phoneRow = await prisma.wabaPhone.findUniqueOrThrow({ where: { phoneNumberId: phone } });
+    assert.equal(phoneRow.tenantId, id);
+    const saved = await saveAutomationSettings({
+      tenantId: id,
+      actorUserId: "actor-test",
+      patch: {
+        inboundEnabled: true,
+        paymentFollowUpEnabled: false,
+        marketingEnabled: false,
+        pilotMode: false,
+        flowId: "123456789012345",
+        flowScreen: "START",
+        flowCta: "Open",
+        inboundBody: "Here is the form for this workspace.",
+        triggerPhrases: "order menu",
+        paymentTriggerPhrases: "",
+        paymentMessageText: "",
+      },
+    });
+    assert.equal(saved.ok, true);
+    const calls: string[] = [];
+    const routed = await routeWorkspaceAutomation({
+      trusted: true,
+      now,
+      body: {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: phone },
+                  messages: [
+                    {
+                      id: "wamid.PAUSED",
+                      from: "628123450055",
+                      timestamp: String(Math.floor(now.getTime() / 1000)),
+                      type: "text",
+                      text: { body: "order menu" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      fetchImpl: (async (url: string | URL | Request) => {
+        calls.push(String(url));
+        return new Response(JSON.stringify({ messages: [{ id: "out" }] }), { status: 200 });
+      }) as typeof fetch,
+    });
+    assert.equal(routed.handled, 0);
+    assert.equal(calls.length, 0);
   });
 });

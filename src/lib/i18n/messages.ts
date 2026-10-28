@@ -275,6 +275,9 @@ export type Messages = {
     accountResponder: string;
     businessAppSource: string;
     historySync: string;
+    handoffTakeover: string;
+    handoffResume: string;
+    handoffActive: string;
     agencyOnly: string;
     pickClient: string;
     pickClientHint: string;
@@ -1084,6 +1087,9 @@ const en: Messages = {
     accountResponder: "Account responder",
     businessAppSource: "WhatsApp Business App",
     historySync: "History sync",
+    handoffTakeover: "Take over",
+    handoffResume: "Resume automation",
+    handoffActive: "A person is handling this chat. Automation stays quiet until you resume it or the handoff expires.",
     agencyOnly: "Staff monitor conversations.",
     pickClient: "Pick a brand",
     pickClientHint: "Open a brand to see HQ and branch chats.",
@@ -1916,6 +1922,9 @@ const id: Messages = {
     accountResponder: "Penanggap akun",
     businessAppSource: "WhatsApp Business App",
     historySync: "Sinkron riwayat",
+    handoffTakeover: "Ambil alih",
+    handoffResume: "Lanjutkan otomasi",
+    handoffActive: "Seseorang sedang menangani chat ini. Otomasi diam sampai dilanjutkan atau masa handoff berakhir.",
     agencyOnly: "Staf memonitor percakapan.",
     pickClient: "Pilih merek",
     pickClientHint: "Buka merek untuk melihat chat HQ dan cabang.",

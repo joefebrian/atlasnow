@@ -25,6 +25,7 @@ type ThreadMessage = {
 type ThreadPayload = {
   conversation: ConversationListItem & { tenantId: string };
   messages: ThreadMessage[];
+  handoffActive?: boolean;
 };
 
 const POLL_MS = 30_000;
@@ -602,7 +603,34 @@ export function ConversationsInbox({
                     .finally(() => setSending(false));
                 }}
               >
-                <p className="text-[11px] leading-relaxed text-slate-500">{composerHint}</p>
+                {active.provider === "META_CLOUD" ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] leading-relaxed text-slate-500">
+                      {thread?.handoffActive ? t.handoffActive : composerHint}
+                    </p>
+                    <button
+                      type="button"
+                      className="an-btn-ghost shrink-0 px-2 py-1 text-[11px]"
+                      disabled={sending}
+                      onClick={() => {
+                        setSending(true);
+                        void fetch(`/api/conversations/${active.id}/handoff`, {
+                          method: "POST",
+                          credentials: "same-origin",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ action: thread?.handoffActive ? "resume" : "takeover" }),
+                        }).finally(async () => {
+                          await loadThread(active.id, { silent: true });
+                          setSending(false);
+                        });
+                      }}
+                    >
+                      {thread?.handoffActive ? t.handoffResume : t.handoffTakeover}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-[11px] leading-relaxed text-slate-500">{composerHint}</p>
+                )}
                 {sendNote ? (
                   <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-800">
                     {sendNote}

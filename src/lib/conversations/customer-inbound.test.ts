@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { customerInboundBody, suppressForHumanHandoff } from "./customer-inbound";
+import { customerInboundBody, handoffExpiry, handoffMinutes, humanHandoffActive } from "./customer-inbound";
 import { readInbound } from "@/lib/yola/inbound";
 
 describe("customer inbound filter", () => {
@@ -49,39 +49,36 @@ describe("customer inbound filter", () => {
     assert.deepEqual(events.map((event) => event.wamid).sort(), ["wamid.KEEP", "wamid.OUT"]);
   });
 
-  it("suppresses only a recent Business App message, not history", () => {
+  it("keeps human handoff separate from the 24 hour service window", () => {
     const now = new Date("2026-10-28T08:00:00.000Z");
+    assert.equal(handoffMinutes({}), 30);
+    assert.equal(handoffMinutes({ WHATSAPP_HANDOFF_MINUTES: "1440" }), 30);
+    assert.equal(handoffMinutes({ WHATSAPP_HANDOFF_MINUTES: "0" }), 0);
+    assert.equal(handoffExpiry(now, 0), null);
     assert.equal(
-      suppressForHumanHandoff({
-        sentAt: now,
-        echoInPayload: false,
-        previous: { fromMe: true, source: "business_app", sentAt: new Date("2026-10-28T07:00:00.000Z") },
+      humanHandoffActive({
+        state: "HUMAN_ACTIVE",
+        until: new Date("2026-10-28T08:20:00.000Z"),
+        now,
       }),
       true
     );
     assert.equal(
-      suppressForHumanHandoff({
-        sentAt: now,
-        echoInPayload: true,
-        previous: null,
-      }),
-      true
-    );
-    assert.equal(
-      suppressForHumanHandoff({
-        sentAt: now,
-        echoInPayload: false,
-        previous: { fromMe: true, source: "history", sentAt: new Date("2026-10-28T07:00:00.000Z") },
+      humanHandoffActive({
+        state: "HUMAN_ACTIVE",
+        until: new Date("2026-10-28T07:00:00.000Z"),
+        now,
       }),
       false
     );
     assert.equal(
-      suppressForHumanHandoff({
-        sentAt: now,
-        echoInPayload: false,
-        previous: { fromMe: true, source: "business_app", sentAt: new Date("2026-10-27T07:00:00.000Z") },
+      humanHandoffActive({
+        state: "",
+        until: new Date("2026-10-29T08:00:00.000Z"),
+        now,
       }),
       false
     );
+    assert.equal(humanHandoffActive({ state: "HUMAN_ACTIVE", until: null, now }), true);
   });
 });

@@ -8,7 +8,7 @@ import { sendCloudHqImage, sendCloudHqText } from "./cloud-send";
 import type { IngestResult } from "./ingest";
 import { isStampMenuQuery, isStampStatusQuery } from "@/lib/loyalty/rules";
 import { isSecretCodeMessage } from "./secret-code";
-import { suppressForHumanHandoff } from "./customer-inbound";
+import { handoffExpiry, humanHandoffActive } from "./customer-inbound";
 
 function isPrismaP2002(err: unknown, field?: string): boolean {
   if (!err || typeof err !== "object") return false;
@@ -193,6 +193,7 @@ async function ingestOne(
   }
 
   const advance = !history || ev.sentAt >= conversation.lastMessageAt;
+  const staffReply = ev.source === "business_app";
   await prisma.waConversation.update({
     where: { id: conversation.id },
     data: {
@@ -200,21 +201,36 @@ async function ingestOne(
       lastPreview: advance ? previewBody(ev.body) : undefined,
       lastInboundAt: history || ev.fromMe ? undefined : ev.sentAt,
       lastOutboundAt: history || !ev.fromMe ? undefined : ev.sentAt,
+      ...(staffReply
+        ? { handoffState: "HUMAN_ACTIVE", handoffUntil: handoffExpiry(ev.sentAt) }
+        : {}),
     },
   });
 
-  if (history || ev.source === "business_app") {
+  if (history || staffReply) {
     return { result: { ok: true, conversationId: conversation.id } };
   }
 
   let suppressWamid: string | undefined;
   if (!ev.fromMe) {
-    const previous = await prisma.waMessage.findFirst({
-      where: { conversationId: conversation.id, NOT: { externalId: ev.externalId } },
-      orderBy: { sentAt: "desc" },
-      select: { fromMe: true, source: true, sentAt: true },
+    const current = await prisma.waConversation.findUnique({
+      where: { id: conversation.id },
+      select: { handoffState: true, handoffUntil: true },
     });
-    if (suppressForHumanHandoff({ sentAt: ev.sentAt, echoInPayload, previous })) {
+    let active = humanHandoffActive({
+      state: current?.handoffState || "",
+      until: current?.handoffUntil ?? null,
+      now: ev.sentAt,
+    });
+    if (!active && echoInPayload) {
+      const until = handoffExpiry(ev.sentAt);
+      await prisma.waConversation.update({
+        where: { id: conversation.id },
+        data: { handoffState: "HUMAN_ACTIVE", handoffUntil: until },
+      });
+      active = humanHandoffActive({ state: "HUMAN_ACTIVE", until, now: ev.sentAt });
+    }
+    if (active) {
       suppressWamid = ev.externalId.startsWith("wacloud:") ? ev.externalId.slice("wacloud:".length) : ev.externalId;
     }
   }
@@ -359,6 +375,8 @@ async function applyAccountNotes(notes: CloudAccountNote[]) {
     if (note.reason) patch.syncDetail = note.reason.slice(0, 240);
     if (note.connectionStatus) patch.connectionStatus = note.connectionStatus;
     const attention = note.connectionStatus === "needs_attention";
+    if (attention) patch.automationPaused = "true";
+    if (note.connectionStatus === "connected") patch.automationPaused = "false";
     await mergeCloudConnectorMeta({
       phoneNumberId: note.phoneNumberId || undefined,
       wabaId: note.phoneNumberId ? undefined : note.wabaId || undefined,

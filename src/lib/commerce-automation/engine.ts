@@ -14,6 +14,7 @@ import {
   workspaceTextPayload,
 } from "@/lib/commerce-automation/match";
 import { purposePermitted, type WorkspaceAutomationState } from "@/lib/commerce-automation/policy";
+import { humanHandoffActive } from "@/lib/conversations/customer-inbound";
 
 type AutomationRow = {
   tenantId: string;
@@ -59,6 +60,16 @@ function stateOf(row: Pick<AutomationRow, "inboundEnabled" | "paymentFollowUpEna
     marketingEnabled: row.marketingEnabled,
     pilotMode: row.pilotMode,
   };
+}
+
+function connectionPaused(raw: string | null) {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as { connectionStatus?: unknown; automationPaused?: unknown };
+    return parsed.connectionStatus === "needs_attention" || parsed.automationPaused === "true";
+  } catch {
+    return false;
+  }
 }
 
 function phoneFromMeta(raw: string | null) {
@@ -110,6 +121,13 @@ async function resolveWorkspace(phoneNumberId: string): Promise<Routed> {
   }
   if (await otherTenantClaimsPhone(phoneNumberId, phone.tenantId)) {
     return { ok: false, reason: "cross_tenant" };
+  }
+  const connector = await prisma.connector.findUnique({
+    where: { tenantId_provider: { tenantId: phone.tenantId, provider: WHATSAPP_CLOUD_PROVIDER } },
+    select: { metaJson: true },
+  });
+  if (connector && connectionPaused(connector.metaJson)) {
+    return { ok: false, reason: "connection_needs_attention" };
   }
   const row = await prisma.workspaceAutomation.findUnique({
     where: { tenantId: phone.tenantId },
@@ -245,6 +263,32 @@ async function handleEvent(input: { event: InboundEvent; now: Date; fetchImpl: t
   if (row.wabaId && routed.config.wabaId && row.wabaId !== routed.config.wabaId) return "binding_mismatch";
   const digits = recipientDigits(input.event.fromWaId);
   if (!digits) return "invalid_recipient";
+  const contact = await prisma.waContact.findFirst({
+    where: { tenantId: routed.config.tenantId, phone: digits },
+    select: { id: true },
+  });
+  if (contact) {
+    const conversation = await prisma.waConversation.findFirst({
+      where: {
+        tenantId: routed.config.tenantId,
+        contactId: contact.id,
+        sessionId: `cloud:${input.event.phoneNumberId}`,
+        status: "OPEN",
+      },
+      orderBy: { lastMessageAt: "desc" },
+      select: { handoffState: true, handoffUntil: true },
+    });
+    if (
+      conversation &&
+      humanHandoffActive({
+        state: conversation.handoffState,
+        until: conversation.handoffUntil,
+        now: input.now,
+      })
+    ) {
+      return "human_handoff";
+    }
+  }
   const open = withinServiceWindow(inboundAt(input.event.sentAt, input.now), input.now);
   if (open) {
     await releaseHeld({ row, config: routed.config, digits, fetchImpl: input.fetchImpl });
