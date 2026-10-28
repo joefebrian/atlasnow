@@ -1342,6 +1342,8 @@ model YolaOrder {
   amountIdr      Int
   currency       String   @default("IDR")
   status         String   @default("PENDING_PAYMENT")
+  /// synthetic | pilot | unspecified. Simulated payment does not change this.
+  origin         String   @default("unspecified")
   preferenceNote String   @default("")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt

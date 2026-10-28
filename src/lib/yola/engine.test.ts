@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { prisma } from "@/lib/db";
+import { demoCheckoutUrl, loadDemoCheckout, paymentLinkMessage, simulateDemoPayment, tryDeliverPaymentLink } from "@/lib/yola/checkout";
 import { readInbound } from "@/lib/yola/inbound";
 import {
   applyPaymentEvent,
@@ -65,6 +66,9 @@ describe("yola postgres engine", { skip: enabled ? false : "YOLA_TEST_DATABASE_U
     delete process.env.YOLA_FLOW_SEND_ENABLED;
     delete process.env.YOLA_LIVE_PAYMENTS_ENABLED;
     delete process.env.YOLA_TICKET_LIVE_ISSUANCE_ENABLED;
+    delete process.env.YOLA_PILOT_LINK_SEND_ENABLED;
+    delete process.env.YOLA_PILOT_ALLOWLIST;
+    delete process.env.YOLA_WA_ACCESS_TOKEN;
     const tenant = await prisma.tenant.create({
       data: { name: "Yola Test", slug: `yola-test-${Date.now()}`, type: "CLIENT", loginEnabled: true },
     });
@@ -289,5 +293,263 @@ describe("yola postgres engine", { skip: enabled ? false : "YOLA_TEST_DATABASE_U
       now,
     });
     assert.equal(still.action, "suppressed_outside_window");
+  });
+
+  it("simulates a demo payment without settling and sends one link only to an allowlisted sender", async () => {
+    const pilotNow = new Date("2026-10-28T03:00:00.000Z");
+    const stamp = String(Math.floor(pilotNow.getTime() / 1000));
+    const buyer = "62817770001";
+    const other = "62817770002";
+    const syntheticFrom = "62817770003";
+    let calls = 0;
+    const throwingFetch: typeof fetch = async () => {
+      calls += 1;
+      throw new Error("network_disabled");
+    };
+
+    process.env.YOLA_FLOW_SEND_ENABLED = "true";
+    delete process.env.YOLA_PILOT_ALLOWLIST;
+    const blockedInvite = await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(textBody("wamid.PILOT.BLOCKED", other, "yola fun", stamp))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    assert.equal(blockedInvite.action, "flow_invited");
+    assert.equal(calls, 0);
+    delete process.env.YOLA_FLOW_SEND_ENABLED;
+
+    const invited = await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(textBody("wamid.PILOT.INVITE", buyer, "yola fun", stamp))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    assert.equal(invited.action, "flow_invited");
+    const created = await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(nfmBody("wamid.PILOT.NFM", buyer, {
+        buyer_name: "Rina Pilot",
+        buyer_phone: buyer,
+        visit_date: "2026-12-02",
+        visit_time: "SLOT_1400",
+        flow_token: invited.flowToken || "",
+      }))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    assert.equal(created.action, "order_created");
+    assert.equal(calls, 0);
+    const order = await prisma.yolaOrder.findFirstOrThrow({ where: { tenantId, humanId: created.orderId } });
+    assert.equal(order.origin, "pilot");
+    assert.equal(order.status, "PENDING_PAYMENT");
+    assert.equal(order.visitTime, "14:00");
+    assert.equal(order.waId, buyer);
+    const held = await prisma.yolaOutboundMessage.findFirstOrThrow({
+      where: { tenantId, waId: buyer, kind: "payment_link", status: "held" },
+    });
+    const token = created.paymentNonce || "";
+    assert.match(token, /^[A-Za-z0-9_-]{20,128}$/);
+    assert.equal(held.body, paymentLinkMessage({ orderId: order.humanId, url: demoCheckoutUrl(token) }));
+    assert.match(held.body, /\/pay\/yola\//);
+    assert.equal(held.body.includes(buyer), false);
+    assert.equal(await prisma.yolaPaymentSession.count({ where: { orderId: order.id } }), 1);
+    const replay = await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(nfmBody("wamid.PILOT.NFM", buyer, {
+        buyer_name: "Rina Pilot",
+        buyer_phone: buyer,
+        visit_date: "2026-12-02",
+        visit_time: "SLOT_1400",
+        flow_token: invited.flowToken || "",
+      }))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    assert.equal(replay.duplicate, true);
+    assert.equal(await prisma.yolaOrder.count({ where: { tenantId, flowToken: invited.flowToken || "" } }), 1);
+    assert.equal(await prisma.yolaPaymentSession.count({ where: { orderId: order.id } }), 1);
+
+    assert.equal((await loadDemoCheckout("nope")).state, "invalid");
+    const later = new Date(pilotNow.getTime() + 25 * 60 * 60 * 1000);
+    assert.equal((await loadDemoCheckout(token, later)).state, "expired");
+    assert.equal((await simulateDemoPayment(token, later)).reason, "expired");
+    const ready = await loadDemoCheckout(token, pilotNow);
+    assert.equal(ready.state, "ready");
+    assert.equal(ready.orderId, order.humanId);
+    assert.equal(ready.visitTime, "14:00");
+    assert.equal(ready.amountIdr, 499000);
+    assert.equal(ready.financialStatus, "PENDING_PAYMENT");
+    assert.equal(JSON.stringify(ready).includes(buyer), false);
+    const firstSim = await simulateDemoPayment(token, pilotNow);
+    assert.equal(firstSim.ok, true);
+    if (firstSim.ok) {
+      assert.equal(firstSim.reason, "simulated");
+      assert.equal(firstSim.financialStatus, "PENDING_PAYMENT");
+      assert.equal(firstSim.tickets, 0);
+    }
+    const secondSim = await simulateDemoPayment(token, pilotNow);
+    assert.equal(secondSim.ok, true);
+    if (secondSim.ok) assert.equal(secondSim.reason, "already_simulated");
+    const afterSim = await prisma.yolaOrder.findFirstOrThrow({ where: { id: order.id } });
+    assert.equal(afterSim.status, "PENDING_PAYMENT");
+    assert.equal(afterSim.origin, "pilot");
+    assert.equal(await prisma.yolaTicket.count({ where: { orderId: order.id } }), 0);
+    const session = await prisma.yolaPaymentSession.findFirstOrThrow({ where: { orderId: order.id } });
+    assert.equal(session.status, "SIMULATED_PAID");
+    const events = await prisma.yolaPaymentEvent.findMany({ where: { orderId: order.id } });
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.outcome, "SIMULATED_PAID");
+    assert.equal(events[0]?.live, false);
+    assert.equal((await loadDemoCheckout(token, pilotNow)).state, "simulated");
+
+    const base = { tenantId, waId: buyer, orderId: order.humanId, now: pilotNow, fetchImpl: throwingFetch };
+    assert.equal((await tryDeliverPaymentLink(base)).reason, "pilot_send_disabled");
+    process.env.YOLA_PILOT_LINK_SEND_ENABLED = "true";
+    assert.equal((await tryDeliverPaymentLink(base)).reason, "not_allowlisted");
+    process.env.YOLA_PILOT_ALLOWLIST = buyer;
+    await prisma.yolaCustomer.update({
+      where: { tenantId_waId: { tenantId, waId: buyer } },
+      data: { lastInboundAt: new Date(pilotNow.getTime() - 25 * 60 * 60 * 1000) },
+    });
+    assert.equal((await tryDeliverPaymentLink(base)).reason, "outside_window");
+    await prisma.yolaCustomer.update({
+      where: { tenantId_waId: { tenantId, waId: buyer } },
+      data: { lastInboundAt: pilotNow },
+    });
+    assert.equal((await tryDeliverPaymentLink(base)).reason, "send_unconfigured");
+    assert.equal(calls, 0);
+
+    process.env.YOLA_WA_ACCESS_TOKEN = "yola-test-token";
+    let seenUrl = "";
+    let seenTo = "";
+    const okFetch: typeof fetch = async (url, init) => {
+      calls += 1;
+      seenUrl = String(url);
+      seenTo = String(init?.body || "");
+      return new Response(JSON.stringify({ messages: [{ id: "wamid.PILOT.OUT" }] }), { status: 200 });
+    };
+    const sent = await tryDeliverPaymentLink({ ...base, fetchImpl: okFetch });
+    assert.equal(sent.reason, "sent");
+    assert.equal(calls, 1);
+    assert.match(seenUrl, /\/900000000000001\/messages$/);
+    assert.match(seenTo, /"to":"62817770001"/);
+    assert.equal(seenTo.includes("yolafun_presale_offer"), false);
+    const outbound = await prisma.yolaOutboundMessage.findFirstOrThrow({ where: { id: held.id } });
+    assert.equal(outbound.status, "sent");
+    assert.equal(outbound.providerWamid, "wamid.PILOT.OUT");
+    assert.equal(outbound.deliveryStatus, "accepted");
+    const again = await tryDeliverPaymentLink({ ...base, fetchImpl: okFetch });
+    assert.equal(again.reason, "no_held_link");
+    assert.equal(calls, 1);
+    await prisma.yolaOutboundMessage.update({ where: { id: held.id }, data: { status: "held" } });
+    const claimed = await tryDeliverPaymentLink({ ...base, fetchImpl: okFetch });
+    assert.equal(claimed.reason, "duplicate_send");
+    assert.equal(calls, 1);
+
+    const failedInvite = await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(textBody("wamid.PILOT.FAIL.INVITE", "62817770004", "kartu presale yola", stamp))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(nfmBody("wamid.PILOT.FAIL.NFM", "62817770004", {
+        buyer_name: "Rina Pilot",
+        buyer_phone: "62817770004",
+        visit_date: "2026-12-03",
+        visit_time: "SLOT_1000",
+        flow_token: failedInvite.flowToken || "",
+      }))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    process.env.YOLA_PILOT_ALLOWLIST = `${buyer},62817770004`;
+    const failFetch: typeof fetch = async () => {
+      calls += 1;
+      return new Response("no", { status: 500 });
+    };
+    const failed = await tryDeliverPaymentLink({
+      tenantId,
+      waId: "62817770004",
+      orderId: (await prisma.yolaOrder.findFirstOrThrow({ where: { tenantId, waId: "62817770004" } })).humanId,
+      now: pilotNow,
+      fetchImpl: failFetch,
+    });
+    assert.equal(failed.reason, "graph_rejected");
+    const failedRow = await prisma.yolaOutboundMessage.findFirstOrThrow({
+      where: { tenantId, waId: "62817770004", kind: "payment_link" },
+    });
+    assert.equal(failedRow.status, "held");
+    assert.equal(failedRow.deliveryStatus, "failed");
+    const callsAfterFail = calls;
+    const failedAgain = await tryDeliverPaymentLink({
+      tenantId,
+      waId: "62817770004",
+      orderId: (await prisma.yolaOrder.findFirstOrThrow({ where: { tenantId, waId: "62817770004" } })).humanId,
+      now: pilotNow,
+      fetchImpl: failFetch,
+    });
+    assert.equal(failedAgain.reason, "duplicate_send");
+    assert.equal(calls, callsAfterFail);
+
+    const syntheticInvite = await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(textBody("wamid.PILOT.SYN.INVITE", syntheticFrom, "yola fun", stamp))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    const synthetic = await handleYolaEvent({
+      tenantId,
+      phoneNumberId: phone,
+      event: readInbound(nfmBody("wamid.PILOT.SYN.NFM", syntheticFrom, {
+        buyer_name: "TEST SYNTHETIC",
+        buyer_phone: syntheticFrom,
+        visit_date: "2026-12-02",
+        visit_time: "SLOT_1600",
+        flow_token: syntheticInvite.flowToken || "",
+      }))[0],
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    assert.equal(synthetic.action, "order_created");
+    const syntheticOrder = await prisma.yolaOrder.findFirstOrThrow({ where: { tenantId, humanId: synthetic.orderId } });
+    assert.equal(syntheticOrder.origin, "synthetic");
+    process.env.YOLA_PILOT_ALLOWLIST = syntheticFrom;
+    const blockedSynthetic = await tryDeliverPaymentLink({
+      tenantId,
+      waId: syntheticFrom,
+      orderId: syntheticOrder.humanId,
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    assert.equal(blockedSynthetic.reason, "synthetic_record");
+    await prisma.yolaOutboundMessage.updateMany({
+      where: { tenantId, waId: syntheticFrom, kind: "payment_link", status: "held" },
+      data: { status: "quarantine" },
+    });
+    const quarantined = await tryDeliverPaymentLink({
+      tenantId,
+      waId: syntheticFrom,
+      orderId: syntheticOrder.humanId,
+      now: pilotNow,
+      fetchImpl: throwingFetch,
+    });
+    assert.equal(quarantined.reason, "no_held_link");
+    const desk = await listYolaDesk(tenantId);
+    assert.ok(desk.quarantinedOutbound >= 1);
+    assert.equal(JSON.stringify(desk).includes(buyer), false);
+    delete process.env.YOLA_PILOT_LINK_SEND_ENABLED;
+    delete process.env.YOLA_PILOT_ALLOWLIST;
+    delete process.env.YOLA_WA_ACCESS_TOKEN;
+    delete process.env.YOLA_FLOW_SEND_ENABLED;
   });
 });

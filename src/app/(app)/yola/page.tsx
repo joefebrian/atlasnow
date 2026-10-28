@@ -3,7 +3,7 @@ import { readSession } from "@/lib/auth";
 import { canAccessTenant, listAccessibleClientTenants } from "@/lib/locations/access";
 import { homePathForNav } from "@/lib/nav-access";
 import { DEMO_TICKET_PHRASE } from "@/lib/yola/catalog";
-import { YOLA_SETUP, flowSendEnabled, livePaymentsEnabled, ticketLiveIssuanceEnabled, yolaPhoneNumberId, yolaWabaId } from "@/lib/yola/config";
+import { YOLA_SETUP, flowSendEnabled, livePaymentsEnabled, pilotAllowlist, pilotLinkSendEnabled, ticketLiveIssuanceEnabled, yolaPhoneNumberId, yolaWabaId } from "@/lib/yola/config";
 import { listYolaDesk } from "@/lib/yola/engine";
 import { sessionCanReadYola, yolaRoleAllowed } from "@/lib/yola/access";
 
@@ -30,6 +30,8 @@ export default async function YolaPage({ searchParams }: Props) {
       </header>
       <section className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm sm:grid-cols-2">
         <p>Flow send: {flowSendEnabled() ? "on" : "off"}</p>
+        <p>Pilot payment link: {pilotLinkSendEnabled() ? "on" : "off"}</p>
+        <p>Pilot allowlist: {pilotAllowlist().length ? "configured" : "empty"}</p>
         <p>Bulk marketing: off</p>
         <p>Live payments: {livePaymentsEnabled() ? "on" : "off"}</p>
         <p>Ticket issuance: {ticketLiveIssuanceEnabled() ? "LIVE" : "TEST"}</p>
@@ -49,7 +51,7 @@ export default async function YolaPage({ searchParams }: Props) {
       {desk ? (
         <section className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
           <p className="border-b border-slate-100 px-4 py-3 text-sm text-slate-600">
-            Open invitations {desk.invites}. Held messages {desk.heldOutbound}. Held messages were not sent.
+            Open invitations {desk.invites}. Held messages {desk.heldOutbound}. Quarantined {desk.quarantinedOutbound}. Held and quarantined messages were not sent.
           </p>
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-slate-500">
@@ -57,6 +59,7 @@ export default async function YolaPage({ searchParams }: Props) {
                 <th className="px-4 py-2">Order</th>
                 <th className="px-4 py-2">Buyer</th>
                 <th className="px-4 py-2">Visit</th>
+                <th className="px-4 py-2">Record</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2">Payment</th>
                 <th className="px-4 py-2">Ticket</th>
@@ -65,7 +68,7 @@ export default async function YolaPage({ searchParams }: Props) {
             <tbody>
               {desk.orders.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-4 text-slate-500" colSpan={6}>No orders yet.</td>
+                  <td className="px-4 py-4 text-slate-500" colSpan={7}>No orders yet.</td>
                 </tr>
               ) : (
                 desk.orders.map((order) => (
@@ -73,8 +76,9 @@ export default async function YolaPage({ searchParams }: Props) {
                     <td className="px-4 py-3 font-medium">{order.humanId}<div className="text-xs text-slate-500">Rp{order.amountIdr.toLocaleString("id-ID")}</div></td>
                     <td className="px-4 py-3">{order.buyerName}{order.phoneMismatch ? <div className="text-xs text-amber-700">Phone differs from WhatsApp</div> : null}</td>
                     <td className="px-4 py-3">{order.visitDate} {order.visitTime}<div className="text-xs text-slate-500">{order.preferenceNote}</div></td>
+                    <td className="px-4 py-3">{order.origin === "synthetic" ? "Synthetic test" : order.origin === "pilot" ? "Pilot" : order.origin}</td>
                     <td className="px-4 py-3">{order.status}</td>
-                    <td className="px-4 py-3">{order.payments[0]?.mode ?? "sandbox"} · {order.payments[0]?.status ?? "none"}</td>
+                    <td className="px-4 py-3">{order.payments[0]?.status === "SIMULATED_PAID" ? "Simulated · not revenue" : `${order.payments[0]?.mode ?? "sandbox"} · ${order.payments[0]?.status ?? "none"}`}</td>
                     <td className="px-4 py-3">
                       {order.tickets[0] ? `${order.tickets[0].issuanceMode} · ${order.tickets[0].remaining} left` : "none"}
                       {order.tickets[0]?.issuanceMode === "TEST" ? <div className="text-xs text-slate-500">{DEMO_TICKET_PHRASE}</div> : null}

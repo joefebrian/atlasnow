@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { DEMO_TICKET_PHRASE, PRODUCT } from "@/lib/yola/catalog";
-import { flowSendEnabled, ticketLiveIssuanceEnabled, yolaAccessToken, yolaPhoneNumberId, yolaPublishedFlowId } from "@/lib/yola/config";
+import { demoCheckoutUrl, newCheckoutToken, paymentLinkMessage, tryDeliverPaymentLink } from "@/lib/yola/checkout";
+import { flowSendEnabled, recipientAllowed, ticketLiveIssuanceEnabled, yolaAccessToken, yolaPhoneNumberId, yolaPublishedFlowId } from "@/lib/yola/config";
 import { readInbound, type InboundEvent } from "@/lib/yola/inbound";
 import { resolveYolaTenantId } from "@/lib/yola/access";
 import {
@@ -167,6 +168,7 @@ async function queueInvite(tx: Tx, input: {
 }
 
 async function dispatchHeld(input: { to: string; payload: unknown; fetchImpl?: typeof fetch }) {
+  if (!recipientAllowed(input.to)) return { sent: false, reason: "not_allowlisted" };
   if (!flowSendEnabled()) return { sent: false, reason: "send_disabled" };
   const token = yolaAccessToken();
   const phoneNumberId = yolaPhoneNumberId();
@@ -233,6 +235,15 @@ export async function handleYolaEvent(input: {
         screen: "OFFER",
       });
       await dispatchHeld({ to: input.event.fromWaId, payload, fetchImpl: input.fetchImpl });
+    }
+    if (result.action === "order_created" && result.orderId) {
+      await tryDeliverPaymentLink({
+        tenantId: input.tenantId,
+        waId: input.event.fromWaId,
+        orderId: result.orderId,
+        now: input.now,
+        fetchImpl: input.fetchImpl,
+      });
     }
     return result;
   });
@@ -390,11 +401,12 @@ async function handleSubmission(
       amountIdr: OFFER.amountIdr,
       currency: OFFER.currency,
       status: "PENDING_PAYMENT",
+      origin: parsed.form.buyerName === "TEST SYNTHETIC" ? "synthetic" : "pilot",
       preferenceNote: OFFER.preferenceNote,
     },
   });
   await tx.yolaFlowSession.update({ where: { id: session.id }, data: { status: "completed" } });
-  const nonce = randomBytes(18).toString("base64url");
+  const checkoutToken = newCheckoutToken();
   await tx.yolaPaymentSession.create({
     data: {
       tenantId: input.tenantId,
@@ -404,7 +416,7 @@ async function handleSubmission(
       status: "PENDING",
       amountIdr: OFFER.amountIdr,
       currency: OFFER.currency,
-      nonceHash: hashSecret(nonce),
+      nonceHash: hashSecret(checkoutToken),
       expiresAt: new Date(input.now.getTime() + 24 * 60 * 60 * 1000),
     },
   });
@@ -412,11 +424,11 @@ async function handleSubmission(
     tenantId: input.tenantId,
     waId: input.event.fromWaId,
     kind: "payment_link",
-    body: `${parsed.form.buyerName}, order ${humanId}. ${OFFER.name} Rp499.000. Pembayaran sandbox, bukan pembayaran sungguhan. ${OFFER.preferenceNote}`,
+    body: paymentLinkMessage({ orderId: humanId, url: demoCheckoutUrl(checkoutToken) }),
     payload: { held: true, orderId: humanId, mode: "sandbox" },
   });
   await remember(tx, input.tenantId, dedupeKey, { flowToken: parsed.form.flowToken, orderId: humanId });
-  return { action: "order_created", orderId: humanId, flowToken: parsed.form.flowToken, paymentNonce: nonce };
+  return { action: "order_created", orderId: humanId, flowToken: parsed.form.flowToken, paymentNonce: checkoutToken };
 }
 
 export async function applyPaymentEvent(input: {
@@ -546,7 +558,7 @@ export async function redeemTicket(input: {
 }
 
 export async function listYolaDesk(tenantId: string) {
-  const [orders, invites, heldOutbound, template] = await Promise.all([
+  const [orders, invites, heldOutbound, quarantinedOutbound, template] = await Promise.all([
     prisma.yolaOrder.findMany({
       where: { tenantId },
       orderBy: { createdAt: "desc" },
@@ -560,6 +572,7 @@ export async function listYolaDesk(tenantId: string) {
         amountIdr: true,
         currency: true,
         phoneMismatch: true,
+        origin: true,
         preferenceNote: true,
         createdAt: true,
         payments: { select: { provider: true, mode: true, status: true } },
@@ -568,6 +581,7 @@ export async function listYolaDesk(tenantId: string) {
     }),
     prisma.yolaFlowSession.count({ where: { tenantId, status: "invited" } }),
     prisma.yolaOutboundMessage.count({ where: { tenantId, status: "held" } }),
+    prisma.yolaOutboundMessage.count({ where: { tenantId, status: "quarantine" } }),
     prisma.yolaAutomationEvent.findUnique({
       where: { tenantId_dedupeKey: { tenantId, dedupeKey: "template:verified" } },
     }),
@@ -590,6 +604,7 @@ export async function listYolaDesk(tenantId: string) {
   return {
     invites,
     heldOutbound,
+    quarantinedOutbound,
     templateStatus,
     templateName,
     flowId,

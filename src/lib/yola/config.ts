@@ -52,6 +52,31 @@ export function ticketLiveIssuanceEnabled() {
   return flagEnabled("YOLA_TICKET_LIVE_ISSUANCE_ENABLED");
 }
 
+/** Separate from Flow invites. Default off. An empty allowlist sends to nobody. */
+export function pilotLinkSendEnabled() {
+  return flagEnabled("YOLA_PILOT_LINK_SEND_ENABLED");
+}
+
+const TEST_SENDER_DIGITS = "15554362839";
+
+/** Digits only. The Meta test sender is never a recipient. */
+export function pilotAllowlist(): string[] {
+  const seen = new Set<string>();
+  for (const part of read("YOLA_PILOT_ALLOWLIST").split(",")) {
+    const digits = part.replace(/\D/g, "");
+    if (digits.length < 8 || digits.length > 15) continue;
+    if (digits === TEST_SENDER_DIGITS) continue;
+    seen.add(digits);
+  }
+  return [...seen];
+}
+
+export function recipientAllowed(waId: string) {
+  const digits = waId.replace(/\D/g, "");
+  if (!digits || digits === TEST_SENDER_DIGITS) return false;
+  return pilotAllowlist().includes(digits);
+}
+
 export const YOLA_SETUP = {
   token: "Set YOLA_WA_ACCESS_TOKEN in /opt/atlasnow/.env and on the atlas service. Do not paste the token into chat. Status stays UNVERIFIED until a Graph read succeeds.",
   waba: "Set YOLA_WABA_ID to the live WABA after confirming it in WhatsApp Manager. Do not assume 1736564147618215 until that read matches.",

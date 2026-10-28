@@ -57,6 +57,7 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/join") ||
     pathname.startsWith("/r/") ||
     pathname.startsWith("/card") ||
+    pathname.startsWith("/pay/yola") ||
     pathname.startsWith("/c/") ||
     pathname.startsWith("/i/") ||
     pathname.startsWith("/api/join") ||
