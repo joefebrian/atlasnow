@@ -119,9 +119,10 @@ export async function pushLocationProfileToGoogle(
 
   const connector = await prisma.connector.findUnique({
     where: {
-      tenantId_provider: {
+      tenantId_provider_accountKey: {
         tenantId: agency.id,
         provider: GOOGLE_PROVIDER,
+        accountKey: "",
       },
     },
   });
@@ -330,7 +331,7 @@ export async function pullLocationProfileFromGoogle(locationId: string): Promise
   if (!agency) throw new Error("Agency tenant missing");
   const connector = await prisma.connector.findUnique({
     where: {
-      tenantId_provider: { tenantId: agency.id, provider: GOOGLE_PROVIDER },
+      tenantId_provider_accountKey: { tenantId: agency.id, provider: GOOGLE_PROVIDER, accountKey: "" },
     },
   });
   if (!connector || connector.status === "DISCONNECTED") {

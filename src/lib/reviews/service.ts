@@ -139,7 +139,7 @@ export async function syncReviewsFromGoogle(opts?: {
 
   const connector = await prisma.connector.findUnique({
     where: {
-      tenantId_provider: { tenantId: agency.id, provider: GOOGLE_PROVIDER },
+      tenantId_provider_accountKey: { tenantId: agency.id, provider: GOOGLE_PROVIDER, accountKey: "" },
     },
   });
   if (!connector || connector.status === "DISCONNECTED" || connector.mode === "MOCK") {
@@ -509,7 +509,7 @@ export async function publishReviewReply(opts: {
   if (!agency) throw new Error("Agency tenant missing");
   const connector = await prisma.connector.findUnique({
     where: {
-      tenantId_provider: { tenantId: agency.id, provider: GOOGLE_PROVIDER },
+      tenantId_provider_accountKey: { tenantId: agency.id, provider: GOOGLE_PROVIDER, accountKey: "" },
     },
   });
   if (!connector || connector.mode !== "LIVE") {

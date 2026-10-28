@@ -54,7 +54,7 @@ describe("coexistence connection", { skip: enabled ? false : "YOLA_TEST_DATABASE
       verifiedName: "Mode Shop",
     });
     const row = await prisma.connector.findUniqueOrThrow({
-      where: { tenantId_provider: { tenantId: id, provider: "WHATSAPP_CLOUD" } },
+      where: { tenantId_provider_accountKey: { tenantId: id, provider: "WHATSAPP_CLOUD", accountKey: phone } },
     });
     const meta = JSON.parse(row.metaJson || "{}") as { connectionMode?: string };
     assert.equal(meta.connectionMode, "COEXISTENCE");
@@ -366,7 +366,7 @@ describe("coexistence connection", { skip: enabled ? false : "YOLA_TEST_DATABASE
     });
     assert.equal(routed.ran, false);
     const row = await prisma.connector.findUniqueOrThrow({
-      where: { tenantId_provider: { tenantId: id, provider: "WHATSAPP_CLOUD" } },
+      where: { tenantId_provider_accountKey: { tenantId: id, provider: "WHATSAPP_CLOUD", accountKey: phone } },
     });
     const meta = JSON.parse(row.metaJson || "{}") as { syncStatus?: string };
     assert.equal(meta.syncStatus, "syncing");
@@ -457,7 +457,7 @@ describe("coexistence connection", { skip: enabled ? false : "YOLA_TEST_DATABASE
       ],
     });
     const row = await prisma.connector.findUniqueOrThrow({
-      where: { tenantId_provider: { tenantId: id, provider: "WHATSAPP_CLOUD" } },
+      where: { tenantId_provider_accountKey: { tenantId: id, provider: "WHATSAPP_CLOUD", accountKey: phone } },
     });
     assert.equal(row.status, "CONNECTED");
     assert.match(row.lastError || "", /ACCOUNT_DISCONNECTED/);

@@ -84,10 +84,30 @@ async function ingestOne(
   const hq = await findCloudHqByPhoneNumberId(ev.phoneNumberId);
   if (!hq) return { result: { ok: true, ignored: "unmapped_session" } };
 
-  const location = await ensureHqLocation(hq.tenantId, { phone: ev.displayPhone });
+  const phoneRow = await prisma.wabaPhone.findUnique({
+    where: { phoneNumberId: hq.phoneNumberId },
+    select: { tenantId: true, locationId: true, isDefault: true },
+  });
+  if (phoneRow && phoneRow.tenantId !== hq.tenantId) {
+    return { result: { ok: true, ignored: "unmapped_session" } };
+  }
+  let locationId = "";
+  if (phoneRow?.locationId) {
+    const assigned = await prisma.location.findFirst({
+      where: { id: phoneRow.locationId, tenantId: hq.tenantId, status: { not: "ARCHIVED" } },
+      select: { id: true },
+    });
+    locationId = assigned?.id || "";
+  }
+  if (!locationId) {
+    const hqLocation = await ensureHqLocation(
+      hq.tenantId,
+      !phoneRow || phoneRow.isDefault ? { phone: ev.displayPhone } : undefined
+    );
+    locationId = hqLocation.id;
+  }
   const incoming = resolveIdentity(ev.waId, ev.waId, "META_CLOUD");
   const tenantId = hq.tenantId;
-  const locationId = location.id;
   const sessionId = `cloud:${hq.phoneNumberId}`;
 
   const found =
@@ -144,7 +164,7 @@ async function ingestOne(
     where: {
       contactId: contact.id,
       sessionId,
-      locationId,
+      tenantId,
       status: "OPEN",
     },
     orderBy: { lastMessageAt: "desc" },
@@ -161,6 +181,7 @@ async function ingestOne(
             contactId: contact.id,
             provider: "META_CLOUD",
             sessionId,
+            businessPhoneNumberId: hq.phoneNumberId,
             status: "OPEN",
             firstMessageAt: ev.sentAt,
             lastMessageAt: ev.sentAt,
@@ -179,6 +200,7 @@ async function ingestOne(
         body: ev.body,
         fromMe: ev.fromMe,
         source: ev.source,
+        referralJson: ev.referralJson || "",
         rawJson: raw.length > 4000 ? raw.slice(0, 4000) : raw,
       },
     });
@@ -201,6 +223,7 @@ async function ingestOne(
       lastPreview: advance ? previewBody(ev.body) : undefined,
       lastInboundAt: history || ev.fromMe ? undefined : ev.sentAt,
       lastOutboundAt: history || !ev.fromMe ? undefined : ev.sentAt,
+      businessPhoneNumberId: conversation.businessPhoneNumberId || hq.phoneNumberId,
       ...(staffReply
         ? { handoffState: "HUMAN_ACTIVE", handoffUntil: handoffExpiry(ev.sentAt) }
         : {}),

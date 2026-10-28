@@ -1,16 +1,12 @@
 import { prisma } from "@/lib/db";
+import { connectorUnique } from "@/lib/connectors/key";
 import { GOOGLE_PROVIDER } from "@/lib/google/config";
 import { encryptSecret } from "@/lib/google/crypto";
 
 /** Ensure agency has a Google Business Profile connector row. */
 export async function getOrCreateAgencyGoogleConnector(agencyTenantId: string) {
   return prisma.connector.upsert({
-    where: {
-      tenantId_provider: {
-        tenantId: agencyTenantId,
-        provider: GOOGLE_PROVIDER,
-      },
-    },
+    where: connectorUnique(agencyTenantId, GOOGLE_PROVIDER),
     create: {
       tenantId: agencyTenantId,
       provider: GOOGLE_PROVIDER,

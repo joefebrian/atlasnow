@@ -23,6 +23,38 @@ type ConnectionView = {
   status?: string;
 };
 
+type WaNumber = {
+  phoneNumberId: string;
+  displayPhone: string;
+  wabaId: string;
+  label: string;
+  alias: string;
+  teamLabel: string;
+  locationId: string | null;
+  locationName: string | null;
+  isDefault: boolean;
+  connectionMode: ConnectionMode | "";
+  health: "healthy" | "not_configured" | "disconnected" | "unauthorized" | "needs_attention";
+  lastActivity: string;
+  onboardingError: string;
+  automation?: {
+    inboundEnabled: boolean;
+    paymentFollowUpEnabled: boolean;
+    marketingEnabled: boolean;
+    pilotMode: boolean;
+    usesWorkspaceDefault: boolean;
+    configured: boolean;
+  };
+};
+
+function healthLabel(health: WaNumber["health"]) {
+  if (health === "healthy") return "Healthy";
+  if (health === "not_configured") return "Not configured";
+  if (health === "disconnected") return "Disconnected";
+  if (health === "unauthorized") return "Unauthorized";
+  return "Needs attention";
+}
+
 type Status = {
   connected?: boolean;
   phoneNumberId?: string | null;
@@ -33,6 +65,8 @@ type Status = {
   canEditOps?: boolean;
   quota?: ServiceQuotaSnapshot;
   connection?: ConnectionView | null;
+  numbers?: WaNumber[];
+  locations?: Array<{ id: string; name: string }>;
   automation?: {
     inboundEnabled: boolean;
     paymentFollowUpEnabled: boolean;
@@ -311,7 +345,7 @@ export function WhatsAppCloudPanel({
     }
   }
 
-  async function disconnect() {
+  async function disconnect(phoneNumberId?: string) {
     if (
       !window.confirm(
         "Disconnect AtlasNow from this WhatsApp number? This does not delete the WhatsApp account or unregister the number at Meta. New Cloud API events stop until you connect again."
@@ -320,7 +354,10 @@ export function WhatsAppCloudPanel({
       return;
     }
     setBusy(true);
-    await fetch(`/api/whatsapp-cloud${qs}`, {
+    const params = new URLSearchParams(qs.replace(/^\?/, ""));
+    if (phoneNumberId) params.set("phoneNumberId", phoneNumberId);
+    const query = params.toString();
+    await fetch(`/api/whatsapp-cloud${query ? `?${query}` : ""}`, {
       method: "DELETE",
       credentials: "same-origin",
     });
@@ -330,17 +367,118 @@ export function WhatsAppCloudPanel({
   }
 
   const blocked = isAgency && !clientId;
+  const numbers = status?.numbers || [];
+
+  async function saveNumber(phoneNumberId: string, patch: Record<string, unknown>) {
+    setBusy(true);
+    setErr(null);
+    const res = await fetch(`/api/whatsapp-cloud${qs}`, {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneNumberId, ...patch }),
+    });
+    const data = (await res.json()) as { error?: string };
+    if (!res.ok) setErr(data.error || "Could not save this number");
+    await load();
+    setBusy(false);
+  }
 
   return (
     <div className="an-card space-y-4 p-5">
-      <div>
-        <h2 className="text-sm font-semibold text-slate-900">WhatsApp</h2>
-        <p className="mt-1 text-[13px] leading-relaxed text-slate-500">
-          One official business number per workspace. Inbox and automation use this number.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">WhatsApp numbers</h2>
+          <p className="mt-1 text-[13px] leading-relaxed text-slate-500">
+            A workspace can use more than one WhatsApp number. Replies stay on the number that received the chat.
+          </p>
+        </div>
+        {numbers.length > 0 && !blocked ? (
+          <button type="button" className="an-btn-primary text-sm" disabled={busy} onClick={() => setChoosing(true)}>
+            Add WhatsApp Number
+          </button>
+        ) : null}
       </div>
 
-      {status?.connected && status.connection ? (
+      {numbers.length > 0 ? (
+        <ul className="space-y-3">
+          {numbers.map((number) => (
+            <li key={number.phoneNumberId} className="rounded-xl border border-slate-200 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {number.label || number.displayPhone || number.phoneNumberId}
+                    {number.isDefault ? " · Default" : ""}
+                  </p>
+                  <p className="text-[12px] text-slate-500">{number.displayPhone || "No display number"}</p>
+                </div>
+                <span className="text-[11px] font-semibold text-slate-700">{healthLabel(number.health)}</span>
+              </div>
+              <dl className="mt-2 grid gap-2 text-[12px] text-slate-600 sm:grid-cols-2">
+                <div>
+                  <dt className="text-[10px] font-bold uppercase text-slate-400">WABA</dt>
+                  <dd className="font-mono text-[11px] text-slate-900">{number.wabaId || "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] font-bold uppercase text-slate-400">Connection mode</dt>
+                  <dd className="text-slate-900">
+                    {number.connectionMode === "COEXISTENCE"
+                      ? "Coexistence"
+                      : number.connectionMode === "CLOUD_API_ONLY"
+                        ? "Cloud API"
+                        : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] font-bold uppercase text-slate-400">Location / team</dt>
+                  <dd className="text-slate-900">
+                    {[number.locationName, number.teamLabel].filter(Boolean).join(" · ") || "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] font-bold uppercase text-slate-400">Automation</dt>
+                  <dd className="text-slate-900">
+                    {`Inbound ${number.automation?.inboundEnabled ? "on" : "off"} · Follow-up ${
+                      number.automation?.paymentFollowUpEnabled ? "on" : "off"
+                    } · Marketing ${number.automation?.marketingEnabled ? "on" : "off"} · ${
+                      number.automation?.pilotMode === false ? "Production" : "Pilot"
+                    }${number.automation?.usesWorkspaceDefault ? " · Workspace default" : ""}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[10px] font-bold uppercase text-slate-400">Last activity</dt>
+                  <dd className="text-slate-900">{number.lastActivity || "—"}</dd>
+                </div>
+              </dl>
+              {number.onboardingError ? (
+                <p className="mt-2 text-[12px] text-amber-800">{number.onboardingError}</p>
+              ) : null}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {number.health !== "not_configured" ? (
+                  <button
+                    type="button"
+                    className="an-btn-ghost text-sm"
+                    disabled={busy}
+                    onClick={() => void disconnect(number.phoneNumberId)}
+                  >
+                    Disconnect
+                  </button>
+                ) : null}
+                {!number.isDefault && number.health === "healthy" ? (
+                  <button
+                    type="button"
+                    className="an-btn-ghost text-sm"
+                    disabled={busy}
+                    onClick={() => void saveNumber(number.phoneNumberId, { isDefault: true })}
+                  >
+                    Make default
+                  </button>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : status?.connected && status.connection ? (
         <dl className="grid gap-2 text-[12px] text-slate-600 sm:grid-cols-2">
           <div>
             <dt className="text-[10px] font-bold uppercase text-slate-400">Business display name</dt>
@@ -439,7 +577,7 @@ export function WhatsAppCloudPanel({
         </p>
       )}
 
-      {(choosing || !status?.connected) && !blocked ? (
+      {(choosing || numbers.length === 0) && !blocked ? (
         <div className="space-y-3">
           <p className="text-[12px] font-medium text-slate-700">Connect WhatsApp</p>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -491,14 +629,9 @@ export function WhatsAppCloudPanel({
       ) : null}
 
       <div className="flex flex-wrap gap-2">
-        {status?.connected && !choosing ? (
-          <button type="button" className="an-btn-ghost text-sm" disabled={busy} onClick={() => setChoosing(true)}>
-            Reconnect
-          </button>
-        ) : null}
-        {status?.connected ? (
-          <button type="button" className="an-btn-ghost text-sm" disabled={busy} onClick={() => void disconnect()}>
-            Disconnect
+        {numbers.length > 0 && choosing ? (
+          <button type="button" className="an-btn-ghost text-sm" disabled={busy} onClick={() => setChoosing(false)}>
+            Cancel
           </button>
         ) : null}
       </div>

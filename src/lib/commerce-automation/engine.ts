@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { getCloudHqConfig, WHATSAPP_CLOUD_PROVIDER } from "@/lib/conversations/cloud-hq";
+import { connectorUnique } from "@/lib/connectors/key";
+import { effectiveNumberAutomation } from "@/lib/commerce-automation/number-policy";
 import { META_GRAPH } from "@/lib/meta/oauth";
 import { readInbound, type InboundEvent } from "@/lib/yola/inbound";
 import { yolaPhoneNumberId } from "@/lib/yola/config";
@@ -102,12 +104,23 @@ async function otherTenantClaimsPhone(phoneNumberId: string, tenantId: string) {
   const rows = await prisma.connector.findMany({
     where: {
       provider: WHATSAPP_CLOUD_PROVIDER,
+      accountKey: phoneNumberId,
+      status: { not: "DISCONNECTED" },
+      NOT: { tenantId },
+    },
+    select: { id: true, metaJson: true },
+  });
+  if (rows.length > 0) return true;
+  const legacy = await prisma.connector.findMany({
+    where: {
+      provider: WHATSAPP_CLOUD_PROVIDER,
+      accountKey: "",
       status: { not: "DISCONNECTED" },
       NOT: { tenantId },
     },
     select: { metaJson: true },
   });
-  return rows.some((row) => phoneFromMeta(row.metaJson) === phoneNumberId);
+  return legacy.some((row) => phoneFromMeta(row.metaJson) === phoneNumberId);
 }
 
 async function resolveWorkspace(phoneNumberId: string): Promise<Routed> {
@@ -115,7 +128,7 @@ async function resolveWorkspace(phoneNumberId: string): Promise<Routed> {
   if (yolaPhone && phoneNumberId === yolaPhone) return { ok: false, reason: "yola_isolated" };
   const phone = await prisma.wabaPhone.findUnique({ where: { phoneNumberId } });
   if (!phone || phone.status !== "ACTIVE") return { ok: false, reason: "unrouted" };
-  const config = await getCloudHqConfig(phone.tenantId);
+  const config = await getCloudHqConfig(phone.tenantId, phoneNumberId);
   if (!config || config.phoneNumberId !== phoneNumberId || config.tenantId !== phone.tenantId) {
     return { ok: false, reason: "connector_mismatch" };
   }
@@ -123,17 +136,32 @@ async function resolveWorkspace(phoneNumberId: string): Promise<Routed> {
     return { ok: false, reason: "cross_tenant" };
   }
   const connector = await prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId: phone.tenantId, provider: WHATSAPP_CLOUD_PROVIDER } },
+    where: connectorUnique(phone.tenantId, WHATSAPP_CLOUD_PROVIDER, phoneNumberId),
     select: { metaJson: true },
   });
   if (connector && connectionPaused(connector.metaJson)) {
     return { ok: false, reason: "connection_needs_attention" };
   }
-  const row = await prisma.workspaceAutomation.findUnique({
-    where: { tenantId: phone.tenantId },
-    include: { allowlist: { select: { digits: true } } },
+  const [workspace, override, connectedCount] = await Promise.all([
+    prisma.workspaceAutomation.findUnique({
+      where: { tenantId: phone.tenantId },
+      include: { allowlist: { select: { digits: true } } },
+    }),
+    prisma.whatsAppNumberAutomation.findUnique({
+      where: { tenantId_phoneNumberId: { tenantId: phone.tenantId, phoneNumberId } },
+    }),
+    prisma.wabaPhone.count({ where: { tenantId: phone.tenantId, status: "ACTIVE" } }),
+  ]);
+  const effective = effectiveNumberAutomation({
+    tenantId: phone.tenantId,
+    phoneNumberId,
+    wabaId: phone.wabaId,
+    isDefault: phone.isDefault,
+    connectedCount,
+    workspace,
+    override,
   });
-  return { ok: true, config, row };
+  return { ok: true, config, row: effective };
 }
 
 function assertSessionPayload(payload: { type: string; interactive?: { type: string } }) {

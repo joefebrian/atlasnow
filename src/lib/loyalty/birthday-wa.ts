@@ -42,7 +42,10 @@ export async function runBirthdayH2AllTenants(): Promise<{
   try {
     const hq = await listConnectedCloudHq();
     const tenants: BirthdayH2Result[] = [];
+    const seen = new Set<string>();
     for (const cfg of hq) {
+      if (seen.has(cfg.tenantId)) continue;
+      seen.add(cfg.tenantId);
       tenants.push(await runBirthdayH2ForTenant(cfg.tenantId));
     }
     await prisma.auditEvent.create({

@@ -55,7 +55,7 @@ export function publicPages(metaJson: string | null): PublicMetaPage[] {
 
 export async function getMetaConnector(tenantId: string) {
   return prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId, provider: META_CONNECTOR } },
+    where: { tenantId_provider_accountKey: { tenantId, provider: META_CONNECTOR, accountKey: "" } },
   });
 }
 
@@ -91,7 +91,7 @@ export async function upsertMetaConnector(
   }
 
   return prisma.connector.upsert({
-    where: { tenantId_provider: { tenantId, provider: META_CONNECTOR } },
+    where: { tenantId_provider_accountKey: { tenantId, provider: META_CONNECTOR, accountKey: "" } },
     create: {
       tenantId,
       provider: META_CONNECTOR,

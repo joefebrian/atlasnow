@@ -16,6 +16,7 @@ export type CloudWhatsAppEvent = {
   imageMediaId: string | null;
   msgType: string;
   source: MessageSource;
+  referralJson: string;
 };
 
 export type CloudSyncNote = {
@@ -85,6 +86,17 @@ function sentAtOf(msg: Record<string, unknown>): Date {
   return ts > 0 ? new Date(ts * 1000) : new Date();
 }
 
+function referralJsonOf(msg: Record<string, unknown>): string {
+  const referral = asRecord(msg.referral);
+  if (!referral) return "";
+  const kept: Record<string, string> = {};
+  for (const key of ["source_type", "source_id", "source_url", "headline", "ctwa_clid", "body"]) {
+    const value = str(referral[key]).trim();
+    if (value) kept[key] = value.slice(0, 500);
+  }
+  return Object.keys(kept).length ? JSON.stringify(kept) : "";
+}
+
 function pushMessage(
   events: CloudWhatsAppEvent[],
   input: {
@@ -114,6 +126,7 @@ function pushMessage(
     imageMediaId: str(input.msg.type) === "image" ? str(image?.id) || null : null,
     msgType: str(input.msg.type) || "text",
     source: input.source,
+    referralJson: input.source === "history" ? "" : referralJsonOf(input.msg),
   });
 }
 

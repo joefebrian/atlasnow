@@ -119,8 +119,8 @@ export async function saveAutomationSettings(input: {
     triggerPhrases: input.patch.triggerPhrases.trim() || null,
     paymentTriggerPhrases: input.patch.paymentTriggerPhrases.trim() || null,
     paymentMessageText: next.paymentMessageText || null,
-    phoneNumberId: config?.phoneNumberId || null,
-    wabaId: config?.wabaId || null,
+    phoneNumberId: existing?.phoneNumberId || config?.phoneNumberId || null,
+    wabaId: existing?.wabaId || config?.wabaId || null,
   };
   await prisma.$transaction(async (tx) => {
     await tx.workspaceAutomation.upsert({

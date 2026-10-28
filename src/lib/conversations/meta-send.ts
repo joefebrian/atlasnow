@@ -25,7 +25,7 @@ export async function sendMetaInboxText(opts: {
   if (!to) return { ok: false, error: "No Messenger/Instagram id on this contact." };
 
   const connector = await prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId: opts.tenantId, provider: "META" } },
+    where: { tenantId_provider_accountKey: { tenantId: opts.tenantId, provider: "META", accountKey: "" } },
   });
   if (!connector || connector.status === "DISCONNECTED") {
     return { ok: false, error: "Meta is not connected for this brand." };

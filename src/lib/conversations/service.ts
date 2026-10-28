@@ -20,6 +20,11 @@ export type ConversationListItem = {
   provider: string;
   /** Mapped Page name, IG handle, or HQ number — what Meta Review calls the asset. */
   assetLabel: string | null;
+  businessPhoneNumberId: string;
+  businessLabel: string | null;
+  handoffState: string;
+  leadStatus: string;
+  assignedUserId: string;
 };
 
 type ListOpts = {
@@ -28,6 +33,11 @@ type ListOpts = {
   locationId?: string;
   tenantId?: string;
   provider?: string;
+  phoneNumberId?: string;
+  phoneNumberIds?: string[];
+  team?: string;
+  assignedUserId?: string;
+  leadStatus?: string;
 };
 
 type ConversationRow = {
@@ -39,6 +49,10 @@ type ConversationRow = {
   lastOutboundAt: Date | null;
   lastPreview: string;
   provider: string;
+  businessPhoneNumberId: string;
+  handoffState: string;
+  leadStatus: string;
+  assignedUserId: string;
   contact: {
     id: string;
     displayName: string | null;
@@ -89,6 +103,11 @@ function toListItem(row: ConversationRow): ConversationListItem {
     sessionId: row.sessionId,
     provider: row.provider,
     assetLabel: null,
+    businessPhoneNumberId: row.businessPhoneNumberId || "",
+    businessLabel: null,
+    handoffState: row.handoffState || "",
+    leadStatus: row.leadStatus || "",
+    assignedUserId: row.assignedUserId || "",
   };
 }
 
@@ -168,6 +187,9 @@ function listWhere(opts: ListOpts): Prisma.WaConversationWhereInput {
   const locationId = opts.locationId || undefined;
   const provider = opts.provider?.trim() || undefined;
   const clauses: Prisma.WaConversationWhereInput[] = [];
+  const phones = [...(opts.phoneNumberIds || []), ...(opts.phoneNumberId ? [opts.phoneNumberId] : [])]
+    .map((phone) => phone.trim())
+    .filter(Boolean);
 
   if (q) {
     clauses.push({
@@ -192,6 +214,17 @@ function listWhere(opts: ListOpts): Prisma.WaConversationWhereInput {
     ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
     ...(locationId ? { locationId } : {}),
     ...(provider ? { provider } : {}),
+    ...(phones.length
+      ? {
+          OR: phones.flatMap((phone) => [
+            { businessPhoneNumberId: phone },
+            { sessionId: `cloud:${phone}` },
+          ]),
+        }
+      : {}),
+    ...(opts.assignedUserId === "unassigned" ? { assignedUserId: "" } : {}),
+    ...(opts.assignedUserId && opts.assignedUserId !== "unassigned" ? { assignedUserId: opts.assignedUserId } : {}),
+    ...(opts.leadStatus ? { leadStatus: opts.leadStatus } : {}),
     ...(clauses.length ? { AND: clauses } : {}),
   };
 }
@@ -204,8 +237,25 @@ export async function listConversations(opts: ListOpts = {}): Promise<{
   const q = opts.q?.trim() || undefined;
   const tenantId = opts.tenantId || undefined;
   const provider = opts.provider || undefined;
-  const baseWhere = listWhere({ q, locationId, tenantId, provider, filter: "all" });
-  const listFilter = listWhere(opts);
+  let phoneNumberIds = opts.phoneNumberIds;
+  if (opts.team && tenantId) {
+    const teamPhones = await prisma.wabaPhone.findMany({
+      where: { tenantId, teamLabel: opts.team },
+      select: { phoneNumberId: true },
+    });
+    const allowed = new Set(teamPhones.map((row) => row.phoneNumberId));
+    const requested = opts.phoneNumberId ? [opts.phoneNumberId] : [];
+    phoneNumberIds = (phoneNumberIds || requested).filter((phone) => allowed.has(phone));
+    if (!opts.phoneNumberId && !opts.phoneNumberIds) phoneNumberIds = [...allowed];
+    if (phoneNumberIds.length === 0) {
+      return { conversations: [], stats: { total: 0, unreplied: 0, open: 0, mappings: 0 } };
+    }
+  }
+  const scoped = opts.team && tenantId
+    ? { ...opts, phoneNumberId: undefined, phoneNumberIds }
+    : { ...opts, phoneNumberIds };
+  const baseWhere = listWhere({ ...scoped, q, locationId, tenantId, provider, filter: "all" });
+  const listFilter = listWhere(scoped);
 
   const [rows, total, open, unrepliedCandidates, mappings] = await Promise.all([
     prisma.waConversation.findMany({
@@ -241,9 +291,25 @@ export async function listConversations(opts: ListOpts = {}): Promise<{
   await hydrateMetaDisplayNames(filtered);
   const conversations = filtered.map(toListItem);
   const labels = await lookupAssetLabels(conversations);
+  const businessIds = [...new Set(conversations.map((row) => row.businessPhoneNumberId).filter(Boolean))];
+  const businessPhones = businessIds.length
+    ? await prisma.wabaPhone.findMany({
+        where: { phoneNumberId: { in: businessIds }, ...(tenantId ? { tenantId } : {}) },
+        select: { phoneNumberId: true, displayPhone: true, alias: true },
+      })
+    : [];
+  const businessLabels = new Map(
+    businessPhones.map((phone) => [phone.phoneNumberId, phone.alias || phone.displayPhone || phone.phoneNumberId])
+  );
 
   return {
-    conversations: withAssetLabels(conversations, labels),
+    conversations: withAssetLabels(conversations, labels).map((row) => ({
+      ...row,
+      businessLabel: businessLabels.get(row.businessPhoneNumberId) || row.businessLabel,
+      assetLabel:
+        row.assetLabel ||
+        (row.provider === "META_CLOUD" ? businessLabels.get(row.businessPhoneNumberId) || null : row.assetLabel),
+    })),
     stats: {
       total,
       unreplied: unrepliedCandidates.filter(isUnreplied).length,

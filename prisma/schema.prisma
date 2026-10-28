@@ -111,6 +111,7 @@ model Tenant {
   yolaOutboundMessages YolaOutboundMessage[]
   yolaOrderDaySeqs    YolaOrderDaySeq[]
   workspaceAutomation WorkspaceAutomation?
+  whatsAppNumberAutomations WhatsAppNumberAutomation[]
 
   @@index([type, status])
   @@index([agencyId])
@@ -248,6 +249,7 @@ model Location {
   loyaltyGoEvents     LoyaltyGoEvent[]
   commerceOutlets     CommerceProductOutlet[]
   commerceOrders      CommerceOrder[]
+  wabaPhones          WabaPhone[]
 
   @@index([tenantId, status])
   @@index([tenantId, city])
@@ -360,6 +362,8 @@ model Connector {
   /// MOCK | LIVE
   mode             String    @default("LIVE")
   metaJson         String?
+  /// Empty for one-row providers. WhatsApp Cloud uses the phone number id.
+  accountKey       String    @default("")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -367,8 +371,9 @@ model Connector {
   syncRuns        SyncRun[]
   remoteLocations GoogleRemoteLocation[]
 
-  @@unique([tenantId, provider])
+  @@unique([tenantId, provider, accountKey])
   @@index([provider, status])
+  @@index([provider, accountKey])
 }
 
 model SyncRun {
@@ -739,6 +744,12 @@ model WaConversation {
   handoffState    String    @default("")
   /// Inactivity expiry for HUMAN_ACTIVE. Null means resume is explicit.
   handoffUntil    DateTime?
+  /// Cloud business phone that received this chat. Empty on older rows; sessionId still has cloud:{id}.
+  businessPhoneNumberId String @default("")
+  /// Workspace user id when a person is assigned. Empty means unassigned.
+  assignedUserId  String    @default("")
+  /// Explicit lead status. Empty is not a lead and is not ad attribution.
+  leadStatus      String    @default("")
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -750,6 +761,7 @@ model WaConversation {
   @@index([tenantId, lastMessageAt])
   @@index([locationId, lastMessageAt])
   @@index([contactId, sessionId, status])
+  @@index([tenantId, businessPhoneNumberId])
 }
 
 model WaMessage {
@@ -762,6 +774,8 @@ model WaMessage {
   fromMe         Boolean  @default(false)
   /// cloud, business_app, or history. Empty on rows written before coexistence.
   source         String   @default("")
+  /// Meta referral object when the webhook included one. Empty means unknown, not an ad lead.
+  referralJson   String   @default("")
   rawJson        String?
   /// Inbox image bytes. Already applied on production as 20261004120000 and 20261004143000.
   mediaImage     Bytes?
@@ -926,14 +940,52 @@ model WabaPhone {
   timezone        String   @default("Asia/Jakarta")
   paymentMethodOk Boolean  @default(false)
   status          String   @default("ACTIVE")
+  /// Staff label. Empty uses the display phone.
+  alias           String   @default("")
+  /// Optional outlet. Null serves the workspace without a branch assignment.
+  locationId      String?
+  /// Optional department or team label. Empty means no team filter.
+  teamLabel       String   @default("")
+  /// At most one default number per workspace. Sends that omit a phone use this number.
+  isDefault       Boolean  @default(false)
+  /// COEXISTENCE or CLOUD_API_ONLY when onboarding set it. Empty stays unset.
+  connectionMode  String   @default("")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  location   Location?           @relation(fields: [locationId], references: [id], onDelete: SetNull)
   months     WabaServiceMonth[]
   deliveries WabaServiceDelivery[]
 
   @@index([tenantId])
+  @@index([locationId])
+}
+
+/// Per-number automation override. A missing row does not turn automation on.
+/// Null fields inherit workspace defaults only for the bound or sole default number.
+model WhatsAppNumberAutomation {
+  id                      String   @id @default(cuid())
+  tenantId                String
+  phoneNumberId           String
+  inboundEnabled          Boolean?
+  paymentFollowUpEnabled  Boolean?
+  marketingEnabled        Boolean?
+  pilotMode               Boolean?
+  flowId                  String?
+  flowScreen              String?
+  flowCta                 String?
+  inboundBody             String?
+  triggerPhrases          String?
+  paymentTriggerPhrases   String?
+  paymentMessageText      String?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, phoneNumberId])
+  @@index([phoneNumberId])
 }
 
 /// Per-workspace commerce automation. Missing row means disabled.

@@ -21,7 +21,7 @@ export async function GET() {
   const connector = agency
     ? await prisma.connector.findUnique({
         where: {
-          tenantId_provider: { tenantId: agency.id, provider: GOOGLE_PROVIDER },
+          tenantId_provider_accountKey: { tenantId: agency.id, provider: GOOGLE_PROVIDER, accountKey: "" },
         },
       })
     : null;

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { connectorUnique } from "@/lib/connectors/key";
 import { decryptSecret, encryptSecret } from "@/lib/google/crypto";
 import { generateAtlasLocationId } from "@/lib/locations/ids";
 import { ensureWabaPhone, PhoneOwnedByAnotherWorkspace } from "@/lib/waba/service-quota";
@@ -17,6 +18,36 @@ export type CloudHqConfig = {
   status: string;
 };
 
+export type NumberHealth = "healthy" | "not_configured" | "disconnected" | "unauthorized" | "needs_attention";
+
+export type WorkspaceWhatsAppNumber = {
+  phoneNumberId: string;
+  displayPhone: string;
+  wabaId: string;
+  alias: string;
+  label: string;
+  teamLabel: string;
+  locationId: string | null;
+  locationName: string | null;
+  isDefault: boolean;
+  connectionMode: ConnectionMode | "";
+  health: NumberHealth;
+  lastActivity: string;
+  phoneStatus: string;
+  onboardingError: string;
+};
+
+type ConnectorRow = {
+  id: string;
+  tenantId: string;
+  status: string;
+  accessTokenEnc: string | null;
+  lastError: string | null;
+  displayName: string | null;
+  metaJson: string | null;
+  accountKey: string;
+};
+
 function parseMeta(raw: string | null | undefined): Record<string, string> {
   if (!raw) return {};
   try {
@@ -29,6 +60,53 @@ function parseMeta(raw: string | null | undefined): Record<string, string> {
     return out;
   } catch {
     return {};
+  }
+}
+
+export function cloudPhoneFromSession(sessionId: string): string {
+  const prefix = "cloud:";
+  return sessionId.startsWith(prefix) ? sessionId.slice(prefix.length).trim() : "";
+}
+
+export function deriveNumberHealth(row: {
+  status: string;
+  accessTokenEnc: string | null;
+  lastError: string | null;
+  metaJson: string | null;
+} | null): NumberHealth {
+  if (!row) return "not_configured";
+  if (row.status === "DISCONNECTED") return "disconnected";
+  if (!row.accessTokenEnc) return "not_configured";
+  const meta = parseMeta(row.metaJson);
+  if (row.status === "UNAUTHORIZED" || meta.connectionStatus === "unauthorized") return "unauthorized";
+  if (row.lastError && /unauthorized|oauth|invalid token|error.?190/i.test(row.lastError)) return "unauthorized";
+  try {
+    decryptSecret(row.accessTokenEnc);
+  } catch {
+    return "unauthorized";
+  }
+  if (meta.connectionStatus === "needs_attention" || meta.automationPaused === "true") return "needs_attention";
+  return "healthy";
+}
+
+function configFromRow(row: ConnectorRow | null, expectedPhone = ""): CloudHqConfig | null {
+  if (!row || row.status === "DISCONNECTED" || !row.accessTokenEnc) return null;
+  const meta = parseMeta(row.metaJson);
+  const phoneNumberId = (meta.phoneNumberId || row.accountKey || "").trim();
+  if (!phoneNumberId) return null;
+  if (expectedPhone && phoneNumberId !== expectedPhone) return null;
+  try {
+    return {
+      tenantId: row.tenantId,
+      connectorId: row.id,
+      phoneNumberId,
+      wabaId: (meta.wabaId || "").trim(),
+      accessToken: decryptSecret(row.accessTokenEnc),
+      displayPhone: (meta.displayPhone || "").trim() || null,
+      status: row.status,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -70,41 +148,61 @@ export async function ensureHqLocation(
 export async function listConnectedCloudHq(): Promise<CloudHqConfig[]> {
   const rows = await prisma.connector.findMany({
     where: { provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" } },
-    select: { tenantId: true },
   });
   const out: CloudHqConfig[] = [];
-  const seen = new Set<string>();
   for (const row of rows) {
-    if (seen.has(row.tenantId)) continue;
-    seen.add(row.tenantId);
-    const cfg = await getCloudHqConfig(row.tenantId);
+    const cfg = configFromRow(row);
     if (cfg) out.push(cfg);
   }
   return out;
 }
 
-export async function getCloudHqConfig(tenantId: string): Promise<CloudHqConfig | null> {
-  const row = await prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER } },
+async function connectedConfigs(tenantId: string): Promise<CloudHqConfig[]> {
+  const rows = await prisma.connector.findMany({
+    where: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" } },
   });
-  if (!row || row.status === "DISCONNECTED") return null;
-  if (!row.accessTokenEnc) return null;
-  const meta = parseMeta(row.metaJson);
-  const phoneNumberId = (meta.phoneNumberId || "").trim();
-  if (!phoneNumberId) return null;
-  try {
-    return {
-      tenantId,
-      connectorId: row.id,
-      phoneNumberId,
-      wabaId: (meta.wabaId || "").trim(),
-      accessToken: decryptSecret(row.accessTokenEnc),
-      displayPhone: (meta.displayPhone || "").trim() || null,
-      status: row.status,
-    };
-  } catch {
-    return null;
+  const out: CloudHqConfig[] = [];
+  for (const row of rows) {
+    const cfg = configFromRow(row);
+    if (cfg) out.push(cfg);
   }
+  return out;
+}
+
+/** Phone argument selects that number only. Omitted uses the default, or the only connected number. */
+export async function getCloudHqConfig(
+  tenantId: string,
+  phoneNumberId?: string | null
+): Promise<CloudHqConfig | null> {
+  const phone = (phoneNumberId || "").trim();
+  if (phone) {
+    const row = await prisma.connector.findUnique({
+      where: connectorUnique(tenantId, WHATSAPP_CLOUD_PROVIDER, phone),
+    });
+    return configFromRow(row, phone);
+  }
+  const preferred = await prisma.wabaPhone.findFirst({
+    where: { tenantId, isDefault: true, status: "ACTIVE" },
+    select: { phoneNumberId: true },
+  });
+  if (preferred) {
+    const hit = await getCloudHqConfig(tenantId, preferred.phoneNumberId);
+    if (hit) return hit;
+  }
+  const usable = await connectedConfigs(tenantId);
+  return usable.length === 1 ? usable[0] : null;
+}
+
+export async function cloudSendConfig(
+  tenantId: string,
+  sessionId: string,
+  businessPhoneNumberId = ""
+): Promise<CloudHqConfig | null> {
+  const phone = businessPhoneNumberId.trim() || cloudPhoneFromSession(sessionId);
+  if (!phone) return null;
+  const cfg = await getCloudHqConfig(tenantId, phone);
+  if (!cfg || cfg.phoneNumberId !== phone || cfg.tenantId !== tenantId) return null;
+  return cfg;
 }
 
 export async function findCloudHqByPhoneNumberId(
@@ -112,28 +210,29 @@ export async function findCloudHqByPhoneNumberId(
 ): Promise<CloudHqConfig | null> {
   const id = phoneNumberId.trim();
   if (!id) return null;
-  const rows = await prisma.connector.findMany({
-    where: { provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" } },
+  const owner = await prisma.wabaPhone.findUnique({
+    where: { phoneNumberId: id },
+    select: { tenantId: true },
   });
-  for (const row of rows) {
-    const meta = parseMeta(row.metaJson);
-    if ((meta.phoneNumberId || "").trim() !== id) continue;
-    if (!row.accessTokenEnc) continue;
-    try {
-      return {
-        tenantId: row.tenantId,
-        connectorId: row.id,
-        phoneNumberId: id,
-        wabaId: (meta.wabaId || "").trim(),
-        accessToken: decryptSecret(row.accessTokenEnc),
-        displayPhone: (meta.displayPhone || "").trim() || null,
-        status: row.status,
-      };
-    } catch {
-      continue;
-    }
-  }
-  return null;
+  const rows = await prisma.connector.findMany({
+    where: {
+      provider: WHATSAPP_CLOUD_PROVIDER,
+      accountKey: id,
+      status: { not: "DISCONNECTED" },
+    },
+  });
+  const owned = owner ? rows.filter((row) => row.tenantId === owner.tenantId) : rows;
+  if (owned.length === 1) return configFromRow(owned[0], id);
+  if (owned.length > 1) return null;
+  const legacy = await prisma.connector.findMany({
+    where: { provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" }, accountKey: "" },
+  });
+  const matches = legacy.filter((row) => {
+    if (owner && row.tenantId !== owner.tenantId) return false;
+    return (parseMeta(row.metaJson).phoneNumberId || "").trim() === id;
+  });
+  if (matches.length !== 1) return null;
+  return configFromRow(matches[0], id);
 }
 
 /** Read-only. Does not move a phone and does not write a connector. */
@@ -145,9 +244,20 @@ export async function assertCloudPhoneAvailable(tenantId: string, phoneNumberId:
     select: { tenantId: true },
   });
   if (owner && owner.tenantId !== tenantId) throw new PhoneOwnedByAnotherWorkspace();
+  const other = await prisma.connector.findFirst({
+    where: {
+      provider: WHATSAPP_CLOUD_PROVIDER,
+      accountKey: id,
+      status: { not: "DISCONNECTED" },
+      NOT: { tenantId },
+    },
+    select: { id: true },
+  });
+  if (other) throw new PhoneOwnedByAnotherWorkspace();
   const rows = await prisma.connector.findMany({
     where: {
       provider: WHATSAPP_CLOUD_PROVIDER,
+      accountKey: "",
       status: { not: "DISCONNECTED" },
       NOT: { tenantId },
     },
@@ -235,11 +345,11 @@ export async function saveCloudHqConnector(opts: {
   const displayPhone = (opts.displayPhone || "").trim();
   const verifiedName = (opts.verifiedName || "").trim();
   const existing = await prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId: opts.tenantId, provider: WHATSAPP_CLOUD_PROVIDER } },
+    where: connectorUnique(opts.tenantId, WHATSAPP_CLOUD_PROVIDER, phoneNumberId),
     select: { metaJson: true },
   });
   const prev = parseMeta(existing?.metaJson);
-  const samePhone = (prev.phoneNumberId || "").trim() === phoneNumberId;
+  const samePhone = !existing || (prev.phoneNumberId || "").trim() === phoneNumberId;
   const carried = samePhone ? { ...prev } : {};
   if (!samePhone) {
     for (const key of PHONE_SCOPED_META) delete carried[key];
@@ -270,16 +380,23 @@ export async function saveCloudHqConnector(opts: {
     wabaId,
     displayPhone,
   });
+  const peers = await prisma.wabaPhone.count({ where: { tenantId: opts.tenantId } });
+  await prisma.wabaPhone.update({
+    where: { phoneNumberId },
+    data: {
+      ...(peers === 1 ? { isDefault: true } : {}),
+      ...(opts.connectionMode ? { connectionMode: opts.connectionMode } : {}),
+    },
+  });
   const tokenEnc = encryptSecret(opts.accessToken.trim());
   const row = await prisma.connector.upsert({
-    where: {
-      tenantId_provider: { tenantId: opts.tenantId, provider: WHATSAPP_CLOUD_PROVIDER },
-    },
+    where: connectorUnique(opts.tenantId, WHATSAPP_CLOUD_PROVIDER, phoneNumberId),
     create: {
       tenantId: opts.tenantId,
       provider: WHATSAPP_CLOUD_PROVIDER,
+      accountKey: phoneNumberId,
       status: "CONNECTED",
-      displayName: verifiedName || displayPhone || "WhatsApp HQ",
+      displayName: verifiedName || displayPhone || "WhatsApp",
       accessTokenEnc: tokenEnc,
       mode: "LIVE",
       lastError: null,
@@ -287,30 +404,117 @@ export async function saveCloudHqConnector(opts: {
     },
     update: {
       status: "CONNECTED",
-      displayName: verifiedName || displayPhone || "WhatsApp HQ",
+      displayName: verifiedName || displayPhone || "WhatsApp",
       accessTokenEnc: tokenEnc,
       lastError: null,
       metaJson: JSON.stringify(meta),
     },
   });
-  await ensureHqLocation(opts.tenantId, {
-    phone: displayPhone || null,
-    name: verifiedName ? `${verifiedName} HQ` : undefined,
+  const savedPhone = await prisma.wabaPhone.findUnique({
+    where: { phoneNumberId },
+    select: { isDefault: true },
   });
+  if (peers <= 1 || savedPhone?.isDefault) {
+    await ensureHqLocation(opts.tenantId, {
+      phone: displayPhone || null,
+      name: verifiedName ? `${verifiedName} HQ` : undefined,
+    });
+  } else {
+    await ensureHqLocation(opts.tenantId);
+  }
   return row;
 }
 
-export async function readCloudConnection(tenantId: string): Promise<CloudConnectionView | null> {
-  const row = await prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER } },
-  });
-  if (!row || row.status === "DISCONNECTED" || !row.accessTokenEnc) return null;
-  const view = connectionViewFromMeta(parseMeta(row.metaJson), row.status, row.lastError, row.displayName || "");
+export async function readCloudConnection(
+  tenantId: string,
+  phoneNumberId?: string | null
+): Promise<CloudConnectionView | null> {
+  const phone = (phoneNumberId || "").trim();
+  const row = phone
+    ? await prisma.connector.findUnique({
+        where: connectorUnique(tenantId, WHATSAPP_CLOUD_PROVIDER, phone),
+      })
+    : null;
+  const chosen = row || (await (async () => {
+    const cfg = await getCloudHqConfig(tenantId);
+    if (!cfg) return null;
+    return prisma.connector.findUnique({ where: { id: cfg.connectorId } });
+  })());
+  if (!chosen || chosen.status === "DISCONNECTED" || !chosen.accessTokenEnc) return null;
+  const view = connectionViewFromMeta(parseMeta(chosen.metaJson), chosen.status, chosen.lastError, chosen.displayName || "");
   if (!view.phoneNumberId) return null;
   return view;
 }
 
-/** Merge webhook notes into the existing connector. Does not rotate the token or move the phone. */
+export async function listWorkspaceWhatsAppNumbers(tenantId: string): Promise<WorkspaceWhatsAppNumber[]> {
+  const [phones, connectors] = await Promise.all([
+    prisma.wabaPhone.findMany({
+      where: { tenantId },
+      include: { location: { select: { id: true, name: true } } },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    }),
+    prisma.connector.findMany({
+      where: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER },
+    }),
+  ]);
+  const byPhone = new Map(connectors.map((row) => [row.accountKey, row]));
+  const seen = new Set<string>();
+  const out: WorkspaceWhatsAppNumber[] = [];
+  for (const phone of phones) {
+    seen.add(phone.phoneNumberId);
+    const connector = byPhone.get(phone.phoneNumberId) || null;
+    const meta = parseMeta(connector?.metaJson);
+    const storedMode = meta.connectionMode || phone.connectionMode;
+    const mode: ConnectionMode | "" = storedMode === "COEXISTENCE"
+      ? "COEXISTENCE"
+      : connector
+        ? "CLOUD_API_ONLY"
+        : storedMode === "CLOUD_API_ONLY"
+          ? "CLOUD_API_ONLY"
+          : "";
+    const displayPhone = phone.displayPhone || meta.displayPhone || "";
+    out.push({
+      phoneNumberId: phone.phoneNumberId,
+      displayPhone,
+      wabaId: phone.wabaId || meta.wabaId || "",
+      alias: phone.alias || "",
+      label: phone.alias || displayPhone || phone.phoneNumberId,
+      teamLabel: phone.teamLabel || "",
+      locationId: phone.locationId,
+      locationName: phone.location?.name || null,
+      isDefault: phone.isDefault,
+      connectionMode: mode,
+      health: deriveNumberHealth(connector),
+      lastActivity: meta.lastWebhookAt || meta.lastHealthAt || "",
+      phoneStatus: phone.status,
+      onboardingError: meta.onboardingError || connector?.lastError || "",
+    });
+  }
+  for (const connector of connectors) {
+    if (!connector.accountKey || seen.has(connector.accountKey)) continue;
+    const meta = parseMeta(connector.metaJson);
+    const displayPhone = meta.displayPhone || "";
+    out.push({
+      phoneNumberId: connector.accountKey,
+      displayPhone,
+      wabaId: meta.wabaId || "",
+      alias: "",
+      label: displayPhone || connector.accountKey,
+      teamLabel: "",
+      locationId: null,
+      locationName: null,
+      isDefault: false,
+      connectionMode: meta.connectionMode === "COEXISTENCE" ? "COEXISTENCE" : meta.connectionMode === "CLOUD_API_ONLY" ? "CLOUD_API_ONLY" : "",
+      health: deriveNumberHealth(connector),
+      lastActivity: meta.lastWebhookAt || meta.lastHealthAt || "",
+      phoneStatus: "",
+      onboardingError: meta.onboardingError || connector.lastError || "",
+    });
+  }
+  return out;
+}
+
+/** Merge webhook notes into the matching connector. Does not rotate the token or move the phone. */
 export async function mergeCloudConnectorMeta(input: {
   phoneNumberId?: string;
   wabaId?: string;
@@ -327,15 +531,22 @@ export async function mergeCloudConnectorMeta(input: {
   const rows = await prisma.connector.findMany({
     where: { provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" } },
   });
-  let updated = 0;
-  for (const row of rows) {
+  const matches = rows.filter((row) => {
     const meta = parseMeta(row.metaJson);
-    const phone = (meta.phoneNumberId || "").trim();
+    const phone = (row.accountKey || meta.phoneNumberId || "").trim();
     const waba = (meta.wabaId || "").trim();
     const shown = canonPhone(meta.displayPhone || "");
-    if (phoneNumberId && phone !== phoneNumberId) continue;
-    if (!phoneNumberId && wabaId && waba !== wabaId) continue;
-    if (!phoneNumberId && !wabaId && shown !== displayPhone) continue;
+    if (phoneNumberId) return phone === phoneNumberId;
+    if (wabaId) return waba === wabaId;
+    return shown === displayPhone;
+  });
+  if (!phoneNumberId) {
+    const tenants = new Set(matches.map((row) => row.tenantId));
+    if (tenants.size !== 1) return 0;
+  }
+  let updated = 0;
+  for (const row of matches) {
+    const meta = parseMeta(row.metaJson);
     const next = { ...meta, ...input.patch };
     if (input.patch.syncStatus && !input.forceSync) {
       next.syncStatus = keepSyncStatus(meta.syncStatus || "", input.patch.syncStatus);
@@ -353,9 +564,14 @@ export async function mergeCloudConnectorMeta(input: {
   return updated;
 }
 
-export async function disconnectCloudHq(tenantId: string) {
+export async function disconnectCloudHq(tenantId: string, phoneNumberId?: string | null) {
+  const phone = (phoneNumberId || "").trim();
   await prisma.connector.updateMany({
-    where: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER },
+    where: {
+      tenantId,
+      provider: WHATSAPP_CLOUD_PROVIDER,
+      ...(phone ? { accountKey: phone } : {}),
+    },
     data: { status: "DISCONNECTED", accessTokenEnc: null, lastError: null },
   });
 }

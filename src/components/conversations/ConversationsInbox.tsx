@@ -86,6 +86,11 @@ export function ConversationsInbox({
   });
   const [filter, setFilter] = useState<"all" | "unreplied">("all");
   const [provider, setProvider] = useState("");
+  const [phoneNumberId, setPhoneNumberId] = useState("");
+  const [team, setTeam] = useState("");
+  const [agent, setAgent] = useState("");
+  const [lead, setLead] = useState("");
+  const [channels, setChannels] = useState<Array<{ phoneNumberId: string; label: string; teamLabel: string }>>([]);
   const [locationId, setLocationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -115,6 +120,10 @@ export function ConversationsInbox({
         if (filter !== "all") qs.set("filter", filter);
         if (locationId) qs.set("locationId", locationId);
         if (provider) qs.set("provider", provider);
+        if (phoneNumberId) qs.set("phoneNumberId", phoneNumberId);
+        if (team) qs.set("team", team);
+        if (agent) qs.set("agent", agent);
+        if (lead.trim()) qs.set("lead", lead.trim());
         if (selectedClientId) qs.set("client", selectedClientId);
         const res = await fetch(`/api/conversations?${qs}`, {
           credentials: "same-origin",
@@ -130,6 +139,7 @@ export function ConversationsInbox({
         setConversations(rows);
         setStats(data.stats || { total: 0, unreplied: 0, open: 0, mappings: 0 });
         setQuota(data.quota && data.quota.connected ? data.quota : null);
+        setChannels(Array.isArray(data.channels) ? data.channels : []);
         setLastRefresh(new Date());
         const open = activeRef.current;
         if (open) {
@@ -142,7 +152,7 @@ export function ConversationsInbox({
         setLoading(false);
       }
     },
-    [q, filter, locationId, provider, selectedClientId]
+    [q, filter, locationId, provider, phoneNumberId, team, agent, lead, selectedClientId]
   );
 
   const loadThread = useCallback(async (id: string, opts?: { silent?: boolean }) => {
@@ -346,6 +356,48 @@ export function ConversationsInbox({
               <option value="FACEBOOK">Messenger</option>
               <option value="TIKTOK">{t.filterTiktok}</option>
             </select>
+            <select
+              className="an-input w-auto min-w-[148px] py-1.5 text-xs"
+              value={phoneNumberId}
+              onChange={(e) => setPhoneNumberId(e.target.value)}
+              aria-label="WhatsApp number"
+            >
+              <option value="">All WhatsApp numbers</option>
+              {channels.map((channel) => (
+                <option key={channel.phoneNumberId} value={channel.phoneNumberId}>
+                  {channel.label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="an-input w-auto min-w-[120px] py-1.5 text-xs"
+              value={team}
+              onChange={(e) => setTeam(e.target.value)}
+              aria-label="Team"
+            >
+              <option value="">All teams</option>
+              {[...new Set(channels.map((channel) => channel.teamLabel).filter(Boolean))].map((label) => (
+                <option key={label} value={label}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="an-input w-auto min-w-[120px] py-1.5 text-xs"
+              value={agent}
+              onChange={(e) => setAgent(e.target.value)}
+              aria-label="Assigned agent"
+            >
+              <option value="">All agents</option>
+              <option value="unassigned">Unassigned</option>
+            </select>
+            <input
+              className="an-input w-auto min-w-[120px] py-1.5 text-xs"
+              value={lead}
+              onChange={(e) => setLead(e.target.value)}
+              placeholder="Lead status"
+              aria-label="Lead status"
+            />
           </div>
         </div>
 
@@ -400,13 +452,16 @@ export function ConversationsInbox({
                         <span className={sourceBadgeClass(row.provider)}>
                           {providerLabel(row.provider)}
                         </span>
-                        {row.assetLabel || isMetaMessaging(row.provider) ? (
+                        {row.businessLabel || row.assetLabel || isMetaMessaging(row.provider) ? (
                           <div
                             className="mt-0.5 max-w-[160px] truncate text-[11px] text-slate-500"
-                            title={row.assetLabel || row.sessionId}
+                            title={row.businessLabel || row.assetLabel || row.sessionId}
                           >
-                            {row.assetLabel || row.sessionId}
+                            {row.businessLabel || row.assetLabel || row.sessionId}
                           </div>
+                        ) : null}
+                        {row.handoffState === "HUMAN_ACTIVE" ? (
+                          <div className="mt-0.5 text-[10px] font-medium text-slate-500">Human</div>
                         ) : null}
                       </td>
                       <td>
@@ -603,6 +658,13 @@ export function ConversationsInbox({
                     .finally(() => setSending(false));
                 }}
               >
+                <p className="text-[11px] text-slate-500">
+                  {`${providerLabel(active.provider)} · ${
+                    active.businessLabel || active.assetLabel || "Account"
+                  } · ${active.location.name} · ${
+                    active.assignedUserId ? "Assigned" : "Unassigned"
+                  } · ${active.handoffState === "HUMAN_ACTIVE" ? "Human" : "Automation"}`}
+                </p>
                 {active.provider === "META_CLOUD" ? (
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[11px] leading-relaxed text-slate-500">

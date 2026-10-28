@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { canAccessTenant } from "@/lib/locations/access";
-import { getCloudHqConfig } from "@/lib/conversations/cloud-hq";
+import { cloudSendConfig } from "@/lib/conversations/cloud-hq";
 import { sendCloudHqText } from "@/lib/conversations/cloud-send";
 import { sendMetaInboxText } from "@/lib/conversations/meta-send";
 import { markHumanHandoff } from "@/lib/conversations/handoff";
@@ -54,9 +54,12 @@ export async function POST(
   if (!phone) {
     return NextResponse.json({ error: "This contact has no phone number." }, { status: 400 });
   }
-  const cfg = await getCloudHqConfig(row.tenantId);
+  const cfg = await cloudSendConfig(row.tenantId, row.sessionId, row.businessPhoneNumberId);
   if (!cfg) {
-    return NextResponse.json({ error: "HQ Cloud API is not connected for this brand." }, { status: 400 });
+    return NextResponse.json(
+      { error: "This WhatsApp number is not connected for this chat." },
+      { status: 400 }
+    );
   }
   const sent = await sendCloudHqText({
     config: cfg,

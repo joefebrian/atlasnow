@@ -54,7 +54,7 @@ export async function lookupMetaPeerLabel(opts: {
   const peerId = opts.peerId.trim();
   if (!peerId) return null;
   const connector = await prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId: opts.tenantId, provider: "META" } },
+    where: { tenantId_provider_accountKey: { tenantId: opts.tenantId, provider: "META", accountKey: "" } },
     select: { metaJson: true, status: true },
   });
   if (!connector || connector.status === "DISCONNECTED") return null;

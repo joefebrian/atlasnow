@@ -25,7 +25,7 @@ function parseMeta(raw: string | null | undefined): GoMeta {
 
 export async function getGoConnector(tenantId: string) {
   return prisma.connector.findUnique({
-    where: { tenantId_provider: { tenantId, provider: TIKTOK_GO_PROVIDER } },
+    where: { tenantId_provider_accountKey: { tenantId, provider: TIKTOK_GO_PROVIDER, accountKey: "" } },
   });
 }
 
@@ -38,7 +38,7 @@ export async function saveGoMerchantId(tenantId: string, merchantId: string) {
   const existing = await getGoConnector(tenantId);
   const meta = { ...parseMeta(existing?.metaJson), merchantId: id };
   return prisma.connector.upsert({
-    where: { tenantId_provider: { tenantId, provider: TIKTOK_GO_PROVIDER } },
+    where: { tenantId_provider_accountKey: { tenantId, provider: TIKTOK_GO_PROVIDER, accountKey: "" } },
     create: {
       tenantId,
       provider: TIKTOK_GO_PROVIDER,
@@ -60,7 +60,7 @@ export async function saveGoMerchantId(tenantId: string, merchantId: string) {
 export async function setGoDemoMode(tenantId: string, on: boolean) {
   const existing = await getGoConnector(tenantId);
   return prisma.connector.upsert({
-    where: { tenantId_provider: { tenantId, provider: TIKTOK_GO_PROVIDER } },
+    where: { tenantId_provider_accountKey: { tenantId, provider: TIKTOK_GO_PROVIDER, accountKey: "" } },
     create: {
       tenantId,
       provider: TIKTOK_GO_PROVIDER,
@@ -89,7 +89,7 @@ export async function persistGoTokens(
   const existing = await getGoConnector(tenantId);
   const merchantId = goMerchantIdOf(existing);
   return prisma.connector.upsert({
-    where: { tenantId_provider: { tenantId, provider: TIKTOK_GO_PROVIDER } },
+    where: { tenantId_provider_accountKey: { tenantId, provider: TIKTOK_GO_PROVIDER, accountKey: "" } },
     create: {
       tenantId,
       provider: TIKTOK_GO_PROVIDER,
