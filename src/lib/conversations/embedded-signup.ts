@@ -1,7 +1,7 @@
 import { randomInt } from "crypto";
 import { META_GRAPH } from "@/lib/meta/oauth";
 import { resolvedMetaApp } from "@/lib/integrations/service";
-import { saveCloudHqConnector } from "@/lib/conversations/cloud-hq";
+import { assertCloudPhoneAvailable, saveCloudHqConnector } from "@/lib/conversations/cloud-hq";
 
 export const ES_COEXISTENCE_EVENT = "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING";
 
@@ -151,6 +151,7 @@ export async function finishEmbeddedSignup(opts: {
   }
   const info = await phoneInfo(phoneNumberId, token);
   const coexistence = opts.session.coexistence || info.coexistence;
+  await assertCloudPhoneAvailable(opts.tenantId, phoneNumberId);
   await subscribeWaba(opts.session.wabaId, token);
   if (!coexistence) {
     await registerDedicatedPhone(phoneNumberId, token);

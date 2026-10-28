@@ -9,6 +9,7 @@ import {
 } from "@/lib/conversations/cloud-hq";
 import { resolvedMetaApp } from "@/lib/integrations/service";
 import {
+  isPhoneOwnershipError,
   patchWabaPhoneOps,
   serviceQuotaForTenant,
 } from "@/lib/waba/service-quota";
@@ -87,14 +88,24 @@ export async function POST(request: Request) {
     );
   }
 
-  await saveCloudHqConnector({
-    tenantId: scoped.tenantId,
-    phoneNumberId,
-    wabaId,
-    accessToken,
-    displayPhone: info.display_phone_number || null,
-    verifiedName: info.verified_name || null,
-  });
+  try {
+    await saveCloudHqConnector({
+      tenantId: scoped.tenantId,
+      phoneNumberId,
+      wabaId,
+      accessToken,
+      displayPhone: info.display_phone_number || null,
+      verifiedName: info.verified_name || null,
+    });
+  } catch (err) {
+    if (isPhoneOwnershipError(err)) {
+      return NextResponse.json(
+        { error: "This WhatsApp number is already connected to another workspace." },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
   return NextResponse.json({
     ok: true,
     displayPhone: info.display_phone_number || null,

@@ -110,6 +110,7 @@ model Tenant {
   yolaAutomationEvents YolaAutomationEvent[]
   yolaOutboundMessages YolaOutboundMessage[]
   yolaOrderDaySeqs    YolaOrderDaySeq[]
+  workspaceAutomation WorkspaceAutomation?
 
   @@index([type, status])
   @@index([agencyId])
@@ -927,6 +928,22 @@ model WabaPhone {
   deliveries WabaServiceDelivery[]
 
   @@index([tenantId])
+}
+
+/// Per-workspace commerce automation. Missing row means disabled.
+/// A legacy YOLA env flag set to false still blocks that purpose.
+model WorkspaceAutomation {
+  id                     String   @id @default(cuid())
+  tenantId               String   @unique
+  inboundEnabled         Boolean  @default(false)
+  paymentFollowUpEnabled Boolean  @default(false)
+  marketingEnabled       Boolean  @default(false)
+  /// Pilot mode does not send by itself.
+  pilotMode              Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model WabaServiceMonth {

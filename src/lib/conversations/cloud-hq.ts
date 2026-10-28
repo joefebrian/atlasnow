@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "@/lib/google/crypto";
 import { generateAtlasLocationId } from "@/lib/locations/ids";
+import { ensureWabaPhone, PhoneOwnedByAnotherWorkspace } from "@/lib/waba/service-quota";
 
 export const WHATSAPP_CLOUD_PROVIDER = "WHATSAPP_CLOUD";
 
@@ -133,6 +134,30 @@ export async function findCloudHqByPhoneNumberId(
   return null;
 }
 
+/** Read-only. Does not move a phone and does not write a connector. */
+export async function assertCloudPhoneAvailable(tenantId: string, phoneNumberId: string) {
+  const id = phoneNumberId.trim();
+  if (!id || !tenantId.trim()) throw new PhoneOwnedByAnotherWorkspace();
+  const owner = await prisma.wabaPhone.findUnique({
+    where: { phoneNumberId: id },
+    select: { tenantId: true },
+  });
+  if (owner && owner.tenantId !== tenantId) throw new PhoneOwnedByAnotherWorkspace();
+  const rows = await prisma.connector.findMany({
+    where: {
+      provider: WHATSAPP_CLOUD_PROVIDER,
+      status: { not: "DISCONNECTED" },
+      NOT: { tenantId },
+    },
+    select: { metaJson: true },
+  });
+  for (const row of rows) {
+    if ((parseMeta(row.metaJson).phoneNumberId || "").trim() === id) {
+      throw new PhoneOwnedByAnotherWorkspace();
+    }
+  }
+}
+
 export async function saveCloudHqConnector(opts: {
   tenantId: string;
   phoneNumberId: string;
@@ -147,6 +172,13 @@ export async function saveCloudHqConnector(opts: {
     displayPhone: (opts.displayPhone || "").trim(),
     verifiedName: (opts.verifiedName || "").trim(),
   };
+  await assertCloudPhoneAvailable(opts.tenantId, meta.phoneNumberId);
+  await ensureWabaPhone({
+    tenantId: opts.tenantId,
+    phoneNumberId: meta.phoneNumberId,
+    wabaId: meta.wabaId,
+    displayPhone: meta.displayPhone,
+  });
   const tokenEnc = encryptSecret(opts.accessToken.trim());
   const row = await prisma.connector.upsert({
     where: {
@@ -174,17 +206,6 @@ export async function saveCloudHqConnector(opts: {
     phone: meta.displayPhone || null,
     name: meta.verifiedName ? `${meta.verifiedName} HQ` : undefined,
   });
-  try {
-    const { ensureWabaPhone } = await import("@/lib/waba/service-quota");
-    await ensureWabaPhone({
-      tenantId: opts.tenantId,
-      phoneNumberId: meta.phoneNumberId,
-      wabaId: meta.wabaId,
-      displayPhone: meta.displayPhone,
-    });
-  } catch {
-    /* connector is saved; quota row can catch up on the next send */
-  }
   return row;
 }
 

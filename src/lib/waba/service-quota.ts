@@ -73,6 +73,22 @@ export function shouldCountTowardFreeService(opts: {
   return false;
 }
 
+export class PhoneOwnedByAnotherWorkspace extends Error {
+  readonly code = "phone_owned_by_another_workspace";
+  constructor() {
+    super("phone_owned_by_another_workspace");
+    this.name = "PhoneOwnedByAnotherWorkspace";
+  }
+}
+
+export function isPhoneOwnershipError(err: unknown) {
+  return err instanceof PhoneOwnedByAnotherWorkspace;
+}
+
+/**
+ * Create or refresh a Cloud phone without moving it between workspaces.
+ * A unique phoneNumberId already owned by another tenant is rejected.
+ */
 export async function ensureWabaPhone(opts: {
   tenantId: string;
   phoneNumberId: string;
@@ -82,28 +98,40 @@ export async function ensureWabaPhone(opts: {
 }) {
   const phoneNumberId = opts.phoneNumberId.trim();
   if (!phoneNumberId) return null;
+  const tenantId = opts.tenantId.trim();
+  if (!tenantId) throw new PhoneOwnedByAnotherWorkspace();
   const wabaId = (opts.wabaId || "").trim();
   const displayPhone = (opts.displayPhone || "").trim();
   const timezone = (opts.timezone || "").trim() || "Asia/Jakarta";
-  return prisma.wabaPhone.upsert({
-    where: { phoneNumberId },
-    create: {
-      tenantId: opts.tenantId,
-      phoneNumberId,
-      wabaId,
-      displayPhone,
-      timezone,
-      billingOwner: "BRAND",
-      paymentMethodOk: false,
-      status: "ACTIVE",
-    },
-    update: {
-      tenantId: opts.tenantId,
-      ...(wabaId ? { wabaId } : {}),
-      ...(displayPhone ? { displayPhone } : {}),
-      status: "ACTIVE",
-    },
-  });
+  const refresh = {
+    ...(wabaId ? { wabaId } : {}),
+    ...(displayPhone ? { displayPhone } : {}),
+    status: "ACTIVE",
+  };
+  const existing = await prisma.wabaPhone.findUnique({ where: { phoneNumberId } });
+  if (existing) {
+    if (existing.tenantId !== tenantId) throw new PhoneOwnedByAnotherWorkspace();
+    return prisma.wabaPhone.update({ where: { phoneNumberId }, data: refresh });
+  }
+  try {
+    return await prisma.wabaPhone.create({
+      data: {
+        tenantId,
+        phoneNumberId,
+        wabaId,
+        displayPhone,
+        timezone,
+        billingOwner: "BRAND",
+        paymentMethodOk: false,
+        status: "ACTIVE",
+      },
+    });
+  } catch (err) {
+    if (!isPrismaP2002(err)) throw err;
+    const winner = await prisma.wabaPhone.findUnique({ where: { phoneNumberId } });
+    if (!winner || winner.tenantId !== tenantId) throw new PhoneOwnedByAnotherWorkspace();
+    return prisma.wabaPhone.update({ where: { phoneNumberId }, data: refresh });
+  }
 }
 
 export async function noteCloudOutbound(opts: {
@@ -214,12 +242,18 @@ export async function serviceQuotaForTenant(tenantId: string, cfg?: CloudHqConfi
     ...extra,
   });
   if (!cfg?.phoneNumberId) return empty();
-  const phone = await ensureWabaPhone({
-    tenantId,
-    phoneNumberId: cfg.phoneNumberId,
-    wabaId: cfg.wabaId,
-    displayPhone: cfg.displayPhone,
-  });
+  let phone;
+  try {
+    phone = await ensureWabaPhone({
+      tenantId,
+      phoneNumberId: cfg.phoneNumberId,
+      wabaId: cfg.wabaId,
+      displayPhone: cfg.displayPhone,
+    });
+  } catch (err) {
+    if (isPhoneOwnershipError(err)) return empty();
+    throw err;
+  }
   if (!phone) return empty();
   const month = await prisma.wabaServiceMonth.findUnique({
     where: {

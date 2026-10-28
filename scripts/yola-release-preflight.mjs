@@ -8,7 +8,11 @@ const folders = readdirSync(dir, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
   .sort();
-const yola = ["20261027120000_yola_fun_commerce", "20261028120000_yola_order_origin"];
+const yola = [
+  "20261027120000_yola_fun_commerce",
+  "20261028120000_yola_order_origin",
+  "20261028160000_workspace_automation",
+];
 const blocked = "20261024180000_commerce_orders";
 const destructive = /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|\bALTER\s+TABLE\b[\s\S]{0,80}\bDROP\b/i;
 for (const name of yola) {

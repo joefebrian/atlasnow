@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { readSession } from "@/lib/auth";
 import { canAccessTenant } from "@/lib/locations/access";
 import { finishEmbeddedSignup, parseEsSession } from "@/lib/conversations/embedded-signup";
+import { isPhoneOwnershipError } from "@/lib/waba/service-quota";
 import { logAppError } from "@/lib/error-log";
 
 export async function POST(request: Request) {
@@ -32,12 +33,17 @@ export async function POST(request: Request) {
     const result = await finishEmbeddedSignup({ tenantId, code, session: parsed });
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
-    const message = e instanceof Error ? e.message : "embedded_signup_failed";
+    const message = isPhoneOwnershipError(e)
+      ? "This WhatsApp number is already connected to another workspace."
+      : e instanceof Error
+        ? e.message
+        : "embedded_signup_failed";
+    const status = isPhoneOwnershipError(e) ? 409 : 400;
     await logAppError({
       source: "WhatsApp Embedded Signup",
       title: "ES v4 finish failed",
       detail: message,
     });
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: message }, { status });
   }
 }
