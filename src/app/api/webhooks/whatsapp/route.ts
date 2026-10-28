@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { captureWhatsAppOrders, orderCaptureEnabled, whatsappPostPlan } from "@/lib/commerce/order-capture";
 import { ingestCloudWhatsAppPayload } from "@/lib/conversations/cloud-ingest";
+import { customerInboundBody } from "@/lib/conversations/customer-inbound";
 import { cloudSignatureValid } from "@/lib/conversations/cloud-signature";
 import { cloudWebhookSecrets } from "@/lib/conversations/cloud-verify";
 import { logAppError } from "@/lib/error-log";
@@ -38,8 +39,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
   let results;
+  let automationBody: unknown = body;
   try {
-    results = (await ingestCloudWhatsAppPayload(body)).results;
+    const ingested = await ingestCloudWhatsAppPayload(body);
+    results = ingested.results;
+    automationBody = customerInboundBody(body, ingested.suppressWamids);
   } catch (e) {
     await logAppError({
       source: "WhatsApp Cloud webhook",
@@ -57,7 +61,7 @@ export async function POST(request: Request) {
   };
   if (yolaTrusted) {
     try {
-      const routed = await routeYolaFromWhatsApp({ trusted: true, body });
+      const routed = await routeYolaFromWhatsApp({ trusted: true, body: automationBody });
       yola = routed.ran ? { ran: true } : { ran: false, reason: routed.reason };
     } catch (e) {
       await logAppError({
@@ -68,7 +72,7 @@ export async function POST(request: Request) {
       yola = { ran: false, reason: "yola_failed" };
     }
     try {
-      automation = await routeWorkspaceAutomation({ trusted: true, body });
+      automation = await routeWorkspaceAutomation({ trusted: true, body: automationBody });
     } catch (e) {
       await logAppError({
         source: "WhatsApp Cloud webhook",

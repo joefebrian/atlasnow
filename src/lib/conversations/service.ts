@@ -263,6 +263,7 @@ export async function getConversationThread(
     body: string;
     sentAt: string;
     fromMe: boolean;
+    source: string;
   }>;
 }> {
   const row = await prisma.waConversation.findUnique({
@@ -316,6 +317,7 @@ export async function getConversationThread(
       body: m.body,
       sentAt: m.sentAt.toISOString(),
       fromMe: m.fromMe,
+      source: m.source || "",
     })),
   };
 }

@@ -13,6 +13,7 @@ const yola = [
   "20261028120000_yola_order_origin",
   "20261028160000_workspace_automation",
   "20261028180000_workspace_automation_runtime",
+  "20261028190000_wa_message_source",
 ];
 const blocked = "20261024180000_commerce_orders";
 const destructive = /\bDROP\b|\bTRUNCATE\b|\bDELETE\s+FROM\b|\bALTER\s+TABLE\b[\s\S]{0,80}\bDROP\b/i;

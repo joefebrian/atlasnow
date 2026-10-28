@@ -2,6 +2,8 @@ import { prisma } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "@/lib/google/crypto";
 import { generateAtlasLocationId } from "@/lib/locations/ids";
 import { ensureWabaPhone, PhoneOwnedByAnotherWorkspace } from "@/lib/waba/service-quota";
+import { keepSyncStatus, type ConnectionMode } from "@/lib/conversations/es-launch";
+import { canonPhone } from "@/lib/conversations/identity";
 
 export const WHATSAPP_CLOUD_PROVIDER = "WHATSAPP_CLOUD";
 
@@ -158,6 +160,65 @@ export async function assertCloudPhoneAvailable(tenantId: string, phoneNumberId:
   }
 }
 
+export type CloudConnectionView = {
+  phoneNumberId: string;
+  wabaId: string;
+  displayPhone: string;
+  verifiedName: string;
+  connectionMode: ConnectionMode;
+  coexistence: boolean;
+  connectionStatus: string;
+  syncStatus: string;
+  syncDetail: string;
+  contactSync: string;
+  codeVerificationStatus: string;
+  lastWebhookAt: string;
+  lastHealthAt: string;
+  onboardingError: string;
+  platformType: string;
+  status: string;
+};
+
+export function connectionViewFromMeta(
+  meta: Record<string, string>,
+  status: string,
+  lastError: string | null,
+  displayName = ""
+): CloudConnectionView {
+  const connectionMode: ConnectionMode = meta.connectionMode === "COEXISTENCE" ? "COEXISTENCE" : "CLOUD_API_ONLY";
+  return {
+    phoneNumberId: (meta.phoneNumberId || "").trim(),
+    wabaId: (meta.wabaId || "").trim(),
+    displayPhone: (meta.displayPhone || "").trim(),
+    verifiedName: (meta.verifiedName || displayName || "").trim(),
+    connectionMode,
+    coexistence: connectionMode === "COEXISTENCE",
+    connectionStatus: meta.connectionStatus || status || "CONNECTED",
+    syncStatus: meta.syncStatus || (connectionMode === "COEXISTENCE" ? "idle" : "not_applicable"),
+    syncDetail: meta.syncDetail || "",
+    contactSync: meta.contactSync || "",
+    codeVerificationStatus: meta.codeVerificationStatus || "",
+    lastWebhookAt: meta.lastWebhookAt || "",
+    lastHealthAt: meta.lastHealthAt || "",
+    onboardingError: meta.onboardingError || lastError || "",
+    platformType: meta.platformType || "",
+    status,
+  };
+}
+
+const PHONE_SCOPED_META = [
+  "syncStatus",
+  "syncDetail",
+  "historyRequestId",
+  "contactRequestId",
+  "onboardingError",
+  "connectionMode",
+  "coexistence",
+  "codeVerificationStatus",
+  "platformType",
+  "connectionStatus",
+];
+
 export async function saveCloudHqConnector(opts: {
   tenantId: string;
   phoneNumberId: string;
@@ -165,19 +226,49 @@ export async function saveCloudHqConnector(opts: {
   accessToken: string;
   displayPhone?: string | null;
   verifiedName?: string | null;
+  connectionMode?: ConnectionMode | null;
+  codeVerificationStatus?: string | null;
+  platformType?: string | null;
 }) {
-  const meta = {
-    phoneNumberId: opts.phoneNumberId.trim(),
-    wabaId: opts.wabaId.trim(),
-    displayPhone: (opts.displayPhone || "").trim(),
-    verifiedName: (opts.verifiedName || "").trim(),
+  const phoneNumberId = opts.phoneNumberId.trim();
+  const wabaId = opts.wabaId.trim();
+  const displayPhone = (opts.displayPhone || "").trim();
+  const verifiedName = (opts.verifiedName || "").trim();
+  const existing = await prisma.connector.findUnique({
+    where: { tenantId_provider: { tenantId: opts.tenantId, provider: WHATSAPP_CLOUD_PROVIDER } },
+    select: { metaJson: true },
+  });
+  const prev = parseMeta(existing?.metaJson);
+  const samePhone = (prev.phoneNumberId || "").trim() === phoneNumberId;
+  const carried = samePhone ? { ...prev } : {};
+  if (!samePhone) {
+    for (const key of PHONE_SCOPED_META) delete carried[key];
+  }
+  const meta: Record<string, string> = {
+    ...carried,
+    phoneNumberId,
+    wabaId,
+    displayPhone,
+    verifiedName,
+    onboardingError: "",
+    connectionStatus: "connected",
+    lastHealthAt: new Date().toISOString(),
   };
-  await assertCloudPhoneAvailable(opts.tenantId, meta.phoneNumberId);
+  if (opts.connectionMode) {
+    meta.connectionMode = opts.connectionMode;
+    meta.coexistence = opts.connectionMode === "COEXISTENCE" ? "true" : "false";
+    if (!samePhone || prev.connectionMode !== opts.connectionMode) {
+      meta.syncStatus = opts.connectionMode === "COEXISTENCE" ? "idle" : "not_applicable";
+    }
+  }
+  if (opts.codeVerificationStatus) meta.codeVerificationStatus = opts.codeVerificationStatus.trim();
+  if (opts.platformType) meta.platformType = opts.platformType.trim();
+  await assertCloudPhoneAvailable(opts.tenantId, phoneNumberId);
   await ensureWabaPhone({
     tenantId: opts.tenantId,
-    phoneNumberId: meta.phoneNumberId,
-    wabaId: meta.wabaId,
-    displayPhone: meta.displayPhone,
+    phoneNumberId,
+    wabaId,
+    displayPhone,
   });
   const tokenEnc = encryptSecret(opts.accessToken.trim());
   const row = await prisma.connector.upsert({
@@ -188,7 +279,7 @@ export async function saveCloudHqConnector(opts: {
       tenantId: opts.tenantId,
       provider: WHATSAPP_CLOUD_PROVIDER,
       status: "CONNECTED",
-      displayName: meta.verifiedName || meta.displayPhone || "WhatsApp HQ",
+      displayName: verifiedName || displayPhone || "WhatsApp HQ",
       accessTokenEnc: tokenEnc,
       mode: "LIVE",
       lastError: null,
@@ -196,17 +287,70 @@ export async function saveCloudHqConnector(opts: {
     },
     update: {
       status: "CONNECTED",
-      displayName: meta.verifiedName || meta.displayPhone || "WhatsApp HQ",
+      displayName: verifiedName || displayPhone || "WhatsApp HQ",
       accessTokenEnc: tokenEnc,
       lastError: null,
       metaJson: JSON.stringify(meta),
     },
   });
   await ensureHqLocation(opts.tenantId, {
-    phone: meta.displayPhone || null,
-    name: meta.verifiedName ? `${meta.verifiedName} HQ` : undefined,
+    phone: displayPhone || null,
+    name: verifiedName ? `${verifiedName} HQ` : undefined,
   });
   return row;
+}
+
+export async function readCloudConnection(tenantId: string): Promise<CloudConnectionView | null> {
+  const row = await prisma.connector.findUnique({
+    where: { tenantId_provider: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER } },
+  });
+  if (!row || row.status === "DISCONNECTED" || !row.accessTokenEnc) return null;
+  const view = connectionViewFromMeta(parseMeta(row.metaJson), row.status, row.lastError, row.displayName || "");
+  if (!view.phoneNumberId) return null;
+  return view;
+}
+
+/** Merge webhook notes into the existing connector. Does not rotate the token or move the phone. */
+export async function mergeCloudConnectorMeta(input: {
+  phoneNumberId?: string;
+  wabaId?: string;
+  displayPhone?: string;
+  patch: Record<string, string>;
+  lastError?: string | null;
+  clearError?: boolean;
+  forceSync?: boolean;
+}) {
+  const phoneNumberId = (input.phoneNumberId || "").trim();
+  const wabaId = (input.wabaId || "").trim();
+  const displayPhone = canonPhone(input.displayPhone || "");
+  if (!phoneNumberId && !wabaId && displayPhone.length < 8) return 0;
+  const rows = await prisma.connector.findMany({
+    where: { provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" } },
+  });
+  let updated = 0;
+  for (const row of rows) {
+    const meta = parseMeta(row.metaJson);
+    const phone = (meta.phoneNumberId || "").trim();
+    const waba = (meta.wabaId || "").trim();
+    const shown = canonPhone(meta.displayPhone || "");
+    if (phoneNumberId && phone !== phoneNumberId) continue;
+    if (!phoneNumberId && wabaId && waba !== wabaId) continue;
+    if (!phoneNumberId && !wabaId && shown !== displayPhone) continue;
+    const next = { ...meta, ...input.patch };
+    if (input.patch.syncStatus && !input.forceSync) {
+      next.syncStatus = keepSyncStatus(meta.syncStatus || "", input.patch.syncStatus);
+    }
+    await prisma.connector.update({
+      where: { id: row.id },
+      data: {
+        metaJson: JSON.stringify(next),
+        ...(input.clearError ? { lastError: null } : {}),
+        ...(input.lastError ? { lastError: input.lastError.slice(0, 500) } : {}),
+      },
+    });
+    updated += 1;
+  }
+  return updated;
 }
 
 export async function disconnectCloudHq(tenantId: string) {

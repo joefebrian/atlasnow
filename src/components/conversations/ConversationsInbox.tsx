@@ -19,6 +19,7 @@ type ThreadMessage = {
   body: string;
   sentAt: string;
   fromMe: boolean;
+  source?: string;
 };
 
 type ThreadPayload = {
@@ -527,7 +528,7 @@ export function ConversationsInbox({
                           </div>
                         ) : null}
                         <p className="whitespace-pre-wrap leading-snug">{m.body || "—"}</p>
-                        {m.fromMe && (
+                        {m.fromMe && m.source !== "business_app" && m.source !== "history" && (
                           <div
                             className={`mt-1 text-[10px] ${
                               outbound ? "text-indigo-200" : "text-slate-400"
@@ -536,6 +537,15 @@ export function ConversationsInbox({
                             {t.accountResponder}
                           </div>
                         )}
+                        {m.source === "business_app" || m.source === "history" ? (
+                          <div
+                            className={`mt-1 text-[10px] ${
+                              outbound ? "text-indigo-200" : "text-slate-400"
+                            }`}
+                          >
+                            {m.source === "business_app" ? t.businessAppSource : t.historySync}
+                          </div>
+                        ) : null}
                         {meta ? (
                           <div
                             className={`mt-1 text-[10px] ${

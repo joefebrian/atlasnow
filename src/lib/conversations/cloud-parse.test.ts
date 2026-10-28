@@ -44,6 +44,7 @@ describe("parseCloudWhatsAppWebhook", () => {
     assert.equal(r.events[0].externalId, "wacloud:wamid.ABC");
     assert.equal(r.events[0].body, "Status Stamp");
     assert.equal(r.events[0].fromMe, false);
+    assert.equal(r.events[0].source, "cloud");
     assert.equal(r.events[0].imageMediaId, null);
   });
 
@@ -83,6 +84,7 @@ describe("parseCloudWhatsAppWebhook", () => {
     assert.equal(r.events[0].waId, "6281190083695");
     assert.equal(r.events[0].body, "Siap, Kak");
     assert.equal(r.events[0].externalId, "wacloud:wamid.ECHO");
+    assert.equal(r.events[0].source, "business_app");
   });
 
   it("reads an inbound receipt photo caption + media id", () => {
@@ -180,6 +182,124 @@ describe("parseCloudWhatsAppWebhook", () => {
     assert.ok(!("error" in r));
     assert.equal(r.statuses[0].errorCode, 131049);
     assert.equal(r.statuses[0].errorTitle, "ecosystem");
+  });
+
+  it("reads history threads without treating them as live customer messages", () => {
+    const r = parseCloudWhatsAppWebhook({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "WABA1",
+          changes: [
+            {
+              field: "history",
+              value: {
+                metadata: { display_phone_number: "15551230000", phone_number_id: "PNID99" },
+                history: [
+                  {
+                    metadata: { phase: 0, chunk_order: 1, progress: 100 },
+                    threads: [
+                      {
+                        id: "6281190083695",
+                        messages: [
+                          {
+                            from: "6281190083695",
+                            id: "wamid.HIST",
+                            timestamp: "1700000000",
+                            type: "text",
+                            text: { body: "old hello" },
+                          },
+                          {
+                            from: "15551230000",
+                            to: "6281190083695",
+                            id: "wamid.HISTOUT",
+                            timestamp: "1700000001",
+                            type: "text",
+                            text: { body: "old reply" },
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.ok(!("error" in r));
+    assert.equal(r.events.length, 2);
+    assert.equal(r.events[0].source, "history");
+    assert.equal(r.events[0].fromMe, false);
+    assert.equal(r.events[1].source, "history");
+    assert.equal(r.events[1].fromMe, true);
+    assert.equal(r.events[1].waId, "6281190083695");
+    assert.equal(r.sync[0].syncStatus, "complete");
+  });
+
+  it("records a declined history share and skips the threads", () => {
+    const r = parseCloudWhatsAppWebhook({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "WABA1",
+          changes: [
+            {
+              field: "history",
+              value: {
+                metadata: { phone_number_id: "PNID99" },
+                history: [{ errors: [{ code: 2593109, title: "History sync is turned off by the business" }] }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.ok(!("error" in r));
+    assert.equal(r.events.length, 0);
+    assert.equal(r.sync[0].syncStatus, "declined");
+  });
+
+  it("reads contact sync rows and partner removal without inbox messages", () => {
+    const r = parseCloudWhatsAppWebhook({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "WABA1",
+          changes: [
+            {
+              field: "smb_app_state_sync",
+              value: {
+                metadata: { phone_number_id: "PNID99" },
+                state_sync: [
+                  {
+                    type: "contact",
+                    action: "add",
+                    contact: { full_name: "Sari", phone_number: "6281190083695" },
+                  },
+                ],
+              },
+            },
+            {
+              field: "account_update",
+              value: {
+                event: "PARTNER_REMOVED",
+                phone_number: "15551230000",
+                disconnection_info: { reason: "ACCOUNT_DISCONNECTED", initiated_by: "USER" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.ok(!("error" in r));
+    assert.equal(r.events.length, 0);
+    assert.equal(r.contacts[0].displayName, "Sari");
+    assert.equal(r.contacts[0].action, "add");
+    assert.equal(r.account[0].event, "PARTNER_REMOVED");
+    assert.equal(r.account[0].connectionStatus, "needs_attention");
+    assert.equal(r.account[0].reason, "ACCOUNT_DISCONNECTED");
   });
 });
 

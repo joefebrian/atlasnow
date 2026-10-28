@@ -3,6 +3,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ServiceQuotaChip } from "@/components/waba/ServiceQuotaChip";
 import type { ServiceQuotaSnapshot } from "@/lib/waba/service-quota";
+import { embeddedSignupExtras, type ConnectionMode, type EsVersion } from "@/lib/conversations/es-launch";
+
+type ConnectionView = {
+  verifiedName?: string;
+  displayPhone?: string;
+  wabaId?: string;
+  phoneNumberId?: string;
+  connectionMode?: ConnectionMode;
+  coexistence?: boolean;
+  connectionStatus?: string;
+  syncStatus?: string;
+  syncDetail?: string;
+  contactSync?: string;
+  codeVerificationStatus?: string;
+  lastWebhookAt?: string;
+  lastHealthAt?: string;
+  onboardingError?: string;
+  status?: string;
+};
 
 type Status = {
   connected?: boolean;
@@ -13,7 +32,21 @@ type Status = {
   error?: string;
   canEditOps?: boolean;
   quota?: ServiceQuotaSnapshot;
-  es?: { appId?: string | null; configId?: string | null; ready?: boolean };
+  connection?: ConnectionView | null;
+  automation?: {
+    inboundEnabled: boolean;
+    paymentFollowUpEnabled: boolean;
+    marketingEnabled: boolean;
+    pilotMode: boolean;
+    configured: boolean;
+  };
+  es?: {
+    appId?: string | null;
+    configId?: string | null;
+    ready?: boolean;
+    version?: EsVersion;
+    coexistenceLaunch?: boolean;
+  };
 };
 
 declare global {
@@ -69,9 +102,12 @@ export function WhatsAppCloudPanel({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  const pending = useRef<{ code?: string; session?: unknown }>({});
+  const [mode, setMode] = useState<ConnectionMode | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const pending = useRef<{ code?: string; session?: unknown; mode?: ConnectionMode | null }>({});
 
   const qs = clientId ? `?client=${encodeURIComponent(clientId)}` : "";
+  const modeKey = `atlasnow.waConnectMode.${clientId || "self"}`;
 
   const load = useCallback(async () => {
     if (isAgency && !clientId) {
@@ -93,10 +129,20 @@ export function WhatsAppCloudPanel({
     void load();
   }, [load]);
 
+  useEffect(() => {
+    try {
+      const stored = window.sessionStorage.getItem(modeKey);
+      if (stored === "COEXISTENCE" || stored === "CLOUD_API_ONLY") setMode(stored);
+    } catch {
+      /* session storage is only a convenience */
+    }
+  }, [modeKey]);
+
   const finishEs = useCallback(async () => {
     const code = pending.current.code;
     const session = pending.current.session;
-    if (!code || !session) return;
+    const chosen = pending.current.mode || mode;
+    if (!code || !session || !chosen) return;
     pending.current = {};
     setBusy(true);
     setErr(null);
@@ -106,7 +152,7 @@ export function WhatsAppCloudPanel({
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, session }),
+        body: JSON.stringify({ code, session, mode: chosen }),
       });
       const data = (await res.json()) as {
         error?: string;
@@ -117,10 +163,11 @@ export function WhatsAppCloudPanel({
         setErr(data.error || "Embedded Signup did not finish");
         return;
       }
+      setChoosing(false);
       setMsg(
         data.coexistence
-          ? `Connected${data.displayPhone ? ` · ${data.displayPhone}` : ""}. WhatsApp Business App stays on the phone.`
-          : `HQ Cloud connected${data.displayPhone ? ` · ${data.displayPhone}` : ""}.`
+          ? `Connected${data.displayPhone ? ` · ${data.displayPhone}` : ""}. WhatsApp Business App + AtlasNow Cloud API. Automation stays off until you turn it on.`
+          : `Cloud API connected${data.displayPhone ? ` · ${data.displayPhone}` : ""}. Automation stays off until you turn it on.`
       );
       await load();
     } catch {
@@ -128,7 +175,7 @@ export function WhatsAppCloudPanel({
     } finally {
       setBusy(false);
     }
-  }, [qs, load]);
+  }, [qs, load, mode]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -155,7 +202,22 @@ export function WhatsAppCloudPanel({
     return () => window.removeEventListener("message", onMessage);
   }, [finishEs]);
 
-  async function launchEs() {
+  function choose(next: ConnectionMode) {
+    setMode(next);
+    setErr(null);
+    setMsg(null);
+    try {
+      window.sessionStorage.setItem(modeKey, next);
+    } catch {
+      /* the server still receives the mode on finish */
+    }
+  }
+
+  async function launchEs(next: ConnectionMode) {
+    if (next === "COEXISTENCE" && !status?.es?.coexistenceLaunch) {
+      setErr("Coexistence launch stays off until an eligible WhatsApp Business App number is verified.");
+      return;
+    }
     const appId = status?.es?.appId;
     const configId = status?.es?.configId;
     if (!appId || !configId) {
@@ -165,30 +227,28 @@ export function WhatsAppCloudPanel({
     setBusy(true);
     setErr(null);
     setMsg(null);
-    pending.current = {};
+    pending.current = { mode: next };
     try {
       await loadFbSdk(appId);
       if (!window.FB) throw new Error("Facebook SDK missing");
+      const version: EsVersion = status?.es?.version === "v5" ? "v5" : "v4";
       window.FB.login(
         (response) => {
           const code = response.authResponse?.code;
           if (!code) {
             setBusy(false);
-            setErr("Facebook login did not return a code.");
+            setErr("Facebook login did not return a code. You can retry. AtlasNow does not ask for the WhatsApp code or Meta password.");
             return;
           }
           pending.current.code = code;
+          pending.current.mode = next;
           void finishEs();
         },
         {
           config_id: configId,
           response_type: "code",
           override_default_response_type: true,
-          extras: {
-            setup: {},
-            featureType: "whatsapp_business_app_onboarding",
-            sessionInfoVersion: "3",
-          },
+          extras: embeddedSignupExtras(next, version),
         }
       );
     } catch (e) {
@@ -252,7 +312,13 @@ export function WhatsAppCloudPanel({
   }
 
   async function disconnect() {
-    if (!window.confirm("Disconnect this brand HQ WhatsApp Cloud API?")) return;
+    if (
+      !window.confirm(
+        "Disconnect AtlasNow from this WhatsApp number? This does not delete the WhatsApp account or unregister the number at Meta. New Cloud API events stop until you connect again."
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     await fetch(`/api/whatsapp-cloud${qs}`, {
       method: "DELETE",
@@ -268,26 +334,78 @@ export function WhatsAppCloudPanel({
   return (
     <div className="an-card space-y-4 p-5">
       <div>
-        <h2 className="text-sm font-semibold text-slate-900">WhatsApp HQ (Cloud API)</h2>
+        <h2 className="text-sm font-semibold text-slate-900">WhatsApp</h2>
         <p className="mt-1 text-[13px] leading-relaxed text-slate-500">
-          One official business number per brand. Blast, loyalty, and HQ inbox use this
-          number — not a store QR.
-        </p>
-        <p className="mt-1.5 text-[12px] leading-relaxed text-slate-500">
-          Connect the shop WhatsApp <span className="font-medium text-slate-700">Business App</span>{" "}
-          (green) — same number stays on the phone. Personal WhatsApp cannot; switch to Business App
-          first. Webhook:{" "}
-          <code className="font-mono text-[10px]">{status?.webhookUrl || "https://atlasnow.co/api/webhooks/whatsapp"}</code>
-        </p>
-        <p className="mt-1 text-[11px] text-slate-500">
-          Status:{" "}
-          <span className="font-semibold">
-            {status?.connected
-              ? `Connected${status.displayPhone ? ` · ${status.displayPhone}` : ""}`
-              : "Not connected"}
-          </span>
+          One official business number per workspace. Inbox and automation use this number.
         </p>
       </div>
+
+      {status?.connected && status.connection ? (
+        <dl className="grid gap-2 text-[12px] text-slate-600 sm:grid-cols-2">
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Business display name</dt>
+            <dd className="text-slate-900">{status.connection.verifiedName || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Connected number</dt>
+            <dd className="text-slate-900">{status.connection.displayPhone || status.displayPhone || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">WABA</dt>
+            <dd className="font-mono text-[11px] text-slate-900">{status.connection.wabaId || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Connection mode</dt>
+            <dd className="text-slate-900">
+              {status.connection.connectionMode === "COEXISTENCE" ? "Coexistence" : "Cloud API"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Connection health</dt>
+            <dd className="text-slate-900">
+              {status.connection.connectionStatus === "needs_attention" || status.connection.onboardingError
+                ? "Needs attention"
+                : "Healthy"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Meta verification</dt>
+            <dd className="text-slate-900">{status.connection.codeVerificationStatus || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Synchronization</dt>
+            <dd className="text-slate-900">
+              {status.connection.syncStatus || "—"}
+              {status.connection.syncDetail ? ` · ${status.connection.syncDetail}` : ""}
+              {status.connection.contactSync ? ` · ${status.connection.contactSync}` : ""}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Last activity</dt>
+            <dd className="text-slate-900">{status.connection.lastWebhookAt || status.connection.lastHealthAt || "—"}</dd>
+          </div>
+          <div className="sm:col-span-2">
+            <dt className="text-[10px] font-bold uppercase text-slate-400">Automation</dt>
+            <dd className="text-slate-900">
+              {`Inbound ${status.automation?.inboundEnabled ? "on" : "off"} · Follow-up ${
+                status.automation?.paymentFollowUpEnabled ? "on" : "off"
+              } · Marketing ${status.automation?.marketingEnabled ? "on" : "off"} · ${
+                status.automation?.pilotMode === false ? "Production" : "Pilot"
+              }`}
+            </dd>
+          </div>
+          {status.connection.connectionMode === "COEXISTENCE" ? (
+            <p className="sm:col-span-2 text-[12px] font-medium text-slate-800">
+              WhatsApp Business App + AtlasNow Cloud API
+            </p>
+          ) : null}
+          {status.connection.onboardingError ? (
+            <p className="sm:col-span-2 text-[12px] text-amber-800">{status.connection.onboardingError}</p>
+          ) : null}
+        </dl>
+      ) : (
+        <p className="text-[11px] text-slate-500">Not connected</p>
+      )}
 
       {status?.quota?.connected ? (
         <ServiceQuotaChip quota={status.quota} locale="en" />
@@ -321,30 +439,77 @@ export function WhatsAppCloudPanel({
         </p>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          className="an-btn-primary text-sm"
-          disabled={blocked || busy || !status?.es?.ready}
-          onClick={() => void launchEs()}
-        >
-          {busy ? "…" : status?.connected ? "Reconnect WhatsApp Business" : "Connect WhatsApp Business"}
-        </button>
-        {status?.connected && (
+      {(choosing || !status?.connected) && !blocked ? (
+        <div className="space-y-3">
+          <p className="text-[12px] font-medium text-slate-700">Connect WhatsApp</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <button
+              type="button"
+              className={`rounded-xl border px-3 py-3 text-left ${mode === "COEXISTENCE" ? "border-slate-900" : "border-slate-200"}`}
+              onClick={() => choose("COEXISTENCE")}
+              disabled={busy}
+            >
+              <span className="block text-sm font-semibold text-slate-900">Use Existing WhatsApp Business App</span>
+              <span className="mt-1 block text-[12px] leading-relaxed text-slate-500">
+                Keep using your existing WhatsApp Business number and mobile app while enabling AtlasNow automation, shared inbox, and business workflows.
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`rounded-xl border px-3 py-3 text-left ${mode === "CLOUD_API_ONLY" ? "border-slate-900" : "border-slate-200"}`}
+              onClick={() => choose("CLOUD_API_ONLY")}
+              disabled={busy}
+            >
+              <span className="block text-sm font-semibold text-slate-900">Connect via WhatsApp Cloud API</span>
+              <span className="mt-1 block text-[12px] leading-relaxed text-slate-500">
+                Connect a dedicated business number to WhatsApp Business Platform for API messaging and automation.
+              </span>
+            </button>
+          </div>
+          {mode === "COEXISTENCE" ? (
+            <ul className="list-disc space-y-1 pl-4 text-[12px] leading-relaxed text-slate-600">
+              <li>The number must already be an eligible WhatsApp Business App number. Meta decides eligibility.</li>
+              <li>The WhatsApp Business App can stay in use for supported manual messaging.</li>
+              <li>Some app features and companion-device behavior can change after onboarding.</li>
+              <li>Group conversations and other unsupported data may not sync to AtlasNow.</li>
+              <li>Cloud API messaging can incur Meta charges.</li>
+              <li>Back up important business records before onboarding.</li>
+              {!status?.es?.coexistenceLaunch ? (
+                <li>Coexistence launch is off until a real Business App number is verified. Cloud API onboarding stays available.</li>
+              ) : null}
+            </ul>
+          ) : null}
           <button
             type="button"
-            className="an-btn-ghost text-sm"
-            disabled={busy}
-            onClick={() => void disconnect()}
+            className="an-btn-primary text-sm"
+            disabled={blocked || busy || !status?.es?.ready || !mode || (mode === "COEXISTENCE" && !status?.es?.coexistenceLaunch)}
+            onClick={() => mode && void launchEs(mode)}
           >
+            {busy ? "…" : "Continue with Meta"}
+          </button>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        {status?.connected && !choosing ? (
+          <button type="button" className="an-btn-ghost text-sm" disabled={busy} onClick={() => setChoosing(true)}>
+            Reconnect
+          </button>
+        ) : null}
+        {status?.connected ? (
+          <button type="button" className="an-btn-ghost text-sm" disabled={busy} onClick={() => void disconnect()}>
             Disconnect
           </button>
-        )}
+        ) : null}
       </div>
+      <p className="text-[11px] leading-relaxed text-slate-500">
+        If Meta rejects the number, the reason appears here. Retry Embedded Signup, or ask a workspace admin for help.
+        AtlasNow does not delete or migrate the WhatsApp account. Webhook:{" "}
+        <code className="font-mono text-[10px]">{status?.webhookUrl || "https://atlasnow.co/api/webhooks/whatsapp"}</code>
+      </p>
       {!status?.es?.ready && !blocked ? (
         <p className="text-[11px] text-amber-800">
-          ES v4 needs Meta App ID + config in Settings → API. App is still In development — only
-          testers/admins can finish the Facebook popup.
+          Embedded Signup needs Meta App ID + config in Settings → API. Only testers and admins can finish the Facebook popup while the app is in development.
         </p>
       ) : null}
 

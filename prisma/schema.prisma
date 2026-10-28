@@ -756,6 +756,8 @@ model WaMessage {
   sentAt         DateTime
   body           String   @default("")
   fromMe         Boolean  @default(false)
+  /// cloud, business_app, or history. Empty on rows written before coexistence.
+  source         String   @default("")
   rawJson        String?
   /// Inbox image bytes. Already applied on production as 20261004120000 and 20261004143000.
   mediaImage     Bytes?

@@ -273,6 +273,8 @@ export type Messages = {
     emptyNoMap: string;
     emptyWait: string;
     accountResponder: string;
+    businessAppSource: string;
+    historySync: string;
     agencyOnly: string;
     pickClient: string;
     pickClientHint: string;
@@ -1080,6 +1082,8 @@ const en: Messages = {
     emptyNoMap: "Map this channel on Chat apps (WhatsApp HQ, Messenger, Instagram, TikTok) or the outlet Sources tab.",
     emptyWait: "Waiting for messages.",
     accountResponder: "Account responder",
+    businessAppSource: "WhatsApp Business App",
+    historySync: "History sync",
     agencyOnly: "Staff monitor conversations.",
     pickClient: "Pick a brand",
     pickClientHint: "Open a brand to see HQ and branch chats.",
@@ -1910,6 +1914,8 @@ const id: Messages = {
     emptyNoMap: "Map kanal ini di Chat apps (WhatsApp HQ, Messenger, Instagram, TikTok) atau tab Sumber di outlet.",
     emptyWait: "Menunggu pesan.",
     accountResponder: "Penanggap akun",
+    businessAppSource: "WhatsApp Business App",
+    historySync: "Sinkron riwayat",
     agencyOnly: "Staf memonitor percakapan.",
     pickClient: "Pilih merek",
     pickClientHint: "Buka merek untuk melihat chat HQ dan cabang.",

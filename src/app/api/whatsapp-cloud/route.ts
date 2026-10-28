@@ -5,9 +5,12 @@ import { META_GRAPH } from "@/lib/meta/oauth";
 import {
   disconnectCloudHq,
   getCloudHqConfig,
+  readCloudConnection,
   saveCloudHqConnector,
 } from "@/lib/conversations/cloud-hq";
+import { coexistenceLaunchEnabled, embeddedSignupVersion } from "@/lib/conversations/es-config";
 import { resolvedMetaApp } from "@/lib/integrations/service";
+import { prisma } from "@/lib/db";
 import {
   isPhoneOwnershipError,
   patchWabaPhoneOps,
@@ -32,8 +35,18 @@ export async function GET(request: Request) {
   const scoped = await targetTenant(request, await readSession());
   if ("error" in scoped) return scoped.error;
   const cfg = await getCloudHqConfig(scoped.tenantId);
+  const connection = await readCloudConnection(scoped.tenantId);
   const quota = await serviceQuotaForTenant(scoped.tenantId, cfg);
   const meta = await resolvedMetaApp();
+  const automation = await prisma.workspaceAutomation.findUnique({
+    where: { tenantId: scoped.tenantId },
+    select: {
+      inboundEnabled: true,
+      paymentFollowUpEnabled: true,
+      marketingEnabled: true,
+      pilotMode: true,
+    },
+  });
   return NextResponse.json({
     connected: Boolean(cfg),
     phoneNumberId: cfg?.phoneNumberId || null,
@@ -42,10 +55,20 @@ export async function GET(request: Request) {
     webhookUrl: "https://atlasnow.co/api/webhooks/whatsapp",
     canEditOps: scoped.session.isPlatformAdmin,
     quota,
+    connection,
+    automation: {
+      inboundEnabled: automation?.inboundEnabled ?? false,
+      paymentFollowUpEnabled: automation?.paymentFollowUpEnabled ?? false,
+      marketingEnabled: automation?.marketingEnabled ?? false,
+      pilotMode: automation?.pilotMode ?? true,
+      configured: Boolean(automation),
+    },
     es: {
       appId: meta.appId || null,
       configId: meta.whatsappEsConfigId || null,
       ready: Boolean(meta.appId && meta.whatsappEsConfigId && meta.configured),
+      version: embeddedSignupVersion(),
+      coexistenceLaunch: coexistenceLaunchEnabled(),
     },
   });
 }

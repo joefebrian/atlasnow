@@ -1,7 +1,9 @@
 import { randomInt } from "crypto";
 import { META_GRAPH } from "@/lib/meta/oauth";
 import { resolvedMetaApp } from "@/lib/integrations/service";
-import { assertCloudPhoneAvailable, saveCloudHqConnector } from "@/lib/conversations/cloud-hq";
+import { assertCloudPhoneAvailable, mergeCloudConnectorMeta, saveCloudHqConnector } from "@/lib/conversations/cloud-hq";
+import { coexistenceLaunchEnabled } from "@/lib/conversations/es-config";
+import { decideConnection, type ConnectionMode } from "@/lib/conversations/es-launch";
 
 export const ES_COEXISTENCE_EVENT = "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING";
 
@@ -53,6 +55,8 @@ async function graphJson(url: string, init?: RequestInit) {
     verified_name?: string;
     is_on_biz_app?: boolean;
     platform_type?: string;
+    code_verification_status?: string;
+    request_id?: string;
   };
   return { ok: res.ok, body };
 }
@@ -85,13 +89,15 @@ async function firstWabaPhone(wabaId: string, token: string) {
 }
 
 async function phoneInfo(phoneNumberId: string, token: string) {
-  const url = `${META_GRAPH}/${encodeURIComponent(phoneNumberId)}?fields=display_phone_number,verified_name,is_on_biz_app,platform_type`;
+  const url = `${META_GRAPH}/${encodeURIComponent(phoneNumberId)}?fields=display_phone_number,verified_name,is_on_biz_app,platform_type,code_verification_status`;
   const { ok, body } = await graphJson(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!ok) throw new Error(body.error?.message || "Cloud API rejected this phone number");
   return {
     displayPhone: body.display_phone_number || null,
     verifiedName: body.verified_name || null,
     coexistence: body.is_on_biz_app === true,
+    platformType: body.platform_type || "",
+    codeVerificationStatus: body.code_verification_status || "",
   };
 }
 
@@ -120,29 +126,51 @@ async function registerDedicatedPhone(phoneNumberId: string, token: string) {
 }
 
 async function kickCoexistenceSync(phoneNumberId: string, token: string) {
+  const errors: string[] = [];
+  let historyRequestId = "";
+  let contactRequestId = "";
   for (const sync_type of ["smb_app_state_sync", "history"] as const) {
     const url = `${META_GRAPH}/${encodeURIComponent(phoneNumberId)}/smb_app_data`;
-    await graphJson(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ messaging_product: "whatsapp", sync_type }),
-    }).catch(() => {
-      /* history/contacts can retry; connector already saved */
-    });
+    try {
+      const { ok, body } = await graphJson(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ messaging_product: "whatsapp", sync_type }),
+      });
+      const requestId = body.request_id || "";
+      if (!ok) errors.push(body.error?.message || sync_type);
+      else if (sync_type === "history") historyRequestId = requestId;
+      else contactRequestId = requestId;
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : sync_type);
+    }
   }
+  return {
+    historyRequestId,
+    contactRequestId,
+    syncStatus: errors.length ? "error" : "requested",
+    syncDetail: errors.join("; ").slice(0, 240),
+  };
 }
 
 export async function finishEmbeddedSignup(opts: {
   tenantId: string;
   code: string;
   session: EsSession;
+  requestedMode?: ConnectionMode | null;
 }): Promise<{
   displayPhone: string | null;
   verifiedName: string | null;
   coexistence: boolean;
+  connectionMode: ConnectionMode;
   phoneNumberId: string;
   wabaId: string;
+  syncStatus: string;
 }> {
+  const requestedMode = opts.requestedMode ?? null;
+  if ((opts.session.coexistence || requestedMode === "COEXISTENCE") && !coexistenceLaunchEnabled()) {
+    throw new Error("coexistence_disabled");
+  }
   const token = await exchangeEsCode(opts.code);
   let phoneNumberId = opts.session.phoneNumberId;
   if (!phoneNumberId) {
@@ -150,10 +178,16 @@ export async function finishEmbeddedSignup(opts: {
     phoneNumberId = listed.phoneNumberId;
   }
   const info = await phoneInfo(phoneNumberId, token);
-  const coexistence = opts.session.coexistence || info.coexistence;
+  const decision = decideConnection({
+    sessionCoexistence: opts.session.coexistence,
+    graphOnBizApp: info.coexistence,
+    requestedMode,
+    launchEnabled: coexistenceLaunchEnabled(),
+  });
+  if ("error" in decision) throw new Error(decision.error);
   await assertCloudPhoneAvailable(opts.tenantId, phoneNumberId);
   await subscribeWaba(opts.session.wabaId, token);
-  if (!coexistence) {
+  if (decision.mode === "CLOUD_API_ONLY") {
     await registerDedicatedPhone(phoneNumberId, token);
   }
   await saveCloudHqConnector({
@@ -163,15 +197,32 @@ export async function finishEmbeddedSignup(opts: {
     accessToken: token,
     displayPhone: info.displayPhone,
     verifiedName: info.verifiedName,
+    connectionMode: decision.mode,
+    codeVerificationStatus: info.codeVerificationStatus,
+    platformType: info.platformType,
   });
-  if (coexistence) {
-    await kickCoexistenceSync(phoneNumberId, token);
+  let syncStatus = decision.mode === "COEXISTENCE" ? "idle" : "not_applicable";
+  if (decision.mode === "COEXISTENCE") {
+    const sync = await kickCoexistenceSync(phoneNumberId, token);
+    syncStatus = sync.syncStatus;
+    await mergeCloudConnectorMeta({
+      phoneNumberId,
+      patch: {
+        syncStatus: sync.syncStatus,
+        syncDetail: sync.syncDetail,
+        historyRequestId: sync.historyRequestId,
+        contactRequestId: sync.contactRequestId,
+      },
+      forceSync: true,
+    });
   }
   return {
     displayPhone: info.displayPhone,
     verifiedName: info.verifiedName,
-    coexistence,
+    coexistence: decision.mode === "COEXISTENCE",
+    connectionMode: decision.mode,
     phoneNumberId,
     wabaId: opts.session.wabaId,
+    syncStatus,
   };
 }
