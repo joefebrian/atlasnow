@@ -4,6 +4,7 @@ import { ingestCloudWhatsAppPayload } from "@/lib/conversations/cloud-ingest";
 import { cloudSignatureValid } from "@/lib/conversations/cloud-signature";
 import { cloudWebhookSecrets } from "@/lib/conversations/cloud-verify";
 import { logAppError } from "@/lib/error-log";
+import { routeWorkspaceAutomation } from "@/lib/commerce-automation/engine";
 import { routeYolaFromWhatsApp } from "@/lib/yola/engine";
 
 export async function GET(request: Request) {
@@ -49,6 +50,11 @@ export async function POST(request: Request) {
   }
   const yolaTrusted = Boolean(secrets.appSecret.trim());
   let yola: { ran: boolean; reason?: string } = { ran: false, reason: yolaTrusted ? "not_run" : "signature_required" };
+  let automation: { ran: boolean; handled: number; reason?: string } = {
+    ran: false,
+    handled: 0,
+    reason: yolaTrusted ? "not_run" : "signature_required",
+  };
   if (yolaTrusted) {
     try {
       const routed = await routeYolaFromWhatsApp({ trusted: true, body });
@@ -61,13 +67,23 @@ export async function POST(request: Request) {
       });
       yola = { ran: false, reason: "yola_failed" };
     }
+    try {
+      automation = await routeWorkspaceAutomation({ trusted: true, body });
+    } catch (e) {
+      await logAppError({
+        source: "WhatsApp Cloud webhook",
+        title: "Workspace automation failed",
+        detail: e instanceof Error ? e.message : "automation_failed",
+      });
+      automation = { ran: false, handled: 0, reason: "automation_failed" };
+    }
   }
   if (!plan.capture) {
-    return NextResponse.json({ ok: true, results, yola });
+    return NextResponse.json({ ok: true, results, yola, automation });
   }
   try {
     const orders = await captureWhatsAppOrders(body);
-    return NextResponse.json({ ok: true, results, orders, yola });
+    return NextResponse.json({ ok: true, results, orders, yola, automation });
   } catch {
     await logAppError({
       source: "WhatsApp Cloud webhook",

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { InfoTip } from "@/components/InfoTip";
 import { WhatsAppCloudPanel } from "@/components/channels/WhatsAppCloudPanel";
+import { WorkspaceAutomationPanel } from "@/components/channels/WorkspaceAutomationPanel";
 import { TikTokPanel } from "@/components/channels/TikTokPanel";
 import { TikTokGoPanel } from "@/components/channels/TikTokGoPanel";
 
@@ -199,6 +200,8 @@ export function ChannelsPanel({
       )}
 
       <WhatsAppCloudPanel clientId={clientId} isAgency={isAgency} />
+
+      <WorkspaceAutomationPanel clientId={clientId} isAgency={isAgency} />
 
       <TikTokGoPanel clientId={clientId} isAgency={isAgency} />
 

@@ -932,18 +932,77 @@ model WabaPhone {
 
 /// Per-workspace commerce automation. Missing row means disabled.
 /// A legacy YOLA env flag set to false still blocks that purpose.
+/// Flow, triggers, and payment text are required before that purpose can send.
 model WorkspaceAutomation {
-  id                     String   @id @default(cuid())
-  tenantId               String   @unique
-  inboundEnabled         Boolean  @default(false)
-  paymentFollowUpEnabled Boolean  @default(false)
-  marketingEnabled       Boolean  @default(false)
-  /// Pilot mode does not send by itself.
-  pilotMode              Boolean  @default(true)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                     String    @id @default(cuid())
+  tenantId               String    @unique
+  inboundEnabled         Boolean   @default(false)
+  paymentFollowUpEnabled Boolean   @default(false)
+  marketingEnabled       Boolean   @default(false)
+  /// Set only by an explicit authorize action. The switch alone does not send.
+  marketingAuthorizedAt  DateTime?
+  /// Pilot mode does not send by itself. An empty allowlist sends to nobody.
+  pilotMode              Boolean   @default(true)
+  flowId                 String?
+  flowScreen             String?
+  flowCta                String?
+  inboundBody            String?
+  triggerPhrases         String?
+  paymentTriggerPhrases  String?
+  paymentMessageText     String?
+  /// Bound from this workspace's WhatsApp connector. A mismatch does not send.
+  phoneNumberId          String?
+  wabaId                 String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant                         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  allowlist WorkspaceAutomationAllowlist[]
+  audits    WorkspaceAutomationAudit[]
+  outbounds WorkspaceAutomationOutbound[]
+}
+
+model WorkspaceAutomationAllowlist {
+  id        String   @id @default(cuid())
+  tenantId  String
+  digits    String
+  createdAt DateTime @default(now())
+
+  automation WorkspaceAutomation @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+
+  @@unique([tenantId, digits])
+  @@index([tenantId])
+}
+
+model WorkspaceAutomationAudit {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorUserId String?
+  action      String
+  summary     String
+  createdAt   DateTime @default(now())
+
+  automation WorkspaceAutomation @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+/// At most one outbound attempt per dedupe key. A replay does not send again.
+model WorkspaceAutomationOutbound {
+  id            String   @id @default(cuid())
+  tenantId      String
+  dedupeKey     String   @unique
+  purpose       String
+  status        String
+  phoneNumberId String
+  toDigits      String
+  detail        String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  automation WorkspaceAutomation @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
 }
 
 model WabaServiceMonth {
