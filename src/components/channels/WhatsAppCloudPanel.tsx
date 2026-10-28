@@ -252,7 +252,7 @@ export function WhatsAppCloudPanel({
 
   async function launchEs(next: ConnectionMode) {
     if (next === "COEXISTENCE" && !status?.es?.coexistenceLaunch) {
-      setErr("Coexistence launch stays off until an eligible WhatsApp Business App number is verified.");
+      setErr("Coexistence launch is not approved for this workspace. Cloud API onboarding stays available.");
       return;
     }
     const appId = status?.es?.appId;
@@ -583,14 +583,14 @@ export function WhatsAppCloudPanel({
           </div>
           {mode === "COEXISTENCE" ? (
             <ul className="list-disc space-y-1 pl-4 text-[12px] leading-relaxed text-slate-600">
-              <li>The number must already be an eligible WhatsApp Business App number. Meta decides eligibility.</li>
+              <li>Meta decides eligibility inside this flow. AtlasNow does not mark a number eligible beforehand.</li>
               <li>The WhatsApp Business App can stay in use for supported manual messaging.</li>
               <li>Some app features and companion-device behavior can change after onboarding.</li>
               <li>Group conversations and other unsupported data may not sync to AtlasNow.</li>
               <li>Cloud API messaging can incur Meta charges.</li>
               <li>Back up important business records before onboarding.</li>
               {!status?.es?.coexistenceLaunch ? (
-                <li>Coexistence launch is off until a real Business App number is verified. Cloud API onboarding stays available.</li>
+                <li>Coexistence launch is not approved for this workspace. Cloud API onboarding stays available.</li>
               ) : null}
             </ul>
           ) : null}

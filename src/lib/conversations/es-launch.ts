@@ -50,6 +50,28 @@ export function decideConnection(input: {
   return { mode: "CLOUD_API_ONLY" };
 }
 
+/**
+ * A Coexistence finish must add a different phone. An already connected
+ * Cloud API number is left untouched, including when the session omits a phone id.
+ */
+export function pickCoexistencePhone(input: {
+  sessionPhoneId: string;
+  listedIds: string[];
+  connectedIds: string[];
+}): { phoneNumberId: string } | { error: "existing_cloud_number" | "phone_not_in_session" } {
+  const connected = new Set(input.connectedIds.map((id) => id.trim()).filter(Boolean));
+  const sessionPhoneId = input.sessionPhoneId.trim();
+  if (sessionPhoneId) {
+    if (connected.has(sessionPhoneId)) return { error: "existing_cloud_number" };
+    return { phoneNumberId: sessionPhoneId };
+  }
+  const listed = input.listedIds.map((id) => id.trim()).filter(Boolean);
+  const fresh = listed.filter((id) => !connected.has(id));
+  if (fresh.length === 1) return { phoneNumberId: fresh[0] };
+  if (listed.length > 0 && fresh.length === 0) return { error: "existing_cloud_number" };
+  return { error: "phone_not_in_session" };
+}
+
 /** Webhook progress must not downgrade a finished or declined sync. */
 export function keepSyncStatus(previous: string, incoming: string): string {
   if (incoming === "declined" || incoming === "error") return incoming;

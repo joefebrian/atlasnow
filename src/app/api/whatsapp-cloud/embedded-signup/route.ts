@@ -8,7 +8,11 @@ import { logAppError } from "@/lib/error-log";
 
 const ES_ERRORS: Record<string, string> = {
   coexistence_disabled:
-    "Coexistence onboarding stays off until AtlasNow verifies it with an eligible WhatsApp Business App number. Connect via WhatsApp Cloud API, or retry after that launch is enabled.",
+    "Coexistence launch is not approved for this workspace. Cloud API onboarding stays available.",
+  existing_cloud_number:
+    "This number is already connected with Cloud API. Coexistence will not replace it. Add the Business App number as a separate number.",
+  phone_not_in_session:
+    "Meta did not identify one new phone number. The existing Cloud API number was left unchanged.",
   not_business_app:
     "Meta did not confirm this number is on the WhatsApp Business App. Meta decides eligibility. Retry, or connect a dedicated Cloud API number. AtlasNow will not delete or migrate the WhatsApp account.",
   use_coexistence_option:

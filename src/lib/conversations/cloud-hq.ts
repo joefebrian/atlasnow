@@ -149,6 +149,14 @@ export async function ensureHqLocation(
   });
 }
 
+export async function connectedCloudPhoneIds(tenantId: string): Promise<string[]> {
+  const rows = await prisma.connector.findMany({
+    where: { tenantId, provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" } },
+    select: { accountKey: true, accessTokenEnc: true },
+  });
+  return rows.filter((row) => row.accountKey && row.accessTokenEnc).map((row) => row.accountKey);
+}
+
 export async function listConnectedCloudHq(): Promise<CloudHqConfig[]> {
   const rows = await prisma.connector.findMany({
     where: { provider: WHATSAPP_CLOUD_PROVIDER, status: { not: "DISCONNECTED" } },

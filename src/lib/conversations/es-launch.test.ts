@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { coexistenceLaunchEnabled, embeddedSignupVersion } from "./es-config";
-import { decideConnection, embeddedSignupExtras, keepSyncStatus } from "./es-launch";
+import { decideConnection, embeddedSignupExtras, keepSyncStatus, pickCoexistencePhone } from "./es-launch";
 
 describe("embedded signup launch", () => {
   it("keeps coexistence launch off unless the platform flag is exactly true", () => {
@@ -109,6 +109,49 @@ describe("embedded signup launch", () => {
         launchEnabled: false,
       }),
       { mode: "CLOUD_API_ONLY" }
+    );
+  });
+
+  it("refuses to attach coexistence onto an already connected Cloud API number", () => {
+    assert.deepEqual(
+      pickCoexistencePhone({
+        sessionPhoneId: "1331612236697087",
+        listedIds: [],
+        connectedIds: ["1331612236697087"],
+      }),
+      { error: "existing_cloud_number" }
+    );
+    assert.deepEqual(
+      pickCoexistencePhone({
+        sessionPhoneId: "",
+        listedIds: ["1331612236697087"],
+        connectedIds: ["1331612236697087"],
+      }),
+      { error: "existing_cloud_number" }
+    );
+    assert.deepEqual(
+      pickCoexistencePhone({
+        sessionPhoneId: "555000111",
+        listedIds: ["1331612236697087", "555000111"],
+        connectedIds: ["1331612236697087"],
+      }),
+      { phoneNumberId: "555000111" }
+    );
+    assert.deepEqual(
+      pickCoexistencePhone({
+        sessionPhoneId: "",
+        listedIds: ["1331612236697087", "555000111"],
+        connectedIds: ["1331612236697087"],
+      }),
+      { phoneNumberId: "555000111" }
+    );
+    assert.deepEqual(
+      pickCoexistencePhone({
+        sessionPhoneId: "",
+        listedIds: ["555000111", "555000222"],
+        connectedIds: ["1331612236697087"],
+      }),
+      { error: "phone_not_in_session" }
     );
   });
 

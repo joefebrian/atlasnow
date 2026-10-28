@@ -1,9 +1,9 @@
 import { randomInt } from "crypto";
 import { META_GRAPH } from "@/lib/meta/oauth";
 import { resolvedMetaApp } from "@/lib/integrations/service";
-import { assertCloudPhoneAvailable, mergeCloudConnectorMeta, saveCloudHqConnector } from "@/lib/conversations/cloud-hq";
+import { assertCloudPhoneAvailable, connectedCloudPhoneIds, mergeCloudConnectorMeta, saveCloudHqConnector } from "@/lib/conversations/cloud-hq";
 import { coexistenceLaunchEnabled } from "@/lib/conversations/es-config";
-import { decideConnection, type ConnectionMode } from "@/lib/conversations/es-launch";
+import { decideConnection, pickCoexistencePhone, type ConnectionMode } from "@/lib/conversations/es-launch";
 
 export const ES_COEXISTENCE_EVENT = "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING";
 
@@ -75,17 +75,11 @@ export async function exchangeEsCode(code: string): Promise<string> {
   return body.access_token;
 }
 
-async function firstWabaPhone(wabaId: string, token: string) {
+async function listWabaPhoneIds(wabaId: string, token: string): Promise<string[]> {
   const url = `${META_GRAPH}/${encodeURIComponent(wabaId)}/phone_numbers?fields=id,display_phone_number,verified_name`;
   const { ok, body } = await graphJson(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!ok) throw new Error(body.error?.message || "Could not list WABA phone numbers");
-  const row = body.data?.[0];
-  if (!row?.id) throw new Error("No phone number on this WhatsApp account yet.");
-  return {
-    phoneNumberId: row.id,
-    displayPhone: row.display_phone_number || null,
-    verifiedName: row.verified_name || null,
-  };
+  return (body.data || []).map((row) => str(row.id)).filter(Boolean);
 }
 
 async function phoneInfo(phoneNumberId: string, token: string) {
@@ -172,10 +166,20 @@ export async function finishEmbeddedSignup(opts: {
     throw new Error("coexistence_disabled");
   }
   const token = await exchangeEsCode(opts.code);
+  const wantsCoexistence = opts.session.coexistence || requestedMode === "COEXISTENCE";
   let phoneNumberId = opts.session.phoneNumberId;
-  if (!phoneNumberId) {
-    const listed = await firstWabaPhone(opts.session.wabaId, token);
-    phoneNumberId = listed.phoneNumberId;
+  if (wantsCoexistence) {
+    const picked = pickCoexistencePhone({
+      sessionPhoneId: phoneNumberId,
+      listedIds: phoneNumberId ? [] : await listWabaPhoneIds(opts.session.wabaId, token),
+      connectedIds: await connectedCloudPhoneIds(opts.tenantId),
+    });
+    if ("error" in picked) throw new Error(picked.error);
+    phoneNumberId = picked.phoneNumberId;
+  } else if (!phoneNumberId) {
+    const listed = await listWabaPhoneIds(opts.session.wabaId, token);
+    phoneNumberId = listed[0] || "";
+    if (!phoneNumberId) throw new Error("No phone number on this WhatsApp account yet.");
   }
   const info = await phoneInfo(phoneNumberId, token);
   const decision = decideConnection({
