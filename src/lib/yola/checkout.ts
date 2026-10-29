@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { PRODUCT } from "@/lib/yola/catalog";
 import { pilotLinkSendEnabled, recipientAllowed, yolaAccessToken, yolaPhoneNumberId } from "@/lib/yola/config";
+import { validateMerchantPaymentUrl } from "@/lib/yola/merchant-link";
 import { hashSecret } from "@/lib/yola/payments";
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
@@ -44,6 +45,8 @@ export type CheckoutView = {
   financialStatus: string;
   simulation: string;
   origin: string;
+  handoff: "demo" | "merchant";
+  merchantUrl: string;
 };
 
 const emptyCheckout: CheckoutView = {
@@ -55,13 +58,15 @@ const emptyCheckout: CheckoutView = {
   financialStatus: "",
   simulation: "",
   origin: "",
+  handoff: "demo",
+  merchantUrl: "",
 };
 
 export async function loadDemoCheckout(token: string, now = new Date()): Promise<CheckoutView> {
   const trimmed = token.trim();
   if (!TOKEN_PATTERN.test(trimmed)) return emptyCheckout;
   const session = await prisma.yolaPaymentSession.findFirst({
-    where: { nonceHash: hashSecret(trimmed), mode: "sandbox", provider: "sandbox" },
+    where: { nonceHash: hashSecret(trimmed) },
     include: {
       order: {
         select: {
@@ -77,6 +82,25 @@ export async function loadDemoCheckout(token: string, now = new Date()): Promise
     },
   });
   if (!session || session.amountIdr !== PRODUCT.priceIdr || session.order.currency !== PRODUCT.currency) return emptyCheckout;
+  if (session.provider === "merchant_link" && session.mode === "merchant_external") {
+    const checked = validateMerchantPaymentUrl(session.providerRef);
+    if (!checked.ok) return emptyCheckout;
+    const merchantView: CheckoutView = {
+      state: "ready",
+      orderId: session.order.humanId,
+      visitDate: session.order.visitDate,
+      visitTime: session.order.visitTime,
+      amountIdr: session.order.amountIdr,
+      financialStatus: session.order.status,
+      simulation: session.status,
+      origin: session.order.origin,
+      handoff: "merchant",
+      merchantUrl: checked.url,
+    };
+    if (session.expiresAt.getTime() <= now.getTime()) return { ...merchantView, state: "expired", merchantUrl: "" };
+    return merchantView;
+  }
+  if (session.provider !== "sandbox" || session.mode !== "sandbox") return emptyCheckout;
   const view: CheckoutView = {
     state: "ready",
     orderId: session.order.humanId,
@@ -86,6 +110,8 @@ export async function loadDemoCheckout(token: string, now = new Date()): Promise
     financialStatus: session.order.status,
     simulation: session.status,
     origin: session.order.origin,
+    handoff: "demo",
+    merchantUrl: "",
   };
   if (session.expiresAt.getTime() <= now.getTime()) return { ...view, state: "expired" };
   if (session.status === "SIMULATED_PAID") return { ...view, state: "simulated" };

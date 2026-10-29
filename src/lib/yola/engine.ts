@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { DEMO_TICKET_PHRASE, PRODUCT } from "@/lib/yola/catalog";
 import { demoCheckoutUrl, newCheckoutToken, paymentLinkMessage, tryDeliverPaymentLink } from "@/lib/yola/checkout";
+import { merchantHandoffMessage, resolvePaymentPlan } from "@/lib/yola/merchant-link";
 import { flowSendEnabled, recipientAllowed, ticketLiveIssuanceEnabled, yolaAccessToken, yolaPhoneNumberId, yolaPublishedFlowId } from "@/lib/yola/config";
 import { readInbound, type InboundEvent } from "@/lib/yola/inbound";
 import { resolveYolaTenantId } from "@/lib/yola/access";
@@ -407,16 +408,24 @@ async function handleSubmission(
   });
   await tx.yolaFlowSession.update({ where: { id: session.id }, data: { status: "completed" } });
   const checkoutToken = newCheckoutToken();
+  const handoffUrl = demoCheckoutUrl(checkoutToken);
+  const paymentConfig = await tx.yolaPaymentConfig.findUnique({
+    where: { tenantId: input.tenantId },
+    select: { mode: true, merchantUrl: true },
+  });
+  const plan = resolvePaymentPlan(paymentConfig);
+  const merchant = plan.kind === "merchant";
   await tx.yolaPaymentSession.create({
     data: {
       tenantId: input.tenantId,
       orderId: order.id,
-      provider: "sandbox",
-      mode: "sandbox",
-      status: "PENDING",
+      provider: merchant ? "merchant_link" : "sandbox",
+      mode: merchant ? "merchant_external" : "sandbox",
+      status: merchant ? "PENDING_VERIFICATION" : "PENDING",
       amountIdr: OFFER.amountIdr,
       currency: OFFER.currency,
       nonceHash: hashSecret(checkoutToken),
+      providerRef: merchant ? plan.url : "",
       expiresAt: new Date(input.now.getTime() + 24 * 60 * 60 * 1000),
     },
   });
@@ -424,8 +433,10 @@ async function handleSubmission(
     tenantId: input.tenantId,
     waId: input.event.fromWaId,
     kind: "payment_link",
-    body: paymentLinkMessage({ orderId: humanId, url: demoCheckoutUrl(checkoutToken) }),
-    payload: { held: true, orderId: humanId, mode: "sandbox" },
+    body: merchant
+      ? merchantHandoffMessage({ orderId: humanId, url: handoffUrl })
+      : paymentLinkMessage({ orderId: humanId, url: handoffUrl }),
+    payload: { held: true, orderId: humanId, mode: merchant ? "merchant_external" : "sandbox" },
   });
   await remember(tx, input.tenantId, dedupeKey, { flowToken: parsed.form.flowToken, orderId: humanId });
   return { action: "order_created", orderId: humanId, flowToken: parsed.form.flowToken, paymentNonce: checkoutToken };

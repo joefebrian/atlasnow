@@ -2,12 +2,30 @@ import { redirect } from "next/navigation";
 import { readSession } from "@/lib/auth";
 import { canAccessTenant, listAccessibleClientTenants } from "@/lib/locations/access";
 import { homePathForNav } from "@/lib/nav-access";
+import { sessionCanConfigureYolaPayment, sessionCanReadYola, yolaRoleAllowed } from "@/lib/yola/access";
 import { DEMO_TICKET_PHRASE } from "@/lib/yola/catalog";
 import { YOLA_SETUP, flowSendEnabled, livePaymentsEnabled, pilotAllowlist, pilotLinkSendEnabled, ticketLiveIssuanceEnabled, yolaPhoneNumberId, yolaWabaId } from "@/lib/yola/config";
 import { listYolaDesk } from "@/lib/yola/engine";
-import { sessionCanReadYola, yolaRoleAllowed } from "@/lib/yola/access";
+import { loadYolaPaymentConfig, saveYolaPaymentConfig } from "@/lib/yola/payment-config";
 
-type Props = { searchParams: Promise<{ client?: string }> };
+type Props = { searchParams: Promise<{ client?: string; payment?: string }> };
+
+async function savePaymentAction(formData: FormData) {
+  "use server";
+  const session = await readSession();
+  if (!session) redirect("/login");
+  const tenantId = String(formData.get("tenantId") || "");
+  const client = String(formData.get("client") || "");
+  const back = client ? `/yola?client=${encodeURIComponent(client)}` : "/yola";
+  const saved = await saveYolaPaymentConfig({
+    session,
+    tenantId,
+    mode: String(formData.get("mode") || ""),
+    merchantUrl: String(formData.get("merchantUrl") || ""),
+  });
+  const joiner = back.includes("?") ? "&" : "?";
+  redirect(`${back}${joiner}payment=${saved.ok ? "saved" : saved.reason}`);
+}
 
 export default async function YolaPage({ searchParams }: Props) {
   const session = await readSession();
@@ -15,11 +33,13 @@ export default async function YolaPage({ searchParams }: Props) {
   if (!yolaRoleAllowed(session.role)) {
     redirect(homePathForNav({ role: session.role, mode: session.mode, isAgencyStaff: session.isAgencyStaff, isPlatformAdmin: session.isPlatformAdmin }));
   }
-  const { client } = await searchParams;
+  const { client, payment } = await searchParams;
   const clients = session.isAgencyStaff ? await listAccessibleClientTenants(session) : [];
   const selected = session.isAgencyStaff ? clients.find((row) => row.id === client)?.id ?? null : session.tenantId;
   const allowed = selected ? await canAccessTenant(session, selected) && (await sessionCanReadYola(session, selected)) : false;
+  const canConfigure = selected ? await sessionCanConfigureYolaPayment(session, selected) : false;
   const desk = allowed && selected ? await listYolaDesk(selected) : null;
+  const paymentConfig = allowed && selected ? await loadYolaPaymentConfig(selected) : null;
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6">
@@ -43,6 +63,48 @@ export default async function YolaPage({ searchParams }: Props) {
       {!yolaPhoneNumberId() ? <p className="text-sm text-amber-800">{YOLA_SETUP.phone}</p> : null}
       {!yolaWabaId() ? <p className="text-sm text-amber-800">{YOLA_SETUP.waba}</p> : null}
       {desk?.templateStatus !== "APPROVED" ? <p className="text-sm text-amber-800">{YOLA_SETUP.token}</p> : null}
+      {paymentConfig ? (
+        <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm">
+          <h2 className="font-semibold text-slate-900">Payment link</h2>
+          <p className="text-slate-600">
+            Current mode: {paymentConfig.plan.kind === "merchant" ? "Merchant payment page" : "Demo checkout"}.
+            WhatsApp still sends the AtlasNow order link. A merchant page does not settle the order or issue a ticket.
+          </p>
+          <p className="text-slate-500">Gateway webhook and AtlasNow gateway stay off until a provider account is connected.</p>
+          {payment === "saved" ? <p className="text-emerald-800">Payment setting saved.</p> : null}
+          {payment && payment !== "saved" ? <p className="text-amber-800">Payment setting was not saved.</p> : null}
+          {canConfigure ? (
+            <form action={savePaymentAction} className="flex flex-col gap-3">
+              <input type="hidden" name="tenantId" value={selected || ""} />
+              <input type="hidden" name="client" value={client || ""} />
+              <label className="flex items-center gap-2">
+                <input type="radio" name="mode" value="DEMO_CHECKOUT" defaultChecked={paymentConfig.mode !== "MERCHANT_EXTERNAL_LINK"} />
+                Demo checkout
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" name="mode" value="MERCHANT_EXTERNAL_LINK" defaultChecked={paymentConfig.mode === "MERCHANT_EXTERNAL_LINK"} />
+                Merchant HTTPS payment page
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>Merchant payment URL</span>
+                <input
+                  className="rounded-xl border border-slate-300 px-3 py-2"
+                  name="merchantUrl"
+                  type="url"
+                  inputMode="url"
+                  placeholder="https://pay.example.com/yola"
+                  defaultValue={paymentConfig.merchantUrl}
+                />
+              </label>
+              <button className="w-fit rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white" type="submit">
+                Save payment setting
+              </button>
+            </form>
+          ) : (
+            <p className="text-slate-500">A workspace admin can change this setting.</p>
+          )}
+        </section>
+      ) : null}
       {!allowed ? (
         <p className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
           This workspace does not run YOLA FUN. Orders for another brand stay hidden.

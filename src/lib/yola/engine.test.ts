@@ -552,4 +552,68 @@ describe("yola postgres engine", { skip: enabled ? false : "YOLA_TEST_DATABASE_U
     delete process.env.YOLA_WA_ACCESS_TOKEN;
     delete process.env.YOLA_FLOW_SEND_ENABLED;
   });
+
+  it("keeps an issued checkout on the merchant url saved with that order", async () => {
+    const pilotNow = new Date("2026-10-29T04:00:00.000Z");
+    const stamp = String(Math.floor(pilotNow.getTime() / 1000));
+    const buyer = "62818880001";
+    const firstUrl = "https://pay.example.com/yola-a";
+    const secondUrl = "https://pay.example.com/yola-b";
+    const other = await prisma.tenant.create({
+      data: { name: "Other Brand", slug: `yola-other-${Date.now()}`, type: "CLIENT", loginEnabled: true },
+    });
+    try {
+      await prisma.yolaPaymentConfig.create({
+        data: { tenantId: other.id, mode: "MERCHANT_EXTERNAL_LINK", merchantUrl: "https://other.example.com/pay" },
+      });
+      await prisma.yolaPaymentConfig.upsert({
+        where: { tenantId },
+        create: { tenantId, mode: "MERCHANT_EXTERNAL_LINK", merchantUrl: firstUrl },
+        update: { mode: "MERCHANT_EXTERNAL_LINK", merchantUrl: firstUrl },
+      });
+      const invited = await handleYolaEvent({
+        tenantId,
+        phoneNumberId: phone,
+        event: readInbound(textBody("wamid.MERCHANT.INVITE", buyer, "yola fun", stamp))[0],
+        now: pilotNow,
+      });
+      assert.equal(invited.action, "flow_invited");
+      const created = await handleYolaEvent({
+        tenantId,
+        phoneNumberId: phone,
+        event: readInbound(nfmBody("wamid.MERCHANT.NFM", buyer, {
+          buyer_name: "Rina Merchant",
+          buyer_phone: buyer,
+          visit_date: "2026-12-03",
+          visit_time: "SLOT_1000",
+          flow_token: invited.flowToken || "",
+        }))[0],
+        now: pilotNow,
+      });
+      assert.equal(created.action, "order_created");
+      const order = await prisma.yolaOrder.findFirstOrThrow({ where: { tenantId, humanId: created.orderId } });
+      assert.equal(order.status, "PENDING_PAYMENT");
+      const session = await prisma.yolaPaymentSession.findFirstOrThrow({ where: { orderId: order.id } });
+      assert.equal(session.provider, "merchant_link");
+      assert.equal(session.mode, "merchant_external");
+      assert.equal(session.status, "PENDING_VERIFICATION");
+      assert.equal(session.providerRef, firstUrl);
+      const view = await loadDemoCheckout(created.paymentNonce || "", pilotNow);
+      assert.equal(view.handoff, "merchant");
+      assert.equal(view.merchantUrl, firstUrl);
+      assert.equal(view.merchantUrl.includes(buyer), false);
+      assert.equal(view.financialStatus, "PENDING_PAYMENT");
+      const simulated = await simulateDemoPayment(created.paymentNonce || "", pilotNow);
+      assert.equal(simulated.ok, false);
+      assert.equal(await prisma.yolaTicket.count({ where: { orderId: order.id } }), 0);
+      assert.equal((await prisma.yolaOrder.findFirstOrThrow({ where: { id: order.id } })).status, "PENDING_PAYMENT");
+      await prisma.yolaPaymentConfig.update({ where: { tenantId }, data: { merchantUrl: secondUrl } });
+      const stored = await loadDemoCheckout(created.paymentNonce || "", pilotNow);
+      assert.equal(stored.merchantUrl, firstUrl);
+      assert.equal(stored.merchantUrl.includes("yola-b"), false);
+    } finally {
+      await prisma.yolaPaymentConfig.deleteMany({ where: { tenantId } });
+      await prisma.tenant.delete({ where: { id: other.id } }).catch(() => undefined);
+    }
+  });
 });

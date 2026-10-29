@@ -42,3 +42,10 @@ export async function sessionCanReadYola(session: SessionPayload, tenantId: stri
   if (!(await canAccessTenant(session, tenantId))) return false;
   return tenantOwnsYola(tenantId);
 }
+
+const PAYMENT_CONFIG_ROLES = new Set(["SUPER_ADMIN", "AGENCY_ADMIN", "CLIENT_ADMIN"]);
+
+export async function sessionCanConfigureYolaPayment(session: SessionPayload, tenantId: string) {
+  if (!PAYMENT_CONFIG_ROLES.has(session.role)) return false;
+  return sessionCanReadYola(session, tenantId);
+}

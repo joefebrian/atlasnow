@@ -110,6 +110,7 @@ model Tenant {
   yolaAutomationEvents YolaAutomationEvent[]
   yolaOutboundMessages YolaOutboundMessage[]
   yolaOrderDaySeqs    YolaOrderDaySeq[]
+  yolaPaymentConfig   YolaPaymentConfig?
   workspaceAutomation WorkspaceAutomation?
   whatsAppNumberAutomations WhatsAppNumberAutomation[]
 
@@ -1493,6 +1494,16 @@ model YolaOrder {
   @@unique([tenantId, wamid])
   @@unique([tenantId, flowToken])
   @@index([tenantId, createdAt])
+}
+
+/// Workspace payment handoff. No row means DEMO_CHECKOUT.
+model YolaPaymentConfig {
+  tenantId    String   @id
+  mode        String   @default("DEMO_CHECKOUT")
+  merchantUrl String   @default("")
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model YolaPaymentSession {
