@@ -17,6 +17,7 @@ const yola = [
   "20261028200000_conversation_handoff",
   "20261028210000_whatsapp_multi_number",
   "20261029120000_yola_payment_config",
+  "20261031120000_inbox_media_file",
 ];
 const blocked = "20261024180000_commerce_orders";
 // DROP INDEX replaces the one-row connector key. It does not delete rows.

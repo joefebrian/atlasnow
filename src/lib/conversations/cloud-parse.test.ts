@@ -116,7 +116,69 @@ describe("parseCloudWhatsAppWebhook", () => {
     });
     assert.ok(!("error" in r));
     assert.equal(r.events[0].imageMediaId, "MEDIA99");
+    assert.equal(r.events[0].inboxMediaId, "MEDIA99");
     assert.equal(r.events[0].body, "TRX-9901 Rp 28000");
+  });
+
+  it("keeps a voice note id and refuses an exe document", () => {
+    const voice = parseCloudWhatsAppWebhook({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "WABA1",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "PNID99" },
+                contacts: [{ wa_id: "62812" }],
+                messages: [
+                  {
+                    from: "62812",
+                    id: "wamid.AUD",
+                    timestamp: "1700000000",
+                    type: "audio",
+                    audio: { id: "AUD1" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.ok(!("error" in voice));
+    assert.equal(voice.events[0].inboxMediaId, "AUD1");
+    assert.equal(voice.events[0].body, "[audio]");
+    const exe = parseCloudWhatsAppWebhook({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "WABA1",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "PNID99" },
+                contacts: [{ wa_id: "62812" }],
+                messages: [
+                  {
+                    from: "62812",
+                    id: "wamid.EXE",
+                    timestamp: "1700000000",
+                    type: "document",
+                    document: { id: "DOC1", filename: "setup.exe" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.ok(!("error" in exe));
+    assert.equal(exe.events[0].inboxMediaId, null);
+    assert.equal(exe.events[0].body, "[blocked]");
   });
 
   it("does not turn delivery statuses into inbox events", () => {

@@ -308,6 +308,9 @@ export type Messages = {
     composerHintFb: string;
     composerHintIg: string;
     composerHintHq: string;
+    attachFile: string;
+    downloadFile: string;
+    fileRemoved: string;
     sentConfirmFb: string;
     sentConfirmIg: string;
     sentConfirmHq: string;
@@ -1123,6 +1126,9 @@ const en: Messages = {
     composerHintIg:
       "Live send to Instagram. The same text should appear in the native Instagram app.",
     composerHintHq: "Live send from WhatsApp HQ to the customer’s WhatsApp.",
+    attachFile: "Attach",
+    downloadFile: "Download",
+    fileRemoved: "File removed after the retention period.",
     sentConfirmFb: "Sent to Messenger. Confirm the same text in the native Messenger app.",
     sentConfirmIg: "Sent to Instagram. Confirm the same text in the native Instagram app.",
     sentConfirmHq: "Sent to WhatsApp HQ.",
@@ -1958,6 +1964,9 @@ const id: Messages = {
     composerHintIg:
       "Kirim langsung ke Instagram. Teks yang sama harus muncul di aplikasi Instagram native.",
     composerHintHq: "Kirim langsung dari WhatsApp HQ ke WhatsApp pelanggan.",
+    attachFile: "Lampirkan",
+    downloadFile: "Unduh",
+    fileRemoved: "Berkas dihapus setelah masa simpan.",
     sentConfirmFb: "Terkirim ke Messenger. Cek teks yang sama di aplikasi Messenger native.",
     sentConfirmIg: "Terkirim ke Instagram. Cek teks yang sama di aplikasi Instagram native.",
     sentConfirmHq: "Terkirim ke WhatsApp HQ.",

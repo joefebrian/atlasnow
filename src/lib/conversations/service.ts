@@ -331,6 +331,10 @@ export async function getConversationThread(
     sentAt: string;
     fromMe: boolean;
     source: string;
+    hasMedia: boolean;
+    mediaMime: string;
+    mediaFilename: string;
+    mediaPurged: boolean;
   }>;
   handoffActive: boolean;
 }> {
@@ -338,7 +342,20 @@ export async function getConversationThread(
     where: { id },
     include: {
       ...includeList,
-      messages: { orderBy: { sentAt: "asc" } },
+      messages: {
+        orderBy: { sentAt: "asc" },
+        select: {
+          id: true,
+          direction: true,
+          body: true,
+          sentAt: true,
+          fromMe: true,
+          source: true,
+          mediaMime: true,
+          mediaFilename: true,
+          mediaPurgedAt: true,
+        },
+      },
     },
   });
   if (!row) return null;
@@ -361,6 +378,9 @@ export async function getConversationThread(
       });
     }
   }
+
+  const { maybePurgeExpiredInboxFiles } = await import("./image-retention");
+  await maybePurgeExpiredInboxFiles(row.tenantId);
 
   await prisma.auditEvent.create({
     data: {
@@ -386,6 +406,10 @@ export async function getConversationThread(
       sentAt: m.sentAt.toISOString(),
       fromMe: m.fromMe,
       source: m.source || "",
+      hasMedia: Boolean(m.mediaMime) && !m.mediaPurgedAt,
+      mediaMime: m.mediaMime || "",
+      mediaFilename: m.mediaFilename || "",
+      mediaPurged: Boolean(m.mediaPurgedAt),
     })),
     handoffActive: humanHandoffActive({
       state: row.handoffState,

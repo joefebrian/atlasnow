@@ -96,6 +96,64 @@ describe("parseMetaWebhook", () => {
     });
     assert.ok(!("error" in r));
     assert.equal(r.events[0].body, "[image]");
+    assert.equal(r.events[0].attachmentUrl, null);
+  });
+
+  it("keeps a Messenger video on the Meta CDN and drops an exe file", () => {
+    const video = parseMetaWebhook({
+      object: "page",
+      entry: [
+        {
+          id: "PAGE1",
+          messaging: [
+            {
+              sender: { id: "PSID99" },
+              recipient: { id: "PAGE1" },
+              timestamp: 3,
+              message: {
+                mid: "m.vid",
+                attachments: [
+                  {
+                    type: "video",
+                    payload: { url: "https://video.xx.fbcdn.net/v/clip.mp4" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.ok(!("error" in video));
+    assert.equal(video.events[0].body, "[video]");
+    assert.equal(video.events[0].attachmentUrl, "https://video.xx.fbcdn.net/v/clip.mp4");
+    const exe = parseMetaWebhook({
+      object: "instagram",
+      entry: [
+        {
+          id: "IG1",
+          messaging: [
+            {
+              sender: { id: "IGSID1" },
+              recipient: { id: "IG1" },
+              timestamp: 4,
+              message: {
+                mid: "ig.exe",
+                attachments: [
+                  {
+                    type: "file",
+                    payload: { url: "https://scontent.cdninstagram.com/bad.exe", name: "setup.exe" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    assert.ok(!("error" in exe));
+    assert.equal(exe.events[0].body, "[blocked]");
+    assert.equal(exe.events[0].attachmentUrl, null);
   });
 
   it("rejects non-objects", () => {

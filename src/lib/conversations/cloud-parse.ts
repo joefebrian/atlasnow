@@ -1,3 +1,4 @@
+import { blockedMediaFilename, safeMediaFilename } from "./inbox-media";
 import { canonPhone } from "./identity";
 import type { CloudStatusEvent } from "@/lib/broadcast/status";
 
@@ -14,6 +15,8 @@ export type CloudWhatsAppEvent = {
   fromMe: boolean;
   sentAt: Date;
   imageMediaId: string | null;
+  inboxMediaId: string | null;
+  inboxMediaFilename: string;
   msgType: string;
   source: MessageSource;
   referralJson: string;
@@ -78,8 +81,15 @@ function messageBody(msg: Record<string, unknown>): string {
   }
   if (type === "unsupported") return "[unsupported]";
   if (type === "audio") return "[audio]";
-  if (type === "video") return "[video]";
-  if (type === "document") return "[document]";
+  if (type === "video") {
+    const video = asRecord(msg.video);
+    return str(video?.caption).trim() || "[video]";
+  }
+  if (type === "document") {
+    const document = asRecord(msg.document);
+    if (blockedMediaFilename(str(document?.filename))) return "[blocked]";
+    return str(document?.caption).trim() || "[document]";
+  }
   if (type === "sticker") return "[sticker]";
   if (type === "location") return "[location]";
   if (type === "contacts") return "[contacts]";
@@ -118,6 +128,13 @@ function pushMessage(
 ) {
   const id = str(input.msg.id);
   if (!input.waId || !id) return;
+  const type = str(input.msg.type);
+  const box = asRecord(input.msg[type]);
+  const mediaId = str(box?.id).trim();
+  const filename =
+    type === "document" ? safeMediaFilename(str(box?.filename), "") : type === "audio" ? "voice.ogg" : "";
+  const blocked = type === "document" && blockedMediaFilename(str(box?.filename));
+  const inboxType = type === "image" || type === "audio" || type === "video" || type === "document";
   const image = asRecord(input.msg.image);
   events.push({
     phoneNumberId: input.phoneNumberId,
@@ -129,8 +146,11 @@ function pushMessage(
     body: messageBody(input.msg),
     fromMe: input.fromMe,
     sentAt: sentAtOf(input.msg),
-    imageMediaId: str(input.msg.type) === "image" ? str(image?.id) || null : null,
-    msgType: str(input.msg.type) || "text",
+    imageMediaId: type === "image" ? str(image?.id) || null : null,
+    inboxMediaId: inboxType && !blocked && mediaId ? mediaId : null,
+    inboxMediaFilename:
+      type === "video" ? safeMediaFilename(str(box?.filename), "video.mp4") : filename,
+    msgType: type || "text",
     source: input.source,
     referralJson: input.source === "history" ? "" : referralJsonOf(input.msg),
   });

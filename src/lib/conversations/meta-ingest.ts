@@ -57,6 +57,8 @@ async function ingestOne(
     body: string;
     fromMe: boolean;
     sentAt: Date;
+    attachmentUrl?: string | null;
+    attachmentFilename?: string;
   },
   rawInput: unknown
 ): Promise<IngestResult> {
@@ -200,6 +202,22 @@ async function ingestOne(
     });
     if (dup) return { ok: true, conversationId: dup.conversationId, duplicate: true };
     throw err;
+  }
+
+  if (ev.attachmentUrl) {
+    try {
+      const { storeMetaInboxFile } = await import("./meta-media");
+      await storeMetaInboxFile({
+        externalId: ev.externalId,
+        tenantId,
+        provider: ev.provider,
+        assetId: ev.assetId,
+        url: ev.attachmentUrl,
+        filename: ev.attachmentFilename || "",
+      });
+    } catch {
+      /* the chat row stays; the CDN link can be retried */
+    }
   }
 
   const continuing = Boolean(open && !startNew);

@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 
-const PRISMA_REV = "yola-fun-8";
+const PRISMA_REV = "yola-fun-9";
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined; prismaRev?: string };
 
 function createPrisma() {

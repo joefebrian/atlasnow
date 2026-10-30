@@ -1,3 +1,5 @@
+import { blockedMediaFilename, safeMediaFilename } from "./inbox-media";
+
 export type MetaInboundEvent = {
   provider: "FACEBOOK" | "INSTAGRAM";
   assetId: string;
@@ -6,6 +8,8 @@ export type MetaInboundEvent = {
   body: string;
   fromMe: boolean;
   sentAt: Date;
+  attachmentUrl: string | null;
+  attachmentFilename: string;
 };
 
 function rec(v: unknown): Record<string, unknown> | null {
@@ -58,6 +62,7 @@ export function parseMetaWebhook(
       const senderId = isEcho ? recipient : sender;
       if (!assetId || !senderId) continue;
       const ts = typeof m.timestamp === "number" ? m.timestamp : Date.now();
+      const attachment = firstAttachment(message);
       events.push({
         provider,
         assetId,
@@ -66,6 +71,8 @@ export function parseMetaWebhook(
         body: messageBody(message),
         fromMe: isEcho,
         sentAt: new Date(ts < 1e12 ? ts * 1000 : ts),
+        attachmentUrl: attachment?.url || null,
+        attachmentFilename: attachment?.filename || "",
       });
     }
     const changes = Array.isArray(entry.changes) ? entry.changes : [];
@@ -87,7 +94,8 @@ export function parseMetaWebhook(
         const senderId = isEcho ? recipient : sender;
         if (!assetId || !senderId) continue;
         const ts = typeof m.timestamp === "number" ? m.timestamp : Date.now();
-        events.push({
+        const attachment = firstAttachment(message);
+      events.push({
           provider,
           assetId,
           senderId,
@@ -95,6 +103,8 @@ export function parseMetaWebhook(
           body: messageBody(message),
           fromMe: isEcho,
           sentAt: new Date(ts < 1e12 ? ts * 1000 : ts),
+          attachmentUrl: attachment?.url || null,
+          attachmentFilename: attachment?.filename || "",
         });
       }
     }
@@ -102,13 +112,67 @@ export function parseMetaWebhook(
   return { events };
 }
 
+const META_KIND: Record<string, string> = {
+  image: "image",
+  video: "video",
+  audio: "audio",
+  file: "document",
+};
+
+function attachmentList(message: Record<string, unknown>): unknown[] {
+  if (Array.isArray(message.attachments)) return message.attachments;
+  if (message.attachment) return [message.attachment];
+  return [];
+}
+
+export function isMetaCdnUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return (
+    host === "fbcdn.net" ||
+    host.endsWith(".fbcdn.net") ||
+    host === "fbsbx.com" ||
+    host.endsWith(".fbsbx.com") ||
+    host === "cdninstagram.com" ||
+    host.endsWith(".cdninstagram.com")
+  );
+}
+
+function firstAttachment(
+  message: Record<string, unknown>
+): { url: string; filename: string } | null {
+  for (const raw of attachmentList(message)) {
+    const att = rec(raw);
+    if (!att || !META_KIND[str(att.type)]) continue;
+    const payload = rec(att.payload);
+    const url = str(payload?.url).trim();
+    const filename = safeMediaFilename(str(payload?.name) || str(att.title), "");
+    if (filename && blockedMediaFilename(filename)) continue;
+    if (!isMetaCdnUrl(url)) continue;
+    return { url, filename };
+  }
+  return null;
+}
+
 function messageBody(message: Record<string, unknown>): string {
   const text = str(message.text).trim();
   if (text) return text;
-  const atts = Array.isArray(message.attachments) ? message.attachments : [];
-  const types = atts
-    .map((a) => str(rec(a)?.type))
+  const labels = attachmentList(message)
+    .map((raw) => {
+      const att = rec(raw);
+      const type = str(att?.type);
+      const payload = att ? rec(att.payload) : null;
+      const filename = safeMediaFilename(str(payload?.name) || str(att?.title), "");
+      if (type === "file" && filename && blockedMediaFilename(filename)) return "blocked";
+      return META_KIND[type] || type;
+    })
     .filter(Boolean);
-  if (types.length) return `[${types.join(",")}]`;
+  if (labels.length) return `[${labels.join(",")}]`;
   return "";
 }

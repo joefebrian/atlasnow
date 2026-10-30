@@ -8,6 +8,7 @@ import { providerLabel, providerNativeClient } from "@/lib/conversations/provide
 import { formatDateTime } from "@/lib/i18n/format";
 import type { Locale } from "@/lib/i18n/locale";
 import { getMessages } from "@/lib/i18n/messages";
+import { isMediaPlaceholder } from "@/lib/conversations/inbox-media";
 import { displayStoredBody } from "@/lib/conversations/window";
 import { ServiceQuotaChip } from "@/components/waba/ServiceQuotaChip";
 import type { ServiceQuotaSnapshot } from "@/lib/waba/service-quota";
@@ -21,6 +22,10 @@ type ThreadMessage = {
   sentAt: string;
   fromMe: boolean;
   source?: string;
+  hasMedia?: boolean;
+  mediaMime?: string;
+  mediaFilename?: string;
+  mediaPurged?: boolean;
 };
 
 type ThreadPayload = {
@@ -102,6 +107,7 @@ export function ConversationsInbox({
   const [threadLoading, setThreadLoading] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [draft, setDraft] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [quota, setQuota] = useState<ServiceQuotaSnapshot | null>(null);
   const [sending, setSending] = useState(false);
   const [sendNote, setSendNote] = useState<string | null>(null);
@@ -216,6 +222,7 @@ export function ConversationsInbox({
     setActive(row);
     setThread(null);
     setDraft("");
+    setFile(null);
     setErr(null);
     setSendNote(null);
     setSendErr(null);
@@ -586,7 +593,30 @@ export function ConversationsInbox({
                             {t.newViaWebhook}
                           </div>
                         ) : null}
-                        <p className="whitespace-pre-wrap leading-snug">{displayStoredBody(m.body || "") || "—"}</p>
+                        {m.mediaPurged ? (
+                          <p className="mb-1 text-[11px] leading-snug opacity-80">{t.fileRemoved}</p>
+                        ) : null}
+                        {m.hasMedia && m.mediaMime?.startsWith("image/") ? (
+                          <img
+                            src={`/api/conversations/messages/${m.id}/media`}
+                            alt={m.mediaFilename || "Photo"}
+                            className="mb-1 max-h-72 w-full rounded-xl bg-white object-contain"
+                          />
+                        ) : null}
+                        {m.hasMedia && !m.mediaMime?.startsWith("image/") ? (
+                          <a
+                            className={`mb-1 block text-[12px] font-semibold underline ${
+                              outbound ? "text-white" : "text-slate-900"
+                            }`}
+                            href={`/api/conversations/messages/${m.id}/media`}
+                          >
+                            {t.downloadFile}
+                            {m.mediaFilename ? ` · ${m.mediaFilename}` : ""}
+                          </a>
+                        ) : null}
+                        {m.hasMedia && isMediaPlaceholder(m.body || "") ? null : (
+                          <p className="whitespace-pre-wrap leading-snug">{displayStoredBody(m.body || "") || "—"}</p>
+                        )}
                         {m.fromMe && m.source !== "business_app" && m.source !== "history" && (
                           <div
                             className={`mt-1 text-[10px] ${
@@ -653,16 +683,25 @@ export function ConversationsInbox({
                 onSubmit={(e) => {
                   e.preventDefault();
                   const text = draft.trim();
-                  if (!text || sending) return;
+                  if (sending || (!text && !file)) return;
+                  if (file && active.provider === "WAHA") return;
                   setSending(true);
                   setSendErr(null);
                   setSendNote(null);
-                  void fetch(`/api/conversations/${active.id}/send`, {
-                    method: "POST",
-                    credentials: "same-origin",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ text }),
-                  })
+                  const payload = file
+                    ? (() => {
+                        const form = new FormData();
+                        form.set("text", text);
+                        form.set("file", file);
+                        return { method: "POST" as const, credentials: "same-origin" as const, body: form };
+                      })()
+                    : {
+                        method: "POST" as const,
+                        credentials: "same-origin" as const,
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ text }),
+                      };
+                  void fetch(`/api/conversations/${active.id}/send`, payload)
                     .then(async (res) => {
                       const data = await res.json();
                       if (!res.ok) {
@@ -670,6 +709,7 @@ export function ConversationsInbox({
                         return;
                       }
                       setDraft("");
+                      setFile(null);
                       setSendNote(sentConfirm);
                       await loadThread(active.id);
                       void load({ silent: true });
@@ -722,7 +762,40 @@ export function ConversationsInbox({
                     {sendErr}
                   </p>
                 ) : null}
+                {file ? (
+                  <p className="text-[11px] text-slate-600">
+                    {file.name}{" "}
+                    <button type="button" className="underline" onClick={() => setFile(null)}>
+                      ✕
+                    </button>
+                  </p>
+                ) : null}
                 <div className="flex gap-2">
+                  {active.provider === "META_CLOUD" ||
+                  active.provider === "FACEBOOK" ||
+                  active.provider === "INSTAGRAM" ? (
+                    <label className="an-btn-ghost shrink-0 cursor-pointer px-2 py-2 text-xs">
+                      {t.attachFile}
+                      <input
+                        className="sr-only"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,video/mp4,video/3gpp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
+                        disabled={sending}
+                        onChange={(e) => {
+                          const next = e.target.files?.[0] || null;
+                          const name = next?.name.toLowerCase() || "";
+                          if (name.endsWith(".exe") || name.endsWith(".rar")) {
+                            setSendErr("file_blocked");
+                            setFile(null);
+                          } else {
+                            setSendErr(null);
+                            setFile(next);
+                          }
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  ) : null}
                   <input
                     className="an-input flex-1 py-2 text-sm"
                     value={draft}
@@ -734,7 +807,7 @@ export function ConversationsInbox({
                   <button
                     type="submit"
                     className="an-btn-primary text-xs"
-                    disabled={sending || !draft.trim()}
+                    disabled={sending || (!draft.trim() && !file)}
                     title={sendTitle}
                   >
                     {sending ? "…" : t.send}

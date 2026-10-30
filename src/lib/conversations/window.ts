@@ -15,9 +15,10 @@ export function previewBody(body: string, max = 160): string {
 
 const STORED_LABELS: Record<string, string> = {
   "[image]": "Image",
-  "[audio]": "Audio",
+  "[audio]": "Voice note",
   "[video]": "Video",
   "[document]": "Document",
+  "[blocked]": "File type not saved",
   "[sticker]": "Sticker",
   "[location]": "Location",
   "[contacts]": "Contact card",

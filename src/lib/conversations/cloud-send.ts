@@ -133,6 +133,27 @@ export async function sendCloudHqTemplate(opts: {
   return postCloudMessage(opts, { type: "template", template }, opts.bodyPreview || `[template:${name}]`);
 }
 
+export async function uploadCloudInboxMedia(opts: {
+  config: CloudHqConfig;
+  bytes: Buffer;
+  mime: string;
+  filename: string;
+}): Promise<{ ok: true; mediaId: string } | { ok: false; error: string }> {
+  const form = new FormData();
+  form.set("messaging_product", "whatsapp");
+  form.set("type", opts.mime);
+  form.set("file", new Blob([new Uint8Array(opts.bytes)], { type: opts.mime }), opts.filename);
+  const res = await fetch(`${META_GRAPH}/${encodeURIComponent(opts.config.phoneNumberId)}/media`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${opts.config.accessToken}` },
+    body: form,
+    signal: AbortSignal.timeout(60000),
+  });
+  const json = (await res.json().catch(() => ({}))) as { id?: string; error?: { message?: string } };
+  if (!res.ok || !json.id) return { ok: false, error: json.error?.message || `Media upload failed (${res.status})` };
+  return { ok: true, mediaId: json.id };
+}
+
 export async function sendCloudHqImage(opts: {
   config: CloudHqConfig;
   toPhone: string;
@@ -165,4 +186,17 @@ export async function sendCloudHqDocument(opts: {
   };
   if (caption) document.caption = caption;
   return postCloudMessage(opts, { type: "document", document }, caption || opts.filename || "[pdf]");
+}
+
+export async function sendCloudHqVideo(opts: {
+  config: CloudHqConfig;
+  toPhone: string;
+  mediaId: string;
+  caption?: string;
+  conversationId?: string;
+}): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
+  const caption = (opts.caption || "").trim().slice(0, 1024);
+  const video: { id: string; caption?: string } = { id: opts.mediaId };
+  if (caption) video.caption = caption;
+  return postCloudMessage(opts, { type: "video", video }, caption || "[video]");
 }

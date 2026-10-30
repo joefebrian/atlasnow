@@ -234,6 +234,20 @@ async function ingestOne(
     throw err;
   }
 
+  if (!history && ev.source === "cloud" && ev.inboxMediaId && hq?.accessToken) {
+    try {
+      const { storeInboxMedia } = await import("./cloud-media");
+      await storeInboxMedia({
+        externalId: ev.externalId,
+        accessToken: hq.accessToken,
+        mediaId: ev.inboxMediaId,
+        filename: ev.inboxMediaFilename,
+      });
+    } catch {
+      /* the chat row stays; the file can be retried from the media id */
+    }
+  }
+
   const advance = !history || ev.sentAt >= conversation.lastMessageAt;
   const staffReply = ev.source === "business_app";
   await prisma.waConversation.update({
